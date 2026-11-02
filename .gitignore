@@ -1,0 +1,10 @@
+# build outputs
+mcpb/node_modules/
+mcpb/dist/
+bridge/build/
+bridge/dist/
+# drawings made while testing
+examples/*.bak
+*.dwl
+*.dwl2
+plot.log

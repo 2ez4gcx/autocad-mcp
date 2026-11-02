@@ -1,0 +1,112 @@
+# AutoCAD MCP
+
+[English](README.md) | **Tiếng Việt**
+
+AutoCAD MCP cho phép Claude làm việc trực tiếp trên bản vẽ đang mở trong AutoCAD. Việc chính của nó là triển khai bản vẽ: từ ảnh scan/ảnh chụp mặt bằng, bản phác tay, ảnh render hoặc mô hình 3D, Claude vẽ thành bản vẽ 2D hoàn chỉnh, đúng layer (tường giao nhau gọn với hatch vật liệu, cửa đi/cửa sổ cắt vào tường, cột, trục định vị có ký hiệu, cầu thang, phòng có diện tích đo từ tường, chuỗi kích thước, ký hiệu, khung tên và xuất PDF). Ngoài ra nó đọc bản vẽ, bóc khối lượng theo layer/block và kiểm tra lỗi bản vẽ.
+
+Cách hoạt động giống [SketchUp MCP](https://github.com/2ez4gcx/sketchup-mcp): một extension cho Claude Desktop (`.mcpb`, chạy trên Node.js có sẵn trong Claude Desktop) và một add-in nhỏ chạy bên trong AutoCAD (**ACAD MCP Bridge**, add-in .NET). Không cần cài Python hay Node.js.
+
+Phiên bản: **1.0.0**.
+
+## Tính năng
+
+31 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
+
+| Nhóm | Tool |
+|---|---|
+| Đọc & khối lượng | `ping`, `drawing_info`, `list_layers`, `list_blocks`, `query_entities`, `selection_info`, `quantity_takeoff`, `check_drawing` |
+| Tiêu chuẩn | `setup_layers`, `setup_styles` |
+| Vẽ & sửa | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
+| Ảnh & nguồn 3D | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
+| Khung tên & file | `create_layout`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
+| Lập trình | `run_lisp` |
+| Cài đặt | `install_autocad_bridge` |
+
+Điểm chính:
+
+- **Cả mặt bằng trong một bước** (`draw_plan`): Claude mô tả mặt bằng bằng mm đọc được từ ảnh (trục tường và chiều dày, ô cửa theo tường và khoảng cách, cột, trục, phòng, cầu thang, cao độ, ký hiệu mặt cắt, hướng bắc), tool vẽ tất cả trong một bước Undo:
+  - các đoạn tường được hợp khối nên chỗ giao chữ L, T, X luôn gọn; mỗi vật liệu một hatch (gạch, bê tông, block, gạch nhẹ, đá, đặc);
+  - cửa đi (1 cánh, 2 cánh, trượt), cửa sổ, lỗ mở được cắt vào tường, có cánh, cung mở và nét kính;
+  - cột được cắt khỏi tường và tô đặc; có thể đặt cột tại mọi giao điểm trục;
+  - trục có ký hiệu hai đầu (1, 2, 3... theo phương ngang, A, B, C... theo phương dọc), chuỗi kích thước bên ngoài (ô cửa, khoảng trục, kích thước tổng) ở các cạnh bạn chọn;
+  - **diện tích phòng được đo từ tường, không bao giờ gõ tay**: mỗi phòng chỉ cần một điểm bên trong; nhãn ghi tên và diện tích đo được, đường bao kín đặt trên layer `A-AREA` (không in) để bóc khối lượng; khoảng kín chưa đặt tên phòng cũng được báo lại.
+- **Layer chuyên nghiệp** (`setup_layers`): bộ layer kiến trúc kiểu AIA/NCS với nét in cho máy in đen trắng và mô tả tiếng Việt hoặc tiếng Anh: `S-GRID` (CENTER), `S-COLS`, `A-WALL` (0.5 mm), `A-WALL-PATT`, `A-DOOR`, `A-GLAZ`, `A-OPEN`, `A-FLOR-STRS`, `A-FURN`, `A-FLOR-FIXT`, `A-AREA` (không in), `A-ANNO-ROOM`, `A-ANNO-TEXT`, `A-ANNO-DIMS`, `A-ANNO-SYMB`, `A-ANNO-TTLB`, `X-IMAGE` (không in)... Nếu bản vẽ đã có hệ layer riêng thì làm theo hệ đó (`draw_plan` nhận bảng đối chiếu vai trò -> tên layer).
+- **Style theo tỷ lệ in** (`setup_styles`): đơn vị mm, kiểu chữ TrueType `MCP-ARIAL` (tiếng Việt không bao giờ ra dấu `?`), kiểu kích thước `MCP-1-<tỷ lệ>` với gạch xiên kiến trúc, chữ nằm trên đường kích thước, kiểu leader, chữ trong bảng và LTSCALE.
+- **Làm việc từ ảnh**: `view_image` cho Claude xem một file ảnh, có thể cắt phóng to một vùng (để đọc số kích thước) và lưới tọa độ pixel; `attach_image` chèn ảnh vào bản vẽ làm nền mờ trên layer `X-IMAGE`, hiệu chỉnh tỷ lệ bằng hai pixel của một kích thước đã biết và đặt đúng một điểm (ví dụ giao trục A-1); `draw_entities` nhận tọa độ pixel của ảnh (`image_handle`) để đồ lại; `screenshot` kết xuất bản vẽ ngầm (nền trắng, không đổi màn hình của bạn) để Claude so với ảnh gốc.
+- **Từ mô hình 3D**: đọc kích thước trong mô hình (ví dụ bằng SketchUp MCP) rồi vẽ lại bằng `draw_plan`, hoặc `import_drawing` một file DWG/DXF 2D xuất ra (mặt bằng, mặt cắt, mặt đứng) với tiền tố layer, rồi làm sạch và ghi chú.
+- **Mọi loại đối tượng** (`draw_entities`): line, polyline có cung, hình chữ nhật, tròn, cung, ellipse, spline, điểm, text và mtext, hatch (có đảo), kích thước thẳng/xiên/góc/bán kính/đường kính, chuỗi kích thước kèm kích thước tổng, multileader, block có thuộc tính (cả từ file DWG), bảng. Một lô là một bước Undo; nếu một đối tượng sai thì không vẽ gì và lỗi chỉ rõ đối tượng nào.
+- **Sửa** theo handle: di chuyển, sao chép (lặp), xoay, tỷ lệ, đối xứng, mảng chữ nhật/tròn, offset (về phía một điểm hoặc hai bên), phá khối (giữ giá trị thuộc tính); đổi thuộc tính, nội dung chữ, giá trị attribute.
+- **Khối lượng** (`quantity_takeoff`): theo layer, block hoặc loại: số lượng, chiều dài (m), diện tích đường bao kín (m²), diện tích hatch (m²), số block kèm thống kê giá trị thuộc tính; xuất CSV cho Excel (`csv_format=semicolon` cho Excel cài định dạng Việt Nam/châu Âu: dấu `;` và phẩy thập phân).
+- **Kiểm tra bản vẽ** (`check_drawing`): đối tượng trùng chồng (làm khối lượng gấp đôi), polyline trông kín nhưng chưa kín, đường bao hở trên layer diện tích, chữ tiếng Việt dùng font SHX (ra dấu `?`), thiếu font, xref/ảnh mất đường dẫn, đối tượng trên Defpoints, kích thước bị gõ đè số, đối tượng nằm quá xa, đối tượng trên layer 0, màu/nét/độ dày không ByLayer, layer không theo chuẩn đặt tên.
+- **Khung tên** (`create_layout`, `export_pdf`): layout khổ A0-A4 với `DWG To PDF.pc3` và `monochrome.ctb`, khung bản vẽ theo lề ISO/TCVN (lề trái 20 mm), khung tên 180 mm (công ty, công trình, chủ đầu tư, tên bản vẽ, tỷ lệ, ngày, thiết kế/kiểm tra, số bản vẽ, lần sửa, tờ) và khung nhìn khóa ở tỷ lệ chuẩn tự chọn cho vừa. `export_pdf` in các layout ra một file PDF nhiều trang (layout khác khổ giấy thì mỗi khổ một file, ví dụ `bo_A3.pdf`, `bo_A1.pdf`), hoặc in một vùng model space theo tỷ lệ.
+- **Xuất file** (`save_drawing`, `screenshot save_path`): DWG 2018/2013/2010/2007/2004/2000 và DXF; `copy=true` (mặc định khi lưu bản cũ hoặc DXF) ghi một bản sao để gửi đi, bản vẽ đang mở giữ nguyên, ngược lại là Save As; ảnh PNG của bản vẽ tới 4096 px.
+- **`run_lisp`**: khi không có tool phù hợp, Claude chạy AutoLISP (kết quả trả về dạng JSON) trong một nhóm Undo. Code không ghi ra đĩa nên AutoCAD không hỏi bảo mật (SECURELOAD).
+- **Mỗi lần sửa bản vẽ là một bước Undo** (`MCP_<TÊN TOOL>` trong danh sách Undo của AutoCAD).
+- **Lệnh trong AutoCAD**: `MCPSTATUS`, `MCPSTART`, `MCPSTOP`, `MCPPORT`, `MCPLOG`.
+
+## Cách hoạt động
+
+```
+Claude Desktop
+    |  MCP qua stdio
+    v
+autocad-mcp-1.0.0.mcpb        server MCP Node.js, chạy trên Node có sẵn trong Claude Desktop
+    |  mỗi lệnh một yêu cầu JSON, TCP 127.0.0.1:9877 (chỉ trong máy)
+    v
+ACAD MCP Bridge               add-in .NET trong AutoCAD (bundle tự nạp), chạy lệnh trên luồng chính của AutoCAD
+    |  AutoCAD .NET API
+    v
+bản vẽ đang mở
+```
+
+Bridge chạy bên trong AutoCAD (không điều khiển qua COM từ bên ngoài): mỗi lệnh chạy trên luồng chính trong một lần khóa tài liệu, nhanh với bản vẽ lớn, an toàn, và mỗi lệnh là một bước Undo.
+
+## Yêu cầu
+
+- **Claude Desktop** (bản mới, có *Settings > Extensions*).
+- **AutoCAD 2021, 2022, 2023 hoặc 2024** bản đầy đủ (hoặc bản chuyên ngành như AutoCAD Architecture; **không dùng được AutoCAD LT** vì LT không nạp add-in .NET) trên **Windows 10/11**. Đã thử trên AutoCAD 2024. AutoCAD 2025 trở đi chạy .NET 8, cần bridge build riêng (chưa có).
+- Chỉ khi tự build: Node.js 18+, trình biên dịch C# của Visual Studio Build Tools và AutoCAD 2021-2024.
+
+## Cài đặt
+
+1. **Cài extension vào Claude Desktop**: *Settings > Extensions*, kéo thả `autocad-mcp-1.0.0.mcpb` vào cửa sổ (hoặc *Advanced settings > Install Extension...*), bấm *Install*. Bản build chưa ký số nên Claude Desktop có thể cảnh báo.
+2. **Cài bridge vào AutoCAD**: trong một cuộc trò chuyện mới, nhờ Claude *"Cài ACAD MCP Bridge vào AutoCAD"* (tool `install_autocad_bridge`). Tool chép `AcadMcpBridge.bundle` vào `%APPDATA%\Autodesk\ApplicationPlugins`, AutoCAD tự nạp khi khởi động. Cài tay: giải nén `AcadMcpBridge-1.0.0.bundle.zip` vào thư mục đó.
+3. **Khởi động lại AutoCAD.** Add-in chưa được ký số: khi AutoCAD hỏi về `AcadMcpBridge-1.0.0.dll`, chọn **Always Load**. Mỗi bản bridge mới là một file mới nên sau khi cập nhật AutoCAD sẽ hỏi lại một lần. (Muốn không bao giờ bị hỏi, có thể thêm thư mục bundle vào *Options > Files > Trusted Locations* nếu chính sách IT cho phép.) Gõ `MCPSTATUS` trong AutoCAD, phải thấy `ACAD MCP Bridge v1.0.0: RUNNING on 127.0.0.1:9877`. Sau đó nhờ Claude *"Ping AutoCAD"*.
+
+Tùy chọn ở *Settings > Extensions > AutoCAD MCP > Configure*: cổng bridge (mặc định 9877; nếu đổi thì gõ `MCPPORT` trong AutoCAD cho khớp) và thời gian chờ mỗi lệnh (mặc định 120 giây).
+
+Cập nhật: cài `.mcpb` mới, nhờ Claude cài lại bridge, khởi động lại AutoCAD.
+
+## Một phiên làm việc điển hình: vẽ mặt bằng từ ảnh
+
+> Đây là ảnh scan mặt bằng tầng 1 (D:/DuAn/scan.jpg). Vẽ lại trong AutoCAD tỷ lệ 1:100 với layer chuẩn, đầy đủ kích thước và diện tích phòng, rồi dàn trang A3 và xuất PDF.
+
+Claude sẽ: xem ảnh (`view_image`, phóng to vùng có số kích thước), tạo layer và style, chèn ảnh làm nền đã hiệu chỉnh tỷ lệ, vẽ mặt bằng bằng `draw_plan`, thêm nội thất, thiết bị vệ sinh, ghi chú bằng `draw_entities`, so sánh bằng `screenshot`, sửa chỗ khác biệt, chạy `check_drawing`, tạo layout và PDF.
+
+Thêm câu lệnh mẫu: [`mcpb/release-docs/SAMPLE_PROMPTS.md`](mcpb/release-docs/SAMPLE_PROMPTS.md).
+
+## Xử lý sự cố
+
+| Hiện tượng | Cách xử lý |
+|---|---|
+| `Cannot connect to AutoCAD` | Gõ `MCPSTATUS` trong AutoCAD. Báo lệnh không tồn tại: cài bridge rồi khởi động lại AutoCAD (và cho phép DLL). STOPPED: gõ `MCPSTART`. Cổng 9877 bị chương trình khác dùng: `MCPPORT`. |
+| AutoCAD hỏi về `AcadMcpBridge-...dll` nhưng bridge không chạy | Đã chọn *Do Not Load*: AutoCAD nhớ lựa chọn đó trong cả phiên. Khởi động lại AutoCAD và chọn *Always Load*. |
+| Mỗi lần xuất PDF mất khoảng 30 giây | Bản thân AutoCAD in chậm khi máy in mặc định của Windows là máy in mạng không phản hồi (lệnh PLOT gốc cũng chậm như vậy). Chọn máy in mặc định là máy cục bộ (ví dụ *Microsoft Print to PDF*) hoặc ẩn máy in hệ thống trong AutoCAD (*Options > Plot and Publish*). |
+| `install_autocad_bridge` báo lỗi | Có AutoCAD khác đang giữ file: đóng hết AutoCAD rồi chạy lại. |
+
+## Bảo mật
+
+Bridge chỉ nghe trên 127.0.0.1, không có xác thực (giống các bridge MCP cục bộ khác): mọi chương trình chạy dưới tài khoản Windows của bạn đều gửi lệnh được, kể cả `run_lisp`. Gõ `MCPSTOP` trong AutoCAD để tắt khi không dùng.
+
+## Tự build
+
+```bat
+cd mcpb
+npm ci
+npm run build    :: biên dịch bridge, đóng gói server, tạo dist/autocad-mcp-<version>.mcpb
+npm test         :: test bộ máy vẽ mặt bằng + smoke test server
+```
+
+## Giấy phép
+
+MIT, xem [LICENSE](LICENSE).

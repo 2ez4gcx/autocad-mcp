@@ -1,0 +1,193 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.3.schema.json",
+  "manifest_version": "0.3",
+  "name": "autocad-mcp",
+  "display_name": "AutoCAD MCP",
+  "version": "1.0.0",
+  "description": "Lets Claude read, draw, check and take off quantities in AutoCAD drawings, including complete layered floor plans from an image or a 3D model (AutoCAD 2021-2024).",
+  "long_description": "Connects Claude to the drawing open in AutoCAD through the **ACAD MCP Bridge** .NET add-in (socket 127.0.0.1:9877).\n\n- No Python or Node.js install needed: runs on the Node.js built into Claude Desktop.\n- First time: ask Claude to run the `install_autocad_bridge` tool, then restart AutoCAD (choose *Always load* if it asks about the unsigned add-in).\n- `draw_plan` draws a complete plan in one step: walls with clean junctions and material hatch, doors and windows cut into the walls, columns, grids with bubbles, stairs, rooms whose areas are measured from the walls, and exterior dimension chains, all on a professional layer standard (A-WALL, A-DOOR, S-GRID, A-ANNO-DIMS...).\n- Reference images: `view_image` (zoom and pixel grid), `attach_image` (calibrated underlay), `screenshot` to compare.\n- Quantities by layer/block (`quantity_takeoff`, CSV), drawing QA (`check_drawing`), sheets with title block (`create_layout`) and PDF export.\n- Every drawing edit is one Undo step.\n- Requires full AutoCAD 2021-2024 on Windows (not AutoCAD LT).",
+  "author": {
+    "name": "Khuong Doan"
+  },
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.mjs"
+      ],
+      "env": {
+        "AUTOCAD_MCP_PORT": "${user_config.port}",
+        "AUTOCAD_MCP_TIMEOUT": "${user_config.timeout}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "ping",
+      "description": "Check the connection to AutoCAD"
+    },
+    {
+      "name": "drawing_info",
+      "description": "Overview of the open drawing"
+    },
+    {
+      "name": "list_layers",
+      "description": "List layers with entity counts"
+    },
+    {
+      "name": "list_blocks",
+      "description": "List blocks and reference counts"
+    },
+    {
+      "name": "query_entities",
+      "description": "Find entities and read their geometry"
+    },
+    {
+      "name": "selection_info",
+      "description": "Info on the selected objects"
+    },
+    {
+      "name": "quantity_takeoff",
+      "description": "Quantities by layer/block: lengths, areas, counts, CSV for Excel"
+    },
+    {
+      "name": "check_drawing",
+      "description": "Drawing QA: duplicates, open boundaries, SHX Vietnamese text, Defpoints..."
+    },
+    {
+      "name": "setup_layers",
+      "description": "Create the architectural layer standard or custom layers"
+    },
+    {
+      "name": "setup_styles",
+      "description": "Units, Vietnamese-safe text style, dimension style for a plot scale"
+    },
+    {
+      "name": "draw_entities",
+      "description": "Draw lines, polylines, arcs, text, hatches, dimensions, blocks, tables"
+    },
+    {
+      "name": "draw_plan",
+      "description": "Draw a complete floor plan: walls, doors, windows, columns, grids, stairs, rooms with measured areas, dimensions"
+    },
+    {
+      "name": "define_block",
+      "description": "Define a block from entity specs"
+    },
+    {
+      "name": "transform_entities",
+      "description": "Move, copy, rotate, scale, mirror, array, offset, explode"
+    },
+    {
+      "name": "set_properties",
+      "description": "Change layer, color, text, attributes..."
+    },
+    {
+      "name": "delete_entities",
+      "description": "Delete entities by handle"
+    },
+    {
+      "name": "select_entities",
+      "description": "Select entities in AutoCAD"
+    },
+    {
+      "name": "undo",
+      "description": "Undo the last step"
+    },
+    {
+      "name": "purge_drawing",
+      "description": "Purge unused items (keeps standard layers)"
+    },
+    {
+      "name": "run_lisp",
+      "description": "Run AutoLISP"
+    },
+    {
+      "name": "set_view",
+      "description": "Zoom / set the view"
+    },
+    {
+      "name": "screenshot",
+      "description": "Render the drawing to an image Claude sees"
+    },
+    {
+      "name": "view_image",
+      "description": "Look at an image file with crop and pixel grid"
+    },
+    {
+      "name": "attach_image",
+      "description": "Attach a reference image as a calibrated underlay"
+    },
+    {
+      "name": "import_drawing",
+      "description": "Insert a DWG/DXF (e.g. a SketchUp 2D export)"
+    },
+    {
+      "name": "create_layout",
+      "description": "Sheet layout with title block and scaled viewport"
+    },
+    {
+      "name": "export_pdf",
+      "description": "Plot layouts to a multi-page PDF"
+    },
+    {
+      "name": "save_drawing",
+      "description": "Save as DWG/DXF"
+    },
+    {
+      "name": "open_drawing",
+      "description": "Open a drawing"
+    },
+    {
+      "name": "new_drawing",
+      "description": "New drawing from a template"
+    },
+    {
+      "name": "install_autocad_bridge",
+      "description": "Install the ACAD MCP Bridge add-in into AutoCAD"
+    }
+  ],
+  "keywords": [
+    "autocad",
+    "cad",
+    "dwg",
+    "architecture",
+    "floor plan",
+    "drafting",
+    "quantity takeoff",
+    "boq",
+    "mcp"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": [
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "user_config": {
+    "port": {
+      "type": "number",
+      "title": "AutoCAD bridge port",
+      "description": "TCP port of the ACAD MCP Bridge (default 9877). If you change it, also type MCPPORT in AutoCAD.",
+      "default": 9877,
+      "min": 1024,
+      "max": 65535,
+      "required": false
+    },
+    "timeout": {
+      "type": "number",
+      "title": "Timeout per command (s)",
+      "description": "How long to wait for AutoCAD on one command (default 120 s; raise it for takeoffs on very large drawings).",
+      "default": 120,
+      "min": 10,
+      "max": 3600,
+      "required": false
+    }
+  }
+}

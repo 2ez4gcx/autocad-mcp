@@ -1,0 +1,23 @@
+{
+  "name": "autocad-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AutoCAD MCP server (Node.js) packaged as a Claude Desktop Extension (.mcpb)",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/unit-test.mjs",
+    "release": "node scripts/build.mjs && node scripts/unit-test.mjs"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "esbuild": "0.28.2",
+    "fflate": "0.8.3",
+    "zod": "4.6.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
