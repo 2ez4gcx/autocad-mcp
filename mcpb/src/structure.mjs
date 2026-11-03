@@ -2,13 +2,14 @@
 // details along their spans, pad footings, and the bar schedule with weights (d²/162 kg/m). Pure geometry: returns
 // draw_entities specs. Sizes and reinforcement come from the user / the structural engineer: nothing is calculated
 // here except lengths, counts and weights.
-import { num, PlanError, pt } from './plan.mjs';
+import { buildWalls, gridList, num, PlanError, pt } from './plan.mjs';
 import { dimStyleName, FIELD, TEXT_STYLE, viewTitle } from './standards.mjs';
 import { sym } from './symbols.mjs';
 
 export const SL = {
   conc: 'S-CONC', concHatch: 'S-CONC-PATT', bar: 'S-REBR', tie: 'S-REBR-STIR', text: 'S-ANNO-TEXT', dims: 'S-ANNO-DIMS',
   symb: 'S-ANNO-SYMB', grid: 'S-GRID', gridTag: 'S-GRID-IDEN', ground: 'A-ELEV-OTLN', groundHatch: 'A-SECT-PATT',
+  beam: 'S-BEAM', col: 'S-COLS', colHatch: 'S-COLS-PATT',
 };
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -433,4 +434,284 @@ export function rebarSchedule(rows, lang = 'vi') {
   }
   drawn.push([T.total, '', '', '', '', '', '', '', F(`Sum(I${R(0)}:I${R(out.length - 1)})`, 2)]);
   return { rows: out, by_diameter_kg: byD, total_kg: totalKg, table, drawn };
+}
+
+// ---------------------------------------------------------------- framing plan (mặt bằng kết cấu dầm sàn)
+
+const add2 = (a, b) => [a[0] + b[0], a[1] + b[1]];
+const sub2 = (a, b) => [a[0] - b[0], a[1] - b[1]];
+const mul2 = (a, k) => [a[0] * k, a[1] * k];
+const dot2 = (a, b) => a[0] * b[0] + a[1] * b[1];
+const cross2 = (a, b) => a[0] * b[1] - a[1] * b[0];
+const leftOf = (d) => [-d[1], d[0]];
+const fmtLv = (mm) => (Math.abs(mm) < 0.5 ? '±0.000' : `${mm > 0 ? '+' : '-'}${(Math.abs(mm) / 1000).toFixed(3)}`);
+const WET_ROOM = /(WC|VỆ SINH|TẮM|TOILET|BATH)/i;
+const OUT_ROOM = /(BAN CÔNG|LÔ GIA|LOGIA|SÂN|BALCONY|TERRACE)/i;
+const STAIR_ROOM = /(CẦU THANG|STAIR)/i;
+
+/** Text along a direction, kept readable (never upside down). */
+const readable = (d) => {
+  let a = (Math.atan2(d[1], d[0]) * 180) / Math.PI;
+  if (a > 90.01) a -= 180;
+  if (a <= -90.01) a += 180;
+  return r2(a);
+};
+
+/**
+ * Framing plan of one slab: beams along the load-bearing walls of the floor below (partitions under 150 mm stand on
+ * the slab), columns at the wall nodes, the slab and its lowered parts (wet rooms, balconies), stair openings, grids
+ * with their dimensions and the title. Sizes are preliminary (h = span / 12, rounded up to 50, 300 to 700; b = wall
+ * thickness): the structural engineer designs them. Returns {entities, beams, columns, assumed}.
+ */
+export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = 'D', scale = 100, beam = {}, column = {}, rooms = {}, lang = 'vi' }) {
+  const sc = scale;
+  const out = [], assumed = [];
+  const walls = buildWalls(spec).filter((w) => w.t >= num(beam.min_wall ?? 150, 'beam.min_wall', { min: 0 }) && (spec.walls[w.index].height === undefined));
+  const segs = walls.flatMap((w) => w.segs.map((s) => {
+    const n = leftOf(s.d), c = (s.o1 + s.o2) / 2;
+    return { s, A: add2(s.a, mul2(n, c)), B: add2(s.b, mul2(n, c)), t: s.t, d: s.d, L: s.L, n };
+  }));
+  if (!segs.length) throw new PlanError('no load-bearing walls under this slab (walls of 150 mm and more)');
+  const tol = 30;
+  // the frame: a column at every grid intersection on a load-bearing wall, a beam along every grid line between two
+  // columns where no wall runs (frame beams), as townhouse frames are built
+  const gx0 = gridList(spec.grids?.x, 'x'), gy0 = gridList(spec.grids?.y, 'y');
+  const onWall = (p) => segs.some((g) => {
+    const v = sub2(p, g.A), u = dot2(v, g.d);
+    return u > -tol && u < g.L + tol && Math.abs(cross2(g.d, v)) < g.t / 2 + tol;
+  });
+  const gridCols = column.at_grids === false ? [] : gx0.flatMap((x) => gy0.map((y) => [x.at, y.at])).filter(onWall);
+  if (beam.frame !== false) {
+    const covered = (a, b) => segs.some((g) => {
+      const m = mul2(add2(a, b), 0.5), v = sub2(m, g.A), u = dot2(v, g.d);
+      return Math.abs(cross2(g.d, sub2(b, a))) < 1e-6 * (1 + Math.hypot(...sub2(b, a))) && u > 0 && u < g.L && Math.abs(cross2(g.d, v)) < g.t / 2 + tol;
+    });
+    const lines = [...gx0.map((x) => gridCols.filter((c) => Math.abs(c[0] - x.at) < 1).sort((p, q) => p[1] - q[1])),
+      ...gy0.map((y) => gridCols.filter((c) => Math.abs(c[1] - y.at) < 1).sort((p, q) => p[0] - q[0]))];
+    for (const cs of lines) {
+      for (let i = 0; i + 1 < cs.length; i++) {
+        const a = cs[i], b = cs[i + 1], L = Math.hypot(...sub2(b, a));
+        if (L < 600 || covered(a, b)) continue;
+        const d = mul2(sub2(b, a), 1 / L);
+        segs.push({ A: a, B: b, t: 200, d, L, n: leftOf(d), frame: true });
+      }
+    }
+  }
+  // supports along each beam: its ends, the columns on it and where other beams cross or meet it
+  for (const g of segs) {
+    const us = [0, g.L];
+    for (const q of segs) {
+      if (q === g) continue;
+      const den = cross2(g.d, q.d);
+      if (Math.abs(den) < 1e-9) continue;
+      const w = sub2(q.A, g.A);
+      const u = cross2(w, q.d) / den, v = cross2(w, g.d) / den;
+      if (u > -tol && u < g.L + tol && v > -tol && v < q.L + tol) us.push(Math.max(0, Math.min(g.L, u)));
+    }
+    for (const c of gridCols) {
+      const v = sub2(c, g.A), u = dot2(v, g.d);
+      if (u > -tol && u < g.L + tol && Math.abs(cross2(g.d, v)) < g.t / 2 + tol) us.push(Math.max(0, Math.min(g.L, u)));
+    }
+    us.sort((a, b) => a - b);
+    g.supports = us.filter((u, i) => i === 0 || u - us[i - 1] > 100);
+    g.spans = g.supports.slice(1).map((u, i) => u - g.supports[i]).filter((x) => x > 100);
+    const Lmax = Math.max(...g.spans, 0);
+    g.b = num(beam.b ?? Math.max(200, Math.round(g.t / 10) * 10), 'beam.b', { positive: true });
+    g.h = num(beam.h ?? Math.min(700, Math.max(300, Math.ceil(Lmax / 12 / 50) * 50)), 'beam.h', { positive: true });
+  }
+  if (beam.h === undefined) assumed.push({ item: 'beam.h', value: 'span/12, 300-700', note: 'preliminary depth by span, rounded up to 50' });
+  if (beam.b === undefined) assumed.push({ item: 'beam.b', value: 'wall thickness (min 200)', note: 'beams under the load-bearing walls' });
+  // beam types: same size and spans, named from the deepest
+  const types = new Map();
+  for (const g of segs) {
+    // the same beam read from either end is one type
+    const sp = g.spans.map((x) => Math.round(x / 10) * 10), rv = [...sp].reverse();
+    const key = `${g.b}x${g.h}|${(sp.join(',') <= rv.join(',') ? sp : rv).join(',')}`;
+    if (!types.has(key)) types.set(key, { b: g.b, h: g.h, spans: g.spans.map((x) => Math.round(x)), count: 0, length: g.L, segs: [] });
+    const t = types.get(key);
+    t.count++;
+    t.segs.push(g);
+  }
+  const beams = [...types.values()].sort((a, b) => b.h - a.h || b.length - a.length).map((t, i) => ({ ...t, name: `${prefix}${i + 1}` }));
+  for (const t of beams) for (const g of t.segs) g.name = t.name;
+  // beams: both faces (hidden: under the slab), the name and size along it
+  for (const g of segs) {
+    for (const k of [-0.5, 0.5]) out.push({ type: 'line', from: P(...add2(g.A, mul2(g.n, k * g.b))), to: P(...add2(g.B, mul2(g.n, k * g.b))), layer: SL.beam, scale_linetype: true });
+    const mid = add2(g.A, mul2(g.d, g.L / 2));
+    const off = g.n[1] < -1e-9 || (Math.abs(g.n[1]) < 1e-9 && g.n[0] > 0) ? mul2(g.n, -1) : g.n;
+    out.push({
+      type: 'text', text: `${g.name} (${g.b}x${g.h})`, at: P(...add2(mid, mul2(off, g.b / 2 + 1.6 * sc))), height: r2(2.2 * sc),
+      rotation: readable(g.d), align: 'middle_center', layer: SL.text, style: TEXT_STYLE,
+    });
+  }
+  // columns at the wall nodes (ends where two beams meet), or the plan's columns
+  const csize = column.size ?? spec.grid_columns?.size ?? [220, 220];
+  if (column.size === undefined && spec.grid_columns?.size === undefined) assumed.push({ item: 'column.size', value: `${csize[0]}x${csize[1]}`, note: 'columns at the wall nodes' });
+  const nodes = [];
+  for (const g of segs) for (const p of [g.A, g.B]) {
+    const k = nodes.findIndex((q) => Math.hypot(q.p[0] - p[0], q.p[1] - p[1]) < tol * 3);
+    if (k < 0) nodes.push({ p, n: 1 });
+    else nodes[k].n++;
+  }
+  const cols = nodes.filter((q) => q.n >= 2).map((q) => q.p);
+  for (const c of gridCols) if (!cols.some((q) => Math.hypot(q[0] - c[0], q[1] - c[1]) < tol * 3)) cols.push(c);
+  for (const c of cols) {
+    const r = [[c[0] - csize[0] / 2, c[1] - csize[1] / 2], [c[0] + csize[0] / 2, c[1] - csize[1] / 2], [c[0] + csize[0] / 2, c[1] + csize[1] / 2], [c[0] - csize[0] / 2, c[1] + csize[1] / 2]];
+    out.push({ type: 'polyline', points: r.map((q) => P(...q)), closed: true, layer: SL.col });
+    out.push({ type: 'hatch', boundary: r.map((q) => P(...q)), pattern: 'SOLID', layer: SL.colHatch });
+  }
+  const columns = cols.length ? [{ name: 'C1', size: `${csize[0]}x${csize[1]}`, count: cols.length }] : [];
+  if (cols.length) {
+    const c0 = cols.reduce((m, p) => (p[0] + p[1] < m[0] + m[1] ? p : m));
+    out.push({ type: 'text', text: `C1 (${csize[0]}x${csize[1]})`, at: P(c0[0] - csize[0] / 2 - 1 * sc, c0[1] - csize[1] / 2 - 3 * sc), height: r2(2 * sc), align: 'right', layer: SL.text, style: TEXT_STYLE });
+  }
+  // the slab: its thickness in the largest room, lowered wet rooms and balconies (hatched), stair openings crossed
+  if (slab === undefined) assumed.push({ item: 'slab', value: 120 });
+  const entries = Object.entries(rooms);
+  const area = (poly) => Math.abs(poly.reduce((s2, p, i) => s2 + cross2(p, poly[(i + 1) % poly.length]), 0) / 2);
+  const centre = (poly) => [poly.reduce((s2, p) => s2 + p[0], 0) / poly.length, poly.reduce((s2, p) => s2 + p[1], 0) / poly.length];
+  const main = entries.filter(([n]) => !STAIR_ROOM.test(n)).sort((a, b) => area(b[1]) - area(a[1]))[0];
+  if (main) out.push({ type: 'text', text: `S1 - ${lang === 'en' ? 'RC SLAB' : 'SÀN BTCT DÀY'} ${slab}`, at: P(...centre(main[1])), height: r2(2.5 * sc), align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
+  let lowered = 0;
+  for (const [n, poly] of entries) {
+    const c = centre(poly);
+    if (STAIR_ROOM.test(n)) {
+      const xs = poly.map((p) => p[0]), ys = poly.map((p) => p[1]);
+      const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+      out.push({ type: 'line', from: P(x0, y0), to: P(x1, y1), layer: SL.conc }, { type: 'line', from: P(x0, y1), to: P(x1, y0), layer: SL.conc });
+      out.push({ type: 'text', text: lang === 'en' ? 'STAIR OPENING' : 'Ô THANG', at: P(c[0], c[1] + 2.5 * sc), height: r2(2.2 * sc), align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
+    } else if (WET_ROOM.test(n) || OUT_ROOM.test(n)) {
+      out.push({ type: 'hatch', boundary: poly.map((p) => P(...p)), pattern: 'ANSI37', scale: r2(0.5 * sc), layer: SL.concHatch });
+      out.push({ type: 'text', text: `S2 - ${lang === 'en' ? 'SLAB -50' : 'SÀN HẠ 50'}`, at: P(...c), height: r2(2 * sc), align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
+      lowered++;
+    }
+  }
+  if (lowered) assumed.push({ item: 'lowered_slab', value: 50, note: 'wet rooms and balconies, mm below the floor slab' });
+  // grids: lines past the beams, bubbles at both ends, spacing and overall dimensions
+  const xs = segs.flatMap((g) => [g.A[0], g.B[0]]), ys = segs.flatMap((g) => [g.A[1], g.B[1]]);
+  const X0 = Math.min(...xs), X1 = Math.max(...xs), Y0 = Math.min(...ys), Y1 = Math.max(...ys);
+  const gx = gridList(spec.grids?.x, 'x'), gy = gridList(spec.grids?.y, 'y');
+  const ext = 18 * sc, rB = 4.5 * sc;
+  for (const g of gx) {
+    out.push({ type: 'line', from: P(g.at, Y0 - ext), to: P(g.at, Y1 + ext), layer: SL.grid, scale_linetype: true });
+    for (const y of [Y0 - ext - rB, Y1 + ext + rB]) out.push(sym('MCP_TRUC', [g.at, y], { scale: sc, attrs: { SO: String(g.label) }, layer: SL.gridTag, half: [4.5, 4.5] }));
+  }
+  for (const g of gy) {
+    out.push({ type: 'line', from: P(X0 - ext, g.at), to: P(X1 + ext, g.at), layer: SL.grid, scale_linetype: true });
+    for (const x of [X0 - ext - rB, X1 + ext + rB]) out.push(sym('MCP_TRUC', [x, g.at], { scale: sc, attrs: { SO: String(g.label) }, layer: SL.gridTag, half: [4.5, 4.5] }));
+  }
+  if (gx.length >= 2) out.push({ type: 'dim_chain', points: gx.map((g) => P(g.at, Y0)), direction: 'horizontal', at: P(gx[0].at, Y0 - ext + 6 * sc), total: gx.length > 2, style: dimStyleName(sc), layer: SL.dims });
+  if (gy.length >= 2) out.push({ type: 'dim_chain', points: gy.map((g) => P(X0, g.at)), direction: 'vertical', at: P(X0 - ext + 6 * sc, gy[0].at), total: gy.length > 2, style: dimStyleName(sc), layer: SL.dims });
+  const t = lang === 'en' ? `STRUCTURAL PLAN - SLAB ${name} (${fmtLv(level)})` : `MẶT BẰNG KẾT CẤU SÀN ${name} (${fmtLv(level)})`;
+  out.push(...viewTitle(t.replace(/\s+/g, ' ').trim(), (X0 + X1) / 2, Y0 - ext - 2 * rB - 12 * sc, sc, SL.text, lang));
+  return {
+    entities: out, assumed,
+    beams: beams.map(({ segs: _s, ...b }) => ({ ...b, level, slab })),
+    columns,
+  };
+}
+
+// ---------------------------------------------------------------- beam schedule (bảng mặt cắt dầm)
+
+/** Preliminary bars for drafting (the engineer designs them): bottom by depth, top 2Ø14, more at the supports. */
+function draftBars(b, h) {
+  const bd = h <= 300 ? 14 : h <= 400 ? 16 : 18;
+  const n = b >= 250 ? 3 : 2;
+  return {
+    support: [{ face: 'bottom', d: bd, n }, { face: 'top', d: 14, n: n + 1 }],
+    span: [{ face: 'bottom', d: bd, n: n + 1 }, { face: 'top', d: 14, n: 2 }],
+  };
+}
+
+/**
+ * Beam schedule: for every beam type its sections at the support (GỐI) and at midspan (NHỊP), with the slab flange,
+ * the slab level and the bars, titled "DẦM D2.1 (220x400) - SL: 3". beams: [{name, b, h, count, level, slab,
+ * bars?: {support: groups, span: groups}, stirrup?: {d, support, span}}]. Bars not given are preliminary (assumed).
+ */
+export function beamSchedule({ beams, scale = 25, cover = 25, perRow = 3, lang = 'vi', at = [0, 0] }) {
+  const sc = scale;
+  const out = [], assumed = [];
+  if (!beams?.length) throw new PlanError('beam_schedule: no beams (draw the structural plans first, or give beams)');
+  const colW = 160 * sc, rowH = Math.max(...beams.map((b) => b.h)) + 75 * sc;
+  beams.forEach((bm, i) => {
+    const b = num(bm.b, `beams[${i}].b`, { positive: true }), h = num(bm.h, `beams[${i}].h`, { positive: true });
+    const slab = num(bm.slab ?? 120, `beams[${i}].slab`, { positive: true });
+    const bars = bm.bars ?? draftBars(b, h);
+    if (!bm.bars) assumed.push({ item: `${bm.name}.bars`, value: `${bars.support.map((g) => `${g.n}Ø${g.d}`).join(' + ')} / ${bars.span.map((g) => `${g.n}Ø${g.d}`).join(' + ')}`, note: 'preliminary, for drafting: the engineer designs them' });
+    const st = bm.stirrup ?? { d: 6, support: 100, span: 200 };
+    const ox = at[0] + (i % perRow) * colW, oy = at[1] - Math.floor(i / perRow) * rowH;
+    const fl = 1.6 * b;
+    [['support', lang === 'en' ? 'SUPPORT' : 'GỐI', st.support], ['span', lang === 'en' ? 'MIDSPAN' : 'NHỊP', st.span]].forEach(([k, lbl, sp], j) => {
+      const x0 = ox + j * 72 * sc, y0 = oy;
+      const r = rcSection({ b, h, cover, groups: bars[k], stirrup: { d: st.d, spacing: sp }, at: [x0, y0], scale: sc, title: false });
+      out.push(...r.entities);
+      out.push({ type: 'text', text: lbl, at: P(x0 + b / 2, y0 - 16 * sc), height: r2(3 * sc), align: 'center', layer: SL.text, style: TEXT_STYLE });
+      // the slab on both sides of the web, its top level on the left
+      for (const [xa, xb] of [[x0 - fl, x0], [x0 + b, x0 + b + fl]]) {
+        out.push({ type: 'line', from: P(xa, y0 + h), to: P(xb, y0 + h), layer: SL.conc }, { type: 'line', from: P(xa, y0 + h - slab), to: P(xb, y0 + h - slab), layer: SL.conc });
+      }
+      out.push({ type: 'line', from: P(x0 - fl, y0 + h - slab), to: P(x0 - fl, y0 + h), layer: SL.conc }, { type: 'line', from: P(x0 + b + fl, y0 + h - slab), to: P(x0 + b + fl, y0 + h), layer: SL.conc });
+      if (bm.level !== undefined) out.push(sym('MCP_COTE_TRAI', [x0 - fl * 0.25, y0 + h], { scale: sc, attrs: { COTE: `FL${fmtLv(bm.level)}` }, layer: SL.symb }));
+    });
+    const tx = ox + 36 * sc + b / 2, ty = oy - 30 * sc;
+    const text = `${lang === 'en' ? 'BEAM' : 'DẦM'} ${bm.name} (${b}x${h}) - SL: ${String(bm.count ?? 1).padStart(2, '0')}`;
+    out.push({ type: 'text', text, at: P(tx, ty), height: r2(3.5 * sc), align: 'center', layer: SL.text, style: TEXT_STYLE });
+    const w = text.length * 0.8 * 3.5 * sc / 2;
+    out.push({ type: 'line', from: P(tx - w, ty - 1.2 * sc), to: P(tx + w, ty - 1.2 * sc), layer: SL.text });
+  });
+  const rows = Math.ceil(beams.length / perRow);
+  out.push(...viewTitle(lang === 'en' ? 'BEAM SCHEDULE' : 'BẢNG MẶT CẮT DẦM', at[0] + (Math.min(perRow, beams.length) * colW) / 2 - 20 * sc, at[1] - rows * rowH - 5 * sc, sc, SL.text, lang));
+  return { entities: out, assumed };
+}
+
+// ---------------------------------------------------------------- structural general notes (ghi chú chung kết cấu)
+
+/** Tables and notes of a structural set (TCVN 5574:2018 defaults; every value can be given). */
+export function structureNotes({ at = [0, 0], scale = 50, lang = 'vi', concrete = {}, cover = {}, laps = {}, lintels = null, notes = null }) {
+  const sc = scale, th = 2.5 * sc;
+  const out = [], assumed = [];
+  const C = { main: concrete.main ?? 'B20 (M250)', minor: concrete.minor ?? 'B15 (M200)', lean: concrete.lean ?? 'B7,5 (M100)' };
+  if (concrete.main === undefined) assumed.push({ item: 'concrete.main', value: C.main });
+  const CV = { 'Móng (có bê tông lót)': cover.footing ?? 40, 'Dầm móng': cover.ground_beam ?? 30, 'Cột': cover.column ?? 25, 'Dầm': cover.beam ?? 25, 'Sàn, cầu thang': cover.slab ?? 20, 'Lanh tô, bổ trụ': cover.lintel ?? 15 };
+  if (cover.beam === undefined) assumed.push({ item: 'cover', value: Object.values(CV).join('/'), note: 'mm: footing, ground beam, column, beam, slab, lintel' });
+  const kt = laps.anchor_tension ?? 30, kc = laps.anchor_compression ?? 20, lt = laps.lap_tension ?? 40, lc = laps.lap_compression ?? 30;
+  if (laps.anchor_tension === undefined) assumed.push({ item: 'laps', value: `neo ${kt}d/${kc}d, nối ${lt}d/${lc}d`, note: 'tension/compression, rounded up to 50 mm' });
+  const up50 = (v) => Math.ceil(v / 50) * 50;
+  const L = lintels ?? [
+    ['L ≤ 1200', '220x150', '2Ø10', '2Ø10', 'Ø6a200', '200'], ['1200 < L ≤ 2000', '220x200', '2Ø12', '2Ø10', 'Ø6a200', '250'],
+    ['2000 < L ≤ 3000', '220x300', '2Ø14', '2Ø12', 'Ø6a150', '300'], ['L > 3000', 'Theo thiết kế dầm', '', '', '', ''],
+  ];
+  if (!lintels) assumed.push({ item: 'lintels', value: 'by span 1200 / 2000 / 3000', note: 'typical lintels' });
+  const tables = [
+    { title: lang === 'en' ? 'MATERIALS' : 'VẬT LIỆU', widths: [60, 45, 75], rows: [
+      ['CẤU KIỆN', 'VẬT LIỆU', 'GHI CHÚ'],
+      ['Móng, dầm móng, cột, dầm, sàn, cầu thang', `Bê tông ${C.main}`, 'Đổ tại chỗ, đầm kỹ, bảo dưỡng ẩm ≥ 7 ngày'],
+      ['Lanh tô, bổ trụ, giằng tường', `Bê tông ${C.minor}`, ''], ['Bê tông lót móng', `Bê tông ${C.lean}`, 'Dày 100'],
+      ['Thép Ø < 10', concrete.steel_small ?? 'CB240-T', 'TCVN 1651-1:2018'], ['Thép Ø ≥ 10', concrete.steel_large ?? 'CB300-V', 'TCVN 1651-2:2018'],
+    ] },
+    { title: lang === 'en' ? 'CONCRETE COVER (mm)' : 'LỚP BÊ TÔNG BẢO VỆ (mm)', widths: [70, 30], rows: [['CẤU KIỆN', 'a (mm)'], ...Object.entries(CV).map(([k, v]) => [k, v])] },
+    { title: lang === 'en' ? 'ANCHORAGE AND LAPS (mm)' : 'CHIỀU DÀI NEO VÀ NỐI CHỒNG (mm)', widths: [20, 30, 30, 30, 30], rows: [
+      ['Ø', `NEO KÉO ${kt}d`, `NEO NÉN ${kc}d`, `NỐI KÉO ${lt}d`, `NỐI NÉN ${lc}d`],
+      ...[10, 12, 14, 16, 18, 20, 22, 25].map((d) => [`Ø${d}`, up50(kt * d), up50(kc * d), up50(lt * d), up50(lc * d)]),
+    ] },
+    { title: lang === 'en' ? 'TYPICAL LINTELS' : 'LANH TÔ ĐIỂN HÌNH', widths: [40, 35, 25, 25, 25, 25], rows: [['NHỊP Ô CỬA', 'TIẾT DIỆN', 'THÉP DƯỚI', 'THÉP TRÊN', 'ĐAI', 'GỐI (mm)'], ...L] },
+  ];
+  let y = at[1];
+  out.push(...viewTitle(lang === 'en' ? 'STRUCTURAL GENERAL NOTES' : 'GHI CHÚ CHUNG KẾT CẤU', at[0] + 90 * sc, y, sc, SL.text, lang, 5, false));
+  y -= 16 * sc;
+  for (const t of tables) {
+    out.push({ type: 'table', at: P(at[0], y), title: t.title, rows: t.rows, height: r2(th), row_height: r2(7 * sc), col_widths: t.widths.map((w) => r2(w * sc)), layer: SL.text, style: TEXT_STYLE });
+    y -= (t.rows.length + 1) * 7 * sc + 10 * sc;
+  }
+  const N = notes ?? [
+    'Kích thước ghi bằng mm, cao độ ghi bằng m; cao độ ±0.000 là cao độ sàn hoàn thiện tầng 1.',
+    'Thiết kế theo TCVN 2737:2023 (tải trọng và tác động), TCVN 5574:2018 (kết cấu bê tông cốt thép).',
+    'Mối nối thép bố trí so le, không nối quá 50% số thanh tại một tiết diện; không nối thép chịu kéo tại vùng mô men lớn.',
+    'Cốp pha dầm, sàn chỉ tháo khi bê tông đạt ≥ 70% cường độ (nhịp ≤ 8 m) và ≥ 90% với công xôn.',
+    'Kích thước dầm, cột trên bản vẽ là sơ bộ theo nhịp: kỹ sư kết cấu tính toán, xác nhận trước khi thi công.',
+    'Nhà thầu kiểm tra kích thước thực tế, phối hợp bản vẽ kiến trúc, điện, nước trước khi thi công.',
+  ];
+  out.push({ type: 'text', text: lang === 'en' ? 'NOTES:' : 'GHI CHÚ:', at: P(at[0], y), height: r2(3 * sc), layer: SL.text, style: TEXT_STYLE });
+  out.push({ type: 'mtext', text: N.map((l, i) => `${i + 1}. ${l}`).join('\n'), at: P(at[0], y - 5 * sc), height: r2(th), width: r2(180 * sc), layer: SL.text, style: TEXT_STYLE, line_spacing: 1.1 });
+  return { entities: out, assumed };
 }

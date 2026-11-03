@@ -1053,7 +1053,7 @@ export function buildSection(spec, opts = {}) {
         }
         // the name well under the ceiling and its tag, clear of both
         yName = Math.min(yRoom, low - 9 * scale);
-        if (u1 - u0 > 24 * scale) {
+        if (u1 - u0 > 50 * scale) {
           if (cl.code) ents.push(tagSym(cl.code, [X(u0) + 9 * scale, Y(z + low) - 3.2 * scale], scale, L.note));
           if (cl.floor_code) ents.push(tagSym(cl.floor_code, [X(u0) + 9 * scale, Y(z) + 3.2 * scale], scale, L.note));
         }

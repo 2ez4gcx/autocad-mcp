@@ -43,6 +43,11 @@
 - Draw the floor, wall and ceiling finish plans and the lighting layout of floor 2, each with its legend and general notes. / Vẽ mặt bằng hoàn thiện sàn, hoàn thiện tường, hoàn thiện trần và bố trí đèn tầng 2, có chú thích và ghi chú chung.
 - Make the A3 sheets NT-01 to NT-07 with the vertical title strip (client, project, consultant, phase TKTC) and export one PDF. / Dàn tờ A3 NT-01 đến NT-07 với khung tên dải dọc (chủ đầu tư, dự án, tư vấn, giai đoạn TKTC) và xuất một file PDF.
 
+## Three sets: architecture, structure, interior / Ba bộ hồ sơ: kiến trúc, kết cấu, nội thất
+
+- Make the structural set in a new drawing: general notes, the framing plan of every slab and the beam schedule, then sheets KC-00 to KC-06 with the drawing list. / Lập bộ kết cấu trong bản vẽ mới: ghi chú chung, mặt bằng kết cấu từng sàn, bảng mặt cắt dầm, dàn tờ KC-00 đến KC-06 kèm danh mục bản vẽ.
+- Keep architecture, structure and interior in three files, each with its own drawing list and title block item. / Tách kiến trúc, kết cấu, nội thất thành ba file, mỗi bộ có danh mục và hạng mục riêng trên khung tên.
+
 ## Buildings of several floors / Nhà nhiều tầng
 
 - Draw a 5x18 m townhouse with three floors and a stair tower (tum): U stair at the back, a 1.2 m balcony on floors 2 and 3, a 1 m parapet on the roof terrace. List what you assume first. / Vẽ nhà phố 5x18 m, 3 tầng + tum, thang chữ U phía sau, ban công 1,2 m tầng 2 và 3, tường mái cao 1 m; liệt kê giả định trước khi vẽ.

@@ -351,7 +351,10 @@ namespace AcadMcp
             double toM = U.ToMetres(db);
             var result = new Dictionary<string, object>();
             // Text/dimension styles for the plan scale, inside the same document lock (same Undo step).
-            if (p.Has("styles")) result["styles"] = Styles.Setup(ctx, p.Obj("styles"));
+            // rooms_only: the room outlines of the plan, nothing drawn (the transaction is not committed) - for the
+            // structural and interior drawings, which are files of their own without the architectural plan
+            bool roomsOnly = p.Bool("rooms_only", false);
+            if (p.Has("styles") && !roomsOnly) result["styles"] = Styles.Setup(ctx, p.Obj("styles"));
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 var space = U.ModelSpace(db, tr, OpenMode.ForWrite);
@@ -465,6 +468,12 @@ namespace AcadMcp
                             ro1["area_m2"] = U.R(a, 3);
                             ro1["perimeter_m"] = U.R(hole.Perimeter * toM, 3);
                             areaText = Num(a, dec, sep);
+                            if (roomsOnly)
+                            {
+                                ro1["points"] = hole.Points3d().Select(q => (object)new List<object> { U.R(q.X), U.R(q.Y) }).ToList();
+                                roomsOut.Add(ro1);
+                                continue;
+                            }
                             if (ro.Bool("boundary", true))
                             {
                                 var pl = dr.MakePoly(hole.Points3d(), hole.BulgeList(), true, null);
@@ -535,6 +544,7 @@ namespace AcadMcp
                 result["count"] = dr.Count;
                 if (dr.CreatedLayers.Count > 0) result["created_layers"] = dr.CreatedLayers;
                 result["bounds"] = U.BoundsOut(dr.Bounds);
+                if (roomsOnly) return new Dictionary<string, object> { { "rooms", result.ContainsKey("rooms") ? result["rooms"] : new List<object>() } };
                 tr.Commit();
             }
             return result;

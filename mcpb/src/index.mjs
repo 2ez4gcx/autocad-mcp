@@ -21,11 +21,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod';
 import { buildBuilding, buildElevation, buildingAssumed, buildSection, floorsOf } from './elevation.mjs';
 import { buildPlan, planAssumptions, PlanError } from './plan.mjs';
-import { dimStyleName, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, titleBlock, viewStyles, viewTitle } from './standards.mjs';
-import { beamDetail, footingDetail, rcSection, rebarSchedule } from './structure.mjs';
+import { dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, titleBlock, viewStyles, viewTitle } from './standards.mjs';
+import { beamDetail, beamSchedule, footingDetail, framingPlan, rcSection, rebarSchedule, structureNotes } from './structure.mjs';
 import { symbolDef } from './symbols.mjs';
 import {
-  ceilingPlan, centroid, cleanPoly, elevationKey, entBox, entityBounds, floorFinishPlan, freePoint, FURNITURE_DOC, furniturePlan, generalNotes, inside, notesBlock, wallFinishPlan,
+  ceilingPlan, centroid, cleanPoly, elevationKey, entBox, entityBounds, floorFinishPlan, freePoint, FURNITURE_DOC, furniturePlan, generalNotes, inside, notesBlock, shiftEntity, wallFinishPlan,
   interiorElevation, joineryDetail, labelSize, materialSchedule, polyArea, resolveFinish, resolveItems, shiftSpec,
 } from './interior.mjs';
 
@@ -947,6 +947,10 @@ server.registerTool('create_layout', {
   });
   req.styles.text_style.set_current = false;
   const r = await sendNow('create_layout', req);
+  const list = sheetsMade.get(info0.name) ?? [];
+  sheetsMade.set(info0.name, [...list.filter((x) => x.layout !== name), {
+    layout: name, number: title_block?.number ?? name, title: title_block?.title ?? '', scale: `1:${s}`, paper: `${paper} ${orientation === 'portrait' ? 'đứng' : 'ngang'}`,
+  }]);
   return text({ ...r, scale: `1:${s}`, paper, orientation, ...(warnings.length ? { warnings } : {}) });
 }));
 
@@ -1260,17 +1264,35 @@ async function roomOutlines(spec, tool, offset = [0, 0], handles = null) {
   const q = await sendNow('query_entities', { layers: [ROLE.area], types: ['polyline'], detail: true, limit: 2000 });
   const polys = (q.entities || []).filter((e) => e.closed && Array.isArray(e.points) && e.points.length >= 3).map((e) => ({ poly: cleanPoly(e.points), handle: e.handle }));
   const out = {};
-  for (const r of spec.rooms || []) {
-    const p = [r.at[0] + offset[0], r.at[1] + offset[1]];
-    const c = polys.filter((x) => inside(p, x.poly)).sort((a, b) => polyArea(a.poly) - polyArea(b.poly))[0];
-    if (!c) continue;
-    out[String(r.name)] = c.poly.map((q2) => [q2[0] - offset[0], q2[1] - offset[1]]);
-    // the boundary, for quantities kept as fields of it
-    if (handles) handles[String(r.name)] = c.handle;
+  // the plan where draw_plan put it, else the newest copy of it in this drawing (an interior or structural file)
+  for (const off of [offset, ...planCopies.filter((c) => c.sig === roomSig(spec)).map((c) => c.offset)]) {
+    for (const r of spec.rooms || []) {
+      const p = [r.at[0] + off[0], r.at[1] + off[1]];
+      const c = polys.filter((x) => inside(p, x.poly)).sort((a, b) => polyArea(a.poly) - polyArea(b.poly))[0];
+      if (!c) continue;
+      out[String(r.name)] = c.poly.map((q2) => [q2[0] - off[0], q2[1] - off[1]]);
+      // the boundary, for quantities kept as fields of it
+      if (handles) handles[String(r.name)] = c.handle;
+    }
+    if (Object.keys(out).length) break;
   }
   if (!Object.keys(out).length) {
-    throw new Error(`${tool}: no room outlines on ${ROLE.area}: draw the plan with draw_plan first (rooms with a point inside each, room_options.boundary true).`);
+    // a drawing of its own (structural, interior): the outlines from the plan description, nothing drawn
+    Object.assign(out, await planRooms(spec));
   }
+  if (!Object.keys(out).length) {
+    throw new Error(`${tool}: no room outlines: the plan has no rooms closed by walls (rooms with a point inside each).`);
+  }
+  return out;
+}
+
+/** Room outlines of a plan description computed by AutoCAD (region of the walls) without drawing anything. */
+async function planRooms(spec) {
+  const plan = engine('rooms', () => buildPlan({ ...spec, entities: [], dimensions: false }));
+  if (!plan.rooms.length) return {};
+  const r = await sendNow('draw_plan', { walls: plan.walls, cuts: plan.cuts, columns: plan.columns, rooms: plan.rooms, room_options: plan.room_options, rooms_only: true });
+  const out = {};
+  for (const rm of r.rooms || []) if (Array.isArray(rm.points) && rm.points.length >= 3) out[String(rm.name)] = cleanPoly(rm.points);
   return out;
 }
 
@@ -1306,6 +1328,13 @@ function sectionCeilings(spec) {
   return out;
 }
 
+/** The sheets made by create_layout, by drawing (for draw_drawing_list); the beams of the structural plans. */
+const sheetsMade = new Map();
+/** Where the interior tools drew their copies of the plan (newest first): their room boundaries stand for the rooms. */
+const planCopies = [];
+const roomSig = (spec) => (spec.rooms || []).map((r) => `${r.name}@${r.at}`).join('|');
+const structBeams = new Map();
+
 const NotesArg = z.union([z.boolean(), z.array(Str)]).default(true)
   .describe('General notes of the sheet (GHI CHÚ): true = the standard ones for this kind of plan, a list = these, false = none');
 
@@ -1337,6 +1366,7 @@ async function planCopy(tool, spec, args, scale, { doors = true, roomLabels = tr
   if (!doors) ents = ents.filter((e) => e.layer !== ROLE.door && !(e.type === 'text' && tags.has(String(e.text))));
   ents = ents.map((e) => ([ROLE.grid, ROLE.opening, ROLE.hidden, ROLE.beam].includes(e.layer) ? { ...e, scale_linetype: true } : e));
   const b = entityBounds(ents) ?? { min: [x0 + offset[0], y0 + offset[1]], max: [x1 + offset[0], y0 + offset[1]] };
+  planCopies.unshift({ sig: roomSig(spec), offset });
   return { info, offset, plan, ents, bounds: b, centerX: (x0 + x1) / 2 + offset[0] };
 }
 
@@ -1362,6 +1392,137 @@ const INTERIOR_DEFAULTS =
   'narrower than 2.4 m); stairs FL-04 granite treads, no ceiling (stairwell); kitchens the same plus WL-03 backsplash tiles ' +
   'between the base and wall cabinets; WC/bathrooms FL-02 anti-slip 300x300, WL-02 wall tiles 300x600 to the ceiling, CL-02 ' +
   'moisture-resistant gypsum +3.000 flat; yards/balconies FL-03 outdoor tiles, no ceiling.';
+
+// ---------------------------------------------------------------- structural set (kết cấu)
+
+/** Moves entities so that their bounds start at p (a view placed by freeSpot). */
+function placeAt(ents, p) {
+  const b = entityBounds(ents);
+  if (!b) return ents;
+  const d = [p[0] - b.min[0], p[1] - b.min[1]];
+  return ents.map((e) => shiftEntity(e, d));
+}
+
+server.registerTool('draw_structure_plan', {
+  description:
+    'Structural framing plan of one slab (mặt bằng kết cấu dầm sàn) from the plan of draw_plan, for the structural set (its own ' +
+    'drawing: new_drawing first): beams along the load-bearing walls of the floor below (walls of 150 mm and more; thinner ' +
+    'partitions stand on the slab), named per slab (D2.1, D2.2 ... for the slab of floor 2, DM.1 ... for the roof) with b x h and ' +
+    'their count, columns at the wall nodes, the slab thickness, lowered slabs (wet rooms, balconies -50) hatched, stair ' +
+    'openings crossed, grids with bubbles and dimensions, title "MẶT BẰNG KẾT CẤU SÀN <floor> (+level)". Sizes are ' +
+    'preliminary (h = span/12 rounded up to 50, 300-700; b = wall thickness) and reported as assumed: the structural engineer ' +
+    'designs them; give beam {b, h} and column {size} to use theirs. The beams are remembered for draw_beam_schedule.',
+  inputSchema: {
+    floor: opt(z.union([Str, z.number().int().positive()])).describe('The slab: floor number from 2 or name (its floor slab), or "roof" (over the top floor; default for a one-floor plan)'),
+    scale: z.number().positive().default(100), slab: opt(z.number().positive()), prefix: opt(Str),
+    beam: opt(Obj).describe('{b, h, min_wall: 150}'), column: opt(Obj).describe('{size: [b, h]}'),
+    at: opt(Point), plan: opt(Obj), language: opt(Lang),
+    dry_run: z.boolean().default(false).describe('List the beams, columns and sizes it would assume, without drawing'),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const spec = planFor(args, 'draw_structure_plan');
+  const floors = engine('draw_structure_plan', () => floorsOf(spec));
+  const lang = args.language ?? language;
+  const roof = args.floor === undefined ? floors.length === 1 || null : /^(roof|mái|mai)$/i.test(String(args.floor));
+  if (roof === null) throw new Error(`draw_structure_plan: give floor (2..${floors.length}) or "roof"`);
+  let below, level, name, slab, roomsSpec, prefix;
+  if (roof) {
+    below = floors[floors.length - 1];
+    slab = args.slab ?? 120;
+    // the top of the roof slab over the walls of the top floor
+    level = below.level + (below.height ?? spec.heights?.top ?? 3600) + slab;
+    name = lang === 'en' ? 'ROOF' : 'MÁI';
+    roomsSpec = null;
+    prefix = 'DM.';
+  } else {
+    const k = typeof args.floor === 'number' || /^\d+$/.test(String(args.floor)) ? Number(args.floor) - 1 : floors.findIndex((f) => f.name === String(args.floor));
+    if (!floors[k] || k < 1) throw new Error(`draw_structure_plan: floor must be 2..${floors.length} (the slab of that floor) or "roof"`);
+    below = floors[k - 1];
+    level = floors[k].level;
+    name = floors[k].name;
+    slab = args.slab ?? floors[k].slab ?? 120;
+    roomsSpec = floors[k].spec;
+    // D2. for floor 2 ..., DT. for a stair tower (tum)
+    const m = /(\d+)\s*$/.exec(String(name));
+    prefix = /TUM/i.test(String(name)) ? 'DT.' : `D${m ? m[1] : k + 1}.`;
+  }
+  const sc = args.scale;
+  const rooms = roomsSpec && !args.dry_run ? await roomOutlines(roomsSpec, 'draw_structure_plan').catch(() => ({})) : {};
+  const r = engine('draw_structure_plan', () => framingPlan({
+    spec: below.spec, level, slab, name, prefix: args.prefix ?? prefix, scale: sc, beam: args.beam ?? {}, column: args.column ?? {}, rooms, lang,
+  }));
+  const beams = r.beams.map((b) => ({ name: b.name, size: `${b.b}x${b.h}`, count: b.count, spans: b.spans }));
+  if (args.dry_run) return dryRun(r.assumed, { slab: name, level, beams, columns: r.columns });
+  structBeams.set(name, r.beams);
+  const { at, info } = await freeSpot(args.at, sc);
+  const res = await drawView(placeAt(r.entities, at), sc, info, args.language);
+  return text({ slab: name, level, beams, columns: r.columns, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
+}));
+
+server.registerTool('draw_beam_schedule', {
+  description:
+    'Beam schedule (bảng mặt cắt dầm) of the structural set: for every beam type its section at the support (GỐI) and at ' +
+    'midspan (NHỊP) with the slab flange, the slab level (FL), bars, stirrups and b/h dimensions, titled "DẦM D2.1 (220x400) - ' +
+    'SL: 03". beams default to those of the draw_structure_plan calls of this session; or give beams [{name, b, h, count, ' +
+    'level, slab, bars: {support: [{face, d, n}], span: [...]}, stirrup: {d, support, span}}]. Bars not given are preliminary ' +
+    '(by depth) and reported as assumed.',
+  inputSchema: {
+    beams: opt(Specs), scale: z.number().positive().default(25), per_row: z.number().int().positive().default(3), at: opt(Point), language: opt(Lang),
+    dry_run: z.boolean().default(false),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const beams = args.beams ?? [...structBeams.values()].flat();
+  if (!beams.length) throw new Error('draw_beam_schedule: no beams: call draw_structure_plan first, or give beams');
+  const sc = args.scale;
+  const r = engine('draw_beam_schedule', () => beamSchedule({ beams, scale: sc, perRow: args.per_row, lang: args.language ?? language }));
+  if (args.dry_run) return dryRun(r.assumed, { beams: beams.map((b) => `${b.name} ${b.b}x${b.h} x${b.count ?? 1}`) });
+  const { at, info } = await freeSpot(args.at, sc);
+  const res = await drawView(placeAt(r.entities, at), sc, info, args.language);
+  return text({ beams: beams.length, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
+}));
+
+server.registerTool('draw_structure_notes', {
+  description:
+    'Structural general notes (ghi chú chung kết cấu) as tables: materials (concrete B20/B15/B7.5, steel CB240-T / CB300-V), ' +
+    'concrete cover by member, anchorage and lap lengths by diameter, typical lintels by span, and numbered notes (codes, laps, ' +
+    'formwork, preliminary sizes). TCVN 5574:2018 defaults, every value can be given: concrete {main, minor, lean, ' +
+    'steel_small, steel_large}, cover {footing, ground_beam, column, beam, slab, lintel}, laps {anchor_tension, ' +
+    'anchor_compression, lap_tension, lap_compression} (multiples of d), lintels (rows), notes (lines). Defaults are listed as assumed.',
+  inputSchema: {
+    concrete: opt(Obj), cover: opt(Obj), laps: opt(Obj), lintels: opt(jsonish(z.array(z.array(z.any())))), notes: opt(z.array(Str)),
+    scale: z.number().positive().default(50), at: opt(Point), language: opt(Lang), dry_run: z.boolean().default(false),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const sc = args.scale;
+  const make = (at) => structureNotes({ ...args, at, scale: sc, lang: args.language ?? language });
+  const r0 = engine('draw_structure_notes', () => make([0, 0]));
+  if (args.dry_run) return dryRun(r0.assumed, {});
+  const { at, info } = await freeSpot(args.at, sc);
+  const r = make([at[0], at[1] + 250 * sc]);
+  const res = await drawView(r.entities, sc, info, args.language);
+  return text({ assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
+}));
+
+server.registerTool('draw_drawing_list', {
+  description:
+    'Drawing list (danh mục bản vẽ) of the set in this drawing: a table of its sheets (number, title, scale, paper). sheets ' +
+    'default to the layouts create_layout made in this drawing in this session; or give sheets [{number, title, scale, paper, ' +
+    'note}]. item names the set (KIẾN TRÚC, KẾT CẤU, NỘI THẤT). Put it on the first sheet of the set (e.g. KT-00).',
+  inputSchema: { sheets: opt(Specs), item: opt(Str), scale: z.number().positive().default(50), at: opt(Point), language: opt(Lang) },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const info0 = await sendNow('drawing_info', {});
+  const sheets = args.sheets ?? sheetsMade.get(info0.name) ?? [];
+  if (!sheets.length) throw new Error('draw_drawing_list: no sheets: make the layouts with create_layout first (or give sheets)');
+  const sc = args.scale;
+  const { at, info } = await freeSpot(args.at, sc);
+  const r = drawingList({ sheets, at: [at[0], at[1] + (sheets.length + 2) * 8 * sc], scale: sc, item: args.item, lang: args.language ?? language });
+  const res = await drawView(r.entities, sc, info, args.language);
+  return text({ sheets: sheets.length, table: res.results?.[0]?.handle ?? res.entities?.[0]?.handle, bounds: res.bounds });
+}));
 
 server.registerTool('draw_furniture_plan', {
   description:

@@ -6,21 +6,21 @@ AutoCAD MCP lets Claude work directly in the drawing you have open in AutoCAD. I
 
 It works like [SketchUp MCP](https://github.com/2ez4gcx/sketchup-mcp): a Claude Desktop extension (`.mcpb`) that runs on the Node.js built into Claude Desktop, plus a small add-in that runs inside AutoCAD (the **ACAD MCP Bridge**, a .NET add-in). No Python or Node.js install is needed.
 
-Current version: **1.1.0**.
+Current version: **1.2.0**.
 
 ## Features
 
-42 tools. Lengths are in drawing units (mm in a metric drawing), areas in m², angles in degrees counter-clockwise from +X.
+46 tools. Lengths are in drawing units (mm in a metric drawing), areas in m², angles in degrees counter-clockwise from +X.
 
 | Group | Tools |
 |---|---|
 | Read & quantities | `ping`, `drawing_info`, `list_layers`, `list_blocks`, `query_entities`, `selection_info`, `quantity_takeoff`, `check_drawing` |
 | Standards | `setup_layers`, `setup_styles` |
 | Drawing & editing | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
-| Elevations, sections & structure | `draw_elevation`, `draw_section`, `draw_structure_detail`, `rebar_schedule` |
+| Elevations, sections & structure | `draw_elevation`, `draw_section`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule` |
 | Interior design | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
 | Images & 3D sources | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
-| Sheets & files | `create_layout`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
+| Sheets & files | `create_layout`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
 | Scripting | `run_lisp` |
 | Setup | `install_autocad_bridge` |
 
@@ -37,6 +37,22 @@ Highlights:
   - elevations from any side: the nearest walls and columns win, hidden lines are removed, roofs show the eaves side (tile ribs) or the gable end, doors and windows with frames, plinth and ground lines, level marks, height dimension chains, grid bubbles with their spacing, title;
   - sections along the plan's section mark (or any cut line): slabs, roof slabs, lintels and the beams under the slabs on every cut wall drawn solid (poché, `beam_depth` default 300), cut walls hatched with lintels over the openings they cross, each room's ceiling at its finish level with its drop bands and hangers up to the slab and its ceiling and floor codes, level marks on both sides tied to the building by extension lines, footings with lean concrete, floor slab and fill, a porch slab out to its columns, the roof cut, walls, doors and windows seen beyond, room names, levels and grids;
   - ornaments seen in a photo (gable windows, cladding, finials) are added with `draw_entities` on `A-ELEV`.
+- **Three sets, three files**: architecture (KT), structure (KC) and interior (NT) are separate drawings, as a design office issues them. Each is made with `new_drawing` from the same plan description and has its own drawing list (`draw_drawing_list`, sheet KT-00 / KC-00 / NT-00), sheet numbers and title block item (KIẾN TRÚC, KẾT CẤU, NỘI THẤT). The structural and interior tools work in a file without the architectural plan: AutoCAD computes the room outlines from the plan description without drawing it (`draw_plan rooms_only`). Example: `examples/Nha-pho-5x18-KT.pdf`, `-KC.pdf`, `-NT.pdf`.
+- **Structural set** (`draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`):
+  - `draw_structure_plan` draws the framing plan of each slab (floor 2, 3 ... and the roof):
+    - beams along the load-bearing walls of the floor below (partitions under 150 mm stand on the slab), named per slab (D2.1 ..., DM.1 for the roof) with b x h and their count;
+    - columns at the wall nodes;
+    - the slab thickness, wet rooms and balconies lowered 50 (hatched), stair openings crossed;
+    - grids with bubbles and dimensions.
+
+    Sizes are preliminary (h = span/12, rounded up to 50, 300-700) and reported as assumed, for the engineer to confirm.
+  - `draw_beam_schedule` gives every beam type its support (GỐI) and midspan (NHỊP) sections, with the slab flange, the FL level, bars and stirrups, titled "DẦM D2.1 (200x400) - SL: 02".
+  - `draw_structure_notes` draws the general notes as tables:
+    - materials (B20 / B15 / B7.5, CB240-T / CB300-V);
+    - concrete cover by member;
+    - anchorage and lap lengths by diameter;
+    - typical lintels by span;
+    - numbered notes (TCVN 5574:2018 defaults, every value can be given).
 - **Structural details** (`draw_structure_detail`, `rebar_schedule`): cross-sections with bars and 135° stirrup hooks, beams over several spans (bottom and top bars, support bars over a fraction of the span, dense and normal stirrup zones, sections 1-1 and 2-2), pad footings with mesh, column starter bars, ties and levels; bar marks with leaders, each different bar with its own mark. Every detail returns its schedule rows; `rebar_schedule` combines them into the bar schedule (bars, total length, weight d²/162 kg/m per row, per diameter and overall) as a table and a CSV. Sizes and bars come from the engineer: the tool draws, it does not design, and it warns when bars do not fit the clear spacing.
 - **Interior design** (from the plan of `draw_plan`; material codes as in SketchUp MCP: FL floor, SK skirting, WL wall, CL ceiling, JN joinery, FN furniture, SN sanitary, EQ equipment, LT lighting, one code per specification):
   - `draw_furniture_plan`: a 1:50 copy of the plan with a furniture library (beds, nightstands, wardrobes, sofas, tables and chairs, desks, TV cabinets, kitchen base and wall cabinets with sink and hob, hood, fridge, washer, toilet, vanity, shower, bathtub, shoe cabinet, bookshelf) placed against a wall of a room by offset, code tags kept clear of each other, room names moved clear of the furniture and the door swings, elevation keys A-D;
@@ -92,7 +108,7 @@ Highlights:
 Claude Desktop
     |  MCP over stdio
     v
-autocad-mcp-1.1.0.mcpb        Node.js MCP server, runs on the Node built into Claude Desktop
+autocad-mcp-1.2.0.mcpb        Node.js MCP server, runs on the Node built into Claude Desktop
     |  one JSON request per command, TCP 127.0.0.1:9877 (localhost only)
     v
 ACAD MCP Bridge               .NET add-in inside AutoCAD (autoloader bundle), runs commands on AutoCAD's main thread
@@ -111,9 +127,9 @@ The bridge runs inside AutoCAD (not over COM from outside): every command runs o
 
 ## Install
 
-1. **Install the extension in Claude Desktop**: download `autocad-mcp-1.1.0.mcpb` and `AcadMcpBridge-1.1.0.bundle.zip` from the [latest release](https://github.com/2ez4gcx/autocad-mcp/releases/latest), then in *Settings > Extensions* drag and drop the `.mcpb` into the window (or *Advanced settings > Install Extension...*), click *Install*. The build is not code-signed, so Claude Desktop may warn about it.
-2. **Install the bridge in AutoCAD**: in a new chat ask Claude *"Install the ACAD MCP Bridge in AutoCAD"* (tool `install_autocad_bridge`). It copies `AcadMcpBridge.bundle` into `%APPDATA%\Autodesk\ApplicationPlugins`, which AutoCAD loads at startup. Manual install: unzip `AcadMcpBridge-1.1.0.bundle.zip` into that folder.
-3. **Restart AutoCAD.** The add-in is not digitally signed: when AutoCAD asks about `AcadMcpBridge-1.1.0.dll`, choose **Always Load**. Each new bridge build is a new file, so AutoCAD asks again after an update. (To never be asked, you can add the bundle folder to *Options > Files > Trusted Locations*, if your IT policy allows it.) Type `MCPSTATUS` in AutoCAD: it should say `ACAD MCP Bridge v1.1.0: RUNNING on 127.0.0.1:9877`. Then ask Claude *"Ping AutoCAD"*.
+1. **Install the extension in Claude Desktop**: download `autocad-mcp-1.2.0.mcpb` and `AcadMcpBridge-1.2.0.bundle.zip` from the [latest release](https://github.com/2ez4gcx/autocad-mcp/releases/latest), then in *Settings > Extensions* drag and drop the `.mcpb` into the window (or *Advanced settings > Install Extension...*), click *Install*. The build is not code-signed, so Claude Desktop may warn about it.
+2. **Install the bridge in AutoCAD**: in a new chat ask Claude *"Install the ACAD MCP Bridge in AutoCAD"* (tool `install_autocad_bridge`). It copies `AcadMcpBridge.bundle` into `%APPDATA%\Autodesk\ApplicationPlugins`, which AutoCAD loads at startup. Manual install: unzip `AcadMcpBridge-1.2.0.bundle.zip` into that folder.
+3. **Restart AutoCAD.** The add-in is not digitally signed: when AutoCAD asks about `AcadMcpBridge-1.2.0.dll`, choose **Always Load**. Each new bridge build is a new file, so AutoCAD asks again after an update. (To never be asked, you can add the bundle folder to *Options > Files > Trusted Locations*, if your IT policy allows it.) Type `MCPSTATUS` in AutoCAD: it should say `ACAD MCP Bridge v1.2.0: RUNNING on 127.0.0.1:9877`. Then ask Claude *"Ping AutoCAD"*.
 
 Options in *Settings > Extensions > AutoCAD MCP > Configure*: the bridge port (default 9877; if you change it, also type `MCPPORT` in AutoCAD) and the timeout per command (default 120 s).
 
@@ -124,6 +140,13 @@ To update: install the new `.mcpb`, ask Claude to install the bridge again, rest
 > Here is a scan of a ground floor plan (D:/Project/scan.jpg). Draw it in AutoCAD at 1:100 with standard layers, full dimensions and room areas, then make an A3 sheet and a PDF.
 
 Claude then: looks at the image (`view_image`, zooming into the dimensions), sets up layers and styles, attaches the scan as a calibrated underlay, draws the plan with `draw_plan`, adds furniture, fixtures and notes with `draw_entities`, compares with `screenshot`, fixes what differs, runs `check_drawing`, and creates the layout and the PDF.
+
+Three sets of a townhouse 5x18 m with three floors and a stair tower, each its own drawing, as an office issues them:
+- architecture [`examples/Nha-pho-5x18-KT.pdf`](examples/Nha-pho-5x18-KT.pdf): drawing list, plans, elevations, sections;
+- structure [`examples/Nha-pho-5x18-KC.pdf`](examples/Nha-pho-5x18-KC.pdf): drawing list, general notes, framing plans of the slabs of floors 2, 3, the stair tower and the roof, beam schedule;
+- interior [`examples/Nha-pho-5x18-NT.pdf`](examples/Nha-pho-5x18-NT.pdf): drawing list, furniture, floor, wall and ceiling finish plans, lighting, interior elevations, finish schedule.
+
+Their DWGs sit next to them.
 
 A complete set from one photo: [`examples/Nha-6x15-ho-so.pdf`](examples/Nha-6x15-ho-so.pdf) (6 A3 sheets: plan, four elevations, sections A-A and B-B at 1:100, beam, column, footing and bar schedule at 1:25), the interior set [`examples/Nha-6x15-noi-that.pdf`](examples/Nha-6x15-noi-that.pdf) (10 sheets: furniture layout, floor finish and ceiling plans at 1:50, interior elevations of the bedroom, kitchen and WC at 1:30, kitchen and wardrobe shop drawings at 1:10, finish schedule; CSV [`examples/Nha-6x15-vat-lieu.csv`](examples/Nha-6x15-vat-lieu.csv)), all in the drawing [`examples/Nha-6x15-ho-so.dwg`](examples/Nha-6x15-ho-so.dwg).
 

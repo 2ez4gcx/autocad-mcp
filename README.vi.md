@@ -6,21 +6,21 @@ AutoCAD MCP cho phép Claude làm việc trực tiếp trên bản vẽ đang m�
 
 Cách hoạt động giống [SketchUp MCP](https://github.com/2ez4gcx/sketchup-mcp): một extension cho Claude Desktop (`.mcpb`, chạy trên Node.js có sẵn trong Claude Desktop) và một add-in nhỏ chạy bên trong AutoCAD (**ACAD MCP Bridge**, add-in .NET). Không cần cài Python hay Node.js.
 
-Phiên bản: **1.1.0**.
+Phiên bản: **1.2.0**.
 
 ## Tính năng
 
-42 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
+46 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
 
 | Nhóm | Tool |
 |---|---|
 | Đọc & khối lượng | `ping`, `drawing_info`, `list_layers`, `list_blocks`, `query_entities`, `selection_info`, `quantity_takeoff`, `check_drawing` |
 | Tiêu chuẩn | `setup_layers`, `setup_styles` |
 | Vẽ & sửa | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
-| Mặt đứng, mặt cắt & kết cấu | `draw_elevation`, `draw_section`, `draw_structure_detail`, `rebar_schedule` |
+| Mặt đứng, mặt cắt & kết cấu | `draw_elevation`, `draw_section`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule` |
 | Thiết kế nội thất | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
 | Ảnh & nguồn 3D | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
-| Khung tên & file | `create_layout`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
+| Khung tên & file | `create_layout`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
 | Lập trình | `run_lisp` |
 | Cài đặt | `install_autocad_bridge` |
 
@@ -37,6 +37,28 @@ Phiên bản: **1.1.0**.
   - mặt đứng từ mọi phía: tường, cột gần nhất che phía sau, bỏ nét khuất, mái thể hiện phía diềm (sóng ngói) hoặc đầu hồi, cửa có khuôn, đường cốt nền và mặt đất, ký hiệu cao độ, chuỗi kích thước chiều cao, ký hiệu trục kèm khoảng trục, tên hình vẽ;
   - mặt cắt theo ký hiệu mặt cắt trên mặt bằng (hoặc đường cắt bất kỳ): sàn, mái, lanh tô và dầm dưới sàn tại mọi tường bị cắt tô đặc (poché, `beam_depth` mặc định 300), trần từng phòng ở đúng cao độ hoàn thiện có giật cấp và ty treo lên sàn, thẻ mã trần và mã sàn, cao độ ở cả hai bên có đường dóng ra từ công trình, tường bị cắt có hatch và lanh tô trên ô cửa đi qua, móng có bê tông lót, sàn và lớp đất đắp, sàn hiên ra tới cột, mái bị cắt, tường/cửa nhìn thấy phía sau, tên phòng, cao độ và trục;
   - chi tiết trang trí thấy trong ảnh (cửa sổ đầu hồi, ốp gỗ, chóp mái) thêm bằng `draw_entities` trên layer `A-ELEV`.
+- **Ba bộ hồ sơ, ba file riêng**: Kiến trúc (KT), Kết cấu (KC) và Nội thất (NT) là ba bản vẽ riêng, như một văn phòng thiết kế phát hành.
+  - Mỗi bộ được tạo bằng `new_drawing` từ cùng một mô tả mặt bằng.
+  - Mỗi bộ có danh mục bản vẽ riêng (`draw_drawing_list`, tờ KT-00 / KC-00 / NT-00), số tờ riêng và hạng mục riêng trên khung tên (KIẾN TRÚC, KẾT CẤU, NỘI THẤT).
+  - Các công cụ kết cấu và nội thất làm việc được trong file không có mặt bằng kiến trúc: AutoCAD tính đường bao phòng từ mô tả mặt bằng mà không vẽ ra (`draw_plan rooms_only`).
+  - Ví dụ: `examples/Nha-pho-5x18-KT.pdf`, `-KC.pdf`, `-NT.pdf`.
+- **Bộ kết cấu** (`draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`):
+  - `draw_structure_plan` vẽ mặt bằng kết cấu từng sàn (tầng 2, 3 … và mái):
+    - dầm theo tường chịu lực của tầng dưới (tường dưới 150 mm xây trên sàn), tên theo sàn (D2.1 …, DM.1 cho mái), có b x h và số lượng;
+    - cột tại nút tường;
+    - bề dày sàn, sàn vệ sinh và ban công hạ 50 (hatch), ô thang gạch chéo;
+    - trục có ký hiệu và kích thước.
+
+    Kích thước là sơ bộ (h = nhịp/12, làm tròn lên 50, trong khoảng 300-700) và được báo là giả định để kỹ sư kết cấu xác nhận.
+  - `draw_beam_schedule` vẽ cho mỗi loại dầm mặt cắt GỐI và NHỊP, có cánh sàn, cao độ FL, thép và đai, tên "DẦM D2.1 (200x400) - SL: 02".
+  - `draw_structure_notes` vẽ ghi chú chung dạng bảng:
+    - vật liệu (B20 / B15 / B7,5, CB240-T / CB300-V);
+    - lớp bê tông bảo vệ theo cấu kiện;
+    - chiều dài neo và nối theo đường kính;
+    - lanh tô điển hình theo nhịp;
+    - các ghi chú đánh số.
+
+    Mặc định theo TCVN 5574:2018, giá trị nào cũng thay được.
 - **Chi tiết kết cấu** (`draw_structure_detail`, `rebar_schedule`): mặt cắt có thép chủ và cốt đai móc 135°, dầm nhiều nhịp (thép dưới, thép trên, thép mũ gối theo tỷ lệ nhịp, đai dày ở gối và thưa giữa nhịp, mặt cắt 1-1 và 2-2), móng đơn có lưới thép, thép chờ cột, đai và cao độ; số hiệu thép có đường dẫn, mỗi loại thanh khác nhau một số hiệu. Mỗi chi tiết trả về các dòng thống kê; `rebar_schedule` gộp thành bảng thống kê cốt thép (số thanh, tổng chiều dài, khối lượng d²/162 kg/m theo từng dòng, từng đường kính và tổng) dạng bảng trong bản vẽ và CSV. Kích thước và thép do kỹ sư kết cấu quyết định: tool vẽ, không tính toán, và cảnh báo khi thép không đủ khoảng hở.
 - **Thiết kế nội thất** (dựng từ mặt bằng của `draw_plan`; mã vật liệu giống SketchUp MCP: FL sàn, SK len, WL tường, CL trần, JN đồ gỗ đóng tại chỗ, FN nội thất rời, SN thiết bị vệ sinh, EQ thiết bị, LT đèn, mỗi mã một quy cách):
   - `draw_furniture_plan`: bản sao mặt bằng tỷ lệ 1:50 với thư viện đồ nội thất (giường, tab đầu giường, tủ áo, sofa, bàn ghế, bàn làm việc, kệ tivi, tủ bếp dưới/trên có chậu rửa và bếp, máy hút mùi, tủ lạnh, máy giặt, bồn cầu, lavabo, khu tắm đứng, bồn tắm, tủ giày, kệ sách) đặt sát một vách của phòng theo khoảng cách, thẻ mã không đè nhau, tên phòng tự dời ra chỗ trống không đè đồ và cung mở cửa, ký hiệu hướng nhìn mặt đứng A-D;
@@ -106,7 +128,7 @@ Phiên bản: **1.1.0**.
 Claude Desktop
     |  MCP qua stdio
     v
-autocad-mcp-1.1.0.mcpb        server MCP Node.js, chạy trên Node có sẵn trong Claude Desktop
+autocad-mcp-1.2.0.mcpb        server MCP Node.js, chạy trên Node có sẵn trong Claude Desktop
     |  mỗi lệnh một yêu cầu JSON, TCP 127.0.0.1:9877 (chỉ trong máy)
     v
 ACAD MCP Bridge               add-in .NET trong AutoCAD (bundle tự nạp), chạy lệnh trên luồng chính của AutoCAD
@@ -125,9 +147,9 @@ Bridge chạy bên trong AutoCAD (không điều khiển qua COM từ bên ngoà
 
 ## Cài đặt
 
-1. **Cài extension vào Claude Desktop**: tải `autocad-mcp-1.1.0.mcpb` và `AcadMcpBridge-1.1.0.bundle.zip` ở [bản phát hành mới nhất](https://github.com/2ez4gcx/autocad-mcp/releases/latest), rồi vào *Settings > Extensions*, kéo thả file `.mcpb` vào cửa sổ (hoặc *Advanced settings > Install Extension...*), bấm *Install*. Bản build chưa ký số nên Claude Desktop có thể cảnh báo.
-2. **Cài bridge vào AutoCAD**: trong một cuộc trò chuyện mới, nhờ Claude *"Cài ACAD MCP Bridge vào AutoCAD"* (tool `install_autocad_bridge`). Tool chép `AcadMcpBridge.bundle` vào `%APPDATA%\Autodesk\ApplicationPlugins`, AutoCAD tự nạp khi khởi động. Cài tay: giải nén `AcadMcpBridge-1.1.0.bundle.zip` vào thư mục đó.
-3. **Khởi động lại AutoCAD.** Add-in chưa được ký số: khi AutoCAD hỏi về `AcadMcpBridge-1.1.0.dll`, chọn **Always Load**. Mỗi bản bridge mới là một file mới nên sau khi cập nhật AutoCAD sẽ hỏi lại một lần. (Muốn không bao giờ bị hỏi, có thể thêm thư mục bundle vào *Options > Files > Trusted Locations* nếu chính sách IT cho phép.) Gõ `MCPSTATUS` trong AutoCAD, phải thấy `ACAD MCP Bridge v1.1.0: RUNNING on 127.0.0.1:9877`. Sau đó nhờ Claude *"Ping AutoCAD"*.
+1. **Cài extension vào Claude Desktop**: tải `autocad-mcp-1.2.0.mcpb` và `AcadMcpBridge-1.2.0.bundle.zip` ở [bản phát hành mới nhất](https://github.com/2ez4gcx/autocad-mcp/releases/latest), rồi vào *Settings > Extensions*, kéo thả file `.mcpb` vào cửa sổ (hoặc *Advanced settings > Install Extension...*), bấm *Install*. Bản build chưa ký số nên Claude Desktop có thể cảnh báo.
+2. **Cài bridge vào AutoCAD**: trong một cuộc trò chuyện mới, nhờ Claude *"Cài ACAD MCP Bridge vào AutoCAD"* (tool `install_autocad_bridge`). Tool chép `AcadMcpBridge.bundle` vào `%APPDATA%\Autodesk\ApplicationPlugins`, AutoCAD tự nạp khi khởi động. Cài tay: giải nén `AcadMcpBridge-1.2.0.bundle.zip` vào thư mục đó.
+3. **Khởi động lại AutoCAD.** Add-in chưa được ký số: khi AutoCAD hỏi về `AcadMcpBridge-1.2.0.dll`, chọn **Always Load**. Mỗi bản bridge mới là một file mới nên sau khi cập nhật AutoCAD sẽ hỏi lại một lần. (Muốn không bao giờ bị hỏi, có thể thêm thư mục bundle vào *Options > Files > Trusted Locations* nếu chính sách IT cho phép.) Gõ `MCPSTATUS` trong AutoCAD, phải thấy `ACAD MCP Bridge v1.2.0: RUNNING on 127.0.0.1:9877`. Sau đó nhờ Claude *"Ping AutoCAD"*.
 
 Tùy chọn ở *Settings > Extensions > AutoCAD MCP > Configure*: cổng bridge (mặc định 9877; nếu đổi thì gõ `MCPPORT` trong AutoCAD cho khớp) và thời gian chờ mỗi lệnh (mặc định 120 giây).
 
@@ -138,6 +160,13 @@ Cập nhật: cài `.mcpb` mới, nhờ Claude cài lại bridge, khởi động
 > Đây là ảnh scan mặt bằng tầng 1 (D:/DuAn/scan.jpg). Vẽ lại trong AutoCAD tỷ lệ 1:100 với layer chuẩn, đầy đủ kích thước và diện tích phòng, rồi dàn trang A3 và xuất PDF.
 
 Claude sẽ: xem ảnh (`view_image`, phóng to vùng có số kích thước), tạo layer và style, chèn ảnh làm nền đã hiệu chỉnh tỷ lệ, vẽ mặt bằng bằng `draw_plan`, thêm nội thất, thiết bị vệ sinh, ghi chú bằng `draw_entities`, so sánh bằng `screenshot`, sửa chỗ khác biệt, chạy `check_drawing`, tạo layout và PDF.
+
+Ba bộ hồ sơ nhà phố 5x18 m, 3 tầng + tum, mỗi bộ một bản vẽ riêng như văn phòng thiết kế phát hành:
+- kiến trúc [`examples/Nha-pho-5x18-KT.pdf`](examples/Nha-pho-5x18-KT.pdf): danh mục, mặt bằng, mặt đứng, mặt cắt;
+- kết cấu [`examples/Nha-pho-5x18-KC.pdf`](examples/Nha-pho-5x18-KC.pdf): danh mục, ghi chú chung, mặt bằng kết cấu sàn tầng 2, tầng 3, tum, mái, bảng mặt cắt dầm;
+- nội thất [`examples/Nha-pho-5x18-NT.pdf`](examples/Nha-pho-5x18-NT.pdf): danh mục, bố trí nội thất, hoàn thiện sàn, tường, trần, bố trí đèn, mặt đứng nội thất, bảng vật liệu.
+
+File DWG nằm cùng thư mục.
 
 Một bộ hồ sơ hoàn chỉnh từ một ảnh: [`examples/Nha-6x15-ho-so.pdf`](examples/Nha-6x15-ho-so.pdf) (6 tờ A3: mặt bằng, bốn mặt đứng, mặt cắt A-A và B-B tỷ lệ 1:100, dầm, cột, móng và bảng thống kê thép tỷ lệ 1:25), bộ nội thất [`examples/Nha-6x15-noi-that.pdf`](examples/Nha-6x15-noi-that.pdf) (10 tờ: mặt bằng bố trí nội thất, lát sàn, trần đèn 1:50, triển khai mặt đứng phòng ngủ, bếp, WC 1:30, chi tiết tủ bếp và tủ áo 1:10, bảng vật liệu hoàn thiện; CSV [`examples/Nha-6x15-vat-lieu.csv`](examples/Nha-6x15-vat-lieu.csv)), tất cả trong bản vẽ [`examples/Nha-6x15-ho-so.dwg`](examples/Nha-6x15-ho-so.dwg).
 

@@ -215,14 +215,30 @@ const capsWidth = (s, h) => [...String(s)].reduce((w, ch) => w + (ch === ' ' ? 0
  * The title under a drawing (as Vietnamese construction sets do): the name, a line under it, the scale written 1/50
  * under the line. h = the name's height in paper mm.
  */
-export function viewTitle(text, cx, y, scale, layer, lang = 'vi', h = 5) {
+export function viewTitle(text, cx, y, scale, layer, lang = 'vi', h = 5, showScale = true) {
   const w = capsWidth(text, h * scale) / 2 + scale;
   const r = (v) => Math.round(v * 100) / 100;
   return [
     { type: 'text', text, at: [r(cx), r(y)], height: r(h * scale), align: 'center', layer, style: TEXT_STYLE },
     { type: 'line', from: [r(cx - w), r(y - 1.6 * scale)], to: [r(cx + w), r(y - 1.6 * scale)], layer },
-    { type: 'text', text: `${lang === 'en' ? 'SCALE' : 'TỶ LỆ'}: 1/${scale}`, at: [r(cx), r(y - 6.2 * scale)], height: r(0.6 * h * scale), align: 'center', layer, style: TEXT_STYLE },
+    // tables and notes have no scale
+    ...(showScale ? [{ type: 'text', text: `${lang === 'en' ? 'SCALE' : 'TỶ LỆ'}: 1/${scale}`, at: [r(cx), r(y - 6.2 * scale)], height: r(0.6 * h * scale), align: 'center', layer, style: TEXT_STYLE }] : []),
   ];
+}
+
+// ---------------------------------------------------------------- drawing list
+
+/** The drawing list of one set (kiến trúc, kết cấu, nội thất): a table of its sheets. */
+export function drawingList({ sheets, at = [0, 0], scale = 50, item = '', lang = 'vi' }) {
+  const head = lang === 'en' ? ['NO.', 'DRAWING NO.', 'DRAWING TITLE', 'SCALE', 'PAPER', 'NOTES'] : ['STT', 'KÝ HIỆU', 'TÊN BẢN VẼ', 'TỶ LỆ', 'KHỔ GIẤY', 'GHI CHÚ'];
+  const rows = [head, ...sheets.map((s, i) => [i + 1, s.number ?? '', s.title ?? '', s.scale ?? '', s.paper ?? '', s.note ?? ''])];
+  const title = `${lang === 'en' ? 'DRAWING LIST' : 'DANH MỤC BẢN VẼ'}${item ? ` - ${String(item).toUpperCase()}` : ''}`;
+  return {
+    entities: [{
+      type: 'table', at, title, rows, height: 2.5 * scale, row_height: 8 * scale, col_widths: [12, 26, 95, 18, 22, 30].map((w) => w * scale),
+      layer: ROLE.text, style: TEXT_STYLE,
+    }],
+  };
 }
 
 // ---------------------------------------------------------------- fields
@@ -233,7 +249,7 @@ const numFormat = (dec, lang) => `%lu2%pr${dec}${lang === 'en' ? '' : '%ds44'}`;
 
 export const FIELD = {
   /** The scale of the sheet's viewport, as its name (1:100). */
-  viewportScale: '%<\\AcObjProp Object({viewport}).CustomScale \\f "%sn">%',
+  viewportScale: '1:%<\\AcExpr (1/%<\\AcObjProp Object({viewport}).CustomScale>%) \\f "%lu2%pr0">%',
   /** The name of the layout it is on, in capitals (the sheet number). */
   layoutName: '%<\\AcVar ctab \\f "%tc1">%',
   /** The total area in m² of closed outlines (mm drawing), with the decimals and separator of the language. */

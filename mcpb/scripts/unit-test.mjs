@@ -6,8 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildElevation, buildSection, floorsOf } from '../src/elevation.mjs';
 import { buildPlan, hull, planAssumptions, PlanError, uStairGeom } from '../src/plan.mjs';
-import { beamDetail, footingDetail, kgPerM, rcSection, rebarSchedule } from '../src/structure.mjs';
-import { fitScale, layerSpecs, layerStyles, ROLE, styleParams, titleBlock } from '../src/standards.mjs';
+import { beamDetail, beamSchedule, footingDetail, framingPlan, kgPerM, rcSection, rebarSchedule, structureNotes } from '../src/structure.mjs';
+import { drawingList, fitScale, layerSpecs, layerStyles, ROLE, styleParams, titleBlock } from '../src/standards.mjs';
 import { symbolDef } from '../src/symbols.mjs';
 import { ceilingPlan, cleanPoly, cutBoxes, dejog, floorFinishPlan, furniturePlan, generalNotes, interiorElevation, joineryDetail, materialSchedule, notesBlock, offsetPoly, patternLines, polyArea, resolveFinish, resolveItems, roomEdge, wallFinishPlan } from '../src/interior.mjs';
 
@@ -292,7 +292,10 @@ test('section across the box: cut walls with the window gap, footing, room name,
 test('section presentation: concrete solid, beams on the cut walls, ceilings with hangers and tags, levels both sides', () => {
   const ceilings = { 0: { 'PHÒNG': { level: 2800, drop: { width: 600, depth: 150 }, code: 'CL-01', floor_code: 'FL-01' } } };
   const spec = { ...BOX, rooms: [{ name: 'PHÒNG', at: [3000, 2000] }] };
-  const r = buildSection(spec, { from: [3000, -1000], to: [3000, 5000], ceilings });
+  // at 1:50 the 3.8 m room is wide enough on paper for its finish tags (at 1:100 it would be under 50 mm: no tags)
+  const r = buildSection(spec, { from: [3000, -1000], to: [3000, 5000], ceilings, scale: 50 });
+  const narrow = buildSection(spec, { from: [3000, -1000], to: [3000, 5000], ceilings, scale: 100 });
+  assert.ok(!narrow.entities.some((e) => e.attributes?.MA === 'CL-01'), 'no tags in a room under 50 mm of paper');
   noNaN(r.entities);
   assert.ok(r.entities.filter((e) => e.type === 'hatch' && e.pattern === 'SOLID').length >= 2, 'slab and beams poché');
   const ceil = r.entities.find((e) => e.type === 'polyline' && e.layer === 'A-CLNG');
@@ -586,6 +589,35 @@ test('stacked elevation: every floor level, parapet top, tum roof; balcony raili
   assert.ok(bal.length > 25, `balusters ${bal.length}`);
 });
 
+test('structural set: framing plan of the floor 2 slab, beam schedule, general notes, drawing list', () => {
+  const fl = floorsOf(TOWN);
+  const r = framingPlan({ spec: fl[0].spec, level: fl[1].level, slab: 120, name: fl[1].name, prefix: 'D2.', scale: 100, rooms: { WC: [[200, 200], [1500, 200], [1500, 1500], [200, 1500]] } });
+  noNaN(r.entities);
+  // the four walls of the ground floor carry the slab: two long beams (span 9800 -> 700) and two short (4800 -> 400)
+  assert.deepEqual(r.beams.map((b) => [b.name, `${b.b}x${b.h}`, b.count]), [['D2.1', '200x700', 2], ['D2.2', '200x400', 2]]);
+  assert.equal(r.columns[0].count, 4);
+  assert.ok(r.entities.filter((e) => e.layer === 'S-BEAM').length === 8, 'two faces per beam');
+  assert.ok(r.entities.some((e) => e.type === 'text' && e.text === 'D2.1 (200x700)'));
+  assert.ok(r.entities.some((e) => e.type === 'text' && e.text.startsWith('S2 - SÀN HẠ 50')), 'the WC slab lowered');
+  assert.equal(r.entities.filter((e) => e.name === 'MCP_TRUC').length, 8);
+  assert.ok(r.entities.some((e) => e.type === 'text' && e.text === 'MẶT BẰNG KẾT CẤU SÀN TẦNG 2 (+3.600)'));
+  assert.ok(r.assumed.some((a) => a.item === 'beam.h') && r.assumed.some((a) => a.item === 'column.size'));
+  const bs = beamSchedule({ beams: r.beams, scale: 25 });
+  noNaN(bs.entities);
+  assert.ok(bs.entities.some((e) => e.type === 'text' && e.text === 'DẦM D2.1 (200x700) - SL: 02'));
+  assert.equal(bs.entities.filter((e) => e.type === 'text' && (e.text === 'GỐI' || e.text === 'NHỊP')).length, 4);
+  assert.ok(bs.entities.some((e) => e.name === 'MCP_COTE_TRAI' && e.attributes.COTE === 'FL+3.600'));
+  assert.ok(bs.assumed.some((a) => a.item === 'D2.1.bars'));
+  const sn = structureNotes({});
+  assert.equal(sn.entities.filter((e) => e.type === 'table').length, 4);
+  const laps = sn.entities.find((e) => e.type === 'table' && e.title.startsWith('CHIỀU DÀI NEO'));
+  assert.deepEqual(laps.rows[3], ['Ø14', 450, 300, 600, 450]);
+  assert.ok(sn.assumed.some((a) => a.item === 'concrete.main'));
+  const dl = drawingList({ sheets: [{ number: 'KC-01', title: 'GHI CHÚ CHUNG', scale: '1:50', paper: 'A3' }], item: 'Kết cấu' });
+  assert.equal(dl.entities[0].title, 'DANH MỤC BẢN VẼ - KẾT CẤU');
+  assert.deepEqual(dl.entities[0].rows[1].slice(0, 3), [1, 'KC-01', 'GHI CHÚ CHUNG']);
+});
+
 test('section through the stair: slabs at each floor, flight cut (hatched steps), floors of rooms', () => {
   const s = buildSection(TOWN, { from: [700, -2000], to: [700, 11000], look: 'right', label: 'A' });
   assert.ok(!JSON.stringify(s.entities).includes('null'));
@@ -625,7 +657,7 @@ async function smoke() {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const list = await rpc('tools/list', {});
     const names = list.result.tools.map((t) => t.name);
-    assert.equal(names.length, 42, names.join(','));
+    assert.equal(names.length, 46, names.join(','));
     for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff']) assert.ok(names.includes(t));
     const ping = await rpc('tools/call', { name: 'ping', arguments: {} });
     assert.equal(ping.result.isError, true);

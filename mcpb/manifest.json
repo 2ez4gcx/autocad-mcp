@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "autocad-mcp",
   "display_name": "AutoCAD MCP",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Lets Claude read, draw, check and take off quantities in AutoCAD drawings, including complete layered floor plans from an image or a 3D model (AutoCAD 2021-2024).",
   "long_description": "Connects Claude to the drawing open in AutoCAD through the **ACAD MCP Bridge** .NET add-in (socket 127.0.0.1:9877).\n\n- No Python or Node.js install needed: runs on the Node.js built into Claude Desktop.\n- First time: ask Claude to run the `install_autocad_bridge` tool, then restart AutoCAD (choose *Always load* if it asks about the unsigned add-in).\n- `draw_plan` draws a complete plan in one step: walls with clean junctions and material hatch, doors and windows cut into the walls, columns, grids with bubbles, stairs, rooms whose areas are measured from the walls, and exterior dimension chains, all on a professional layer standard (A-WALL, A-DOOR, S-GRID, A-ANNO-DIMS...).\n- Reference images: `view_image` (zoom and pixel grid), `attach_image` (calibrated underlay), `screenshot` to compare.\n- Quantities by layer/block (`quantity_takeoff`, CSV), drawing QA (`check_drawing`), sheets with title block (`create_layout`) and PDF export.\n- Every drawing edit is one Undo step.\n- Requires full AutoCAD 2021-2024 on Windows (not AutoCAD LT).",
   "author": {
