@@ -9,6 +9,12 @@
   "author": {
     "name": "Khuong Doan"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/2ez4gcx/autocad-mcp.git"
+  },
+  "homepage": "https://github.com/2ez4gcx/autocad-mcp",
+  "support": "https://github.com/2ez4gcx/autocad-mcp/issues",
   "icon": "icon.png",
   "server": {
     "type": "node",

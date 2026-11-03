@@ -3,6 +3,7 @@
 //   npm run build
 // The bridge is compiled against the AutoCAD 2024 assemblies found on this machine (ACAD_DIR to use another
 // AutoCAD 2021-2024 folder) with the Roslyn compiler of Visual Studio / Build Tools (CSC to point to another csc.exe).
+// SKIP_BRIDGE=1 (CI, a machine without AutoCAD): the server bundle and the manifest check only, no bridge or .mcpb.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -29,6 +30,8 @@ if (manifest.version !== version || bridgeVersion !== version) {
   throw new Error(`Version mismatch: package.json ${version}, manifest.json ${manifest.version}, Bridge.cs ${bridgeVersion}`);
 }
 
+const SKIP_BRIDGE = process.env.SKIP_BRIDGE === '1';
+
 // ---- compile the bridge
 function findCsc() {
   if (process.env.CSC && fs.existsSync(process.env.CSC)) return process.env.CSC;
@@ -52,6 +55,8 @@ function findAcad() {
   throw new Error('AutoCAD 2021-2024 assemblies (accoremgd.dll) not found: set ACAD_DIR.');
 }
 
+let dllName = null;
+if (!SKIP_BRIDGE) {
 fs.rmSync(path.join(BRIDGE, 'dist'), { recursive: true, force: true });
 fs.mkdirSync(path.join(BUNDLE, 'Contents', 'Win64'), { recursive: true });
 const dllPath = path.join(BRIDGE, 'dist', `AcadMcpBridge-${version}.dll`);
@@ -68,7 +73,7 @@ execFileSync(findCsc(), [
 // The file name carries a hash of the build: a running AutoCAD keeps its DLL open, so a new build must not have the
 // same file name for install_autocad_bridge to update the bundle while AutoCAD runs (effective at the next start).
 const dllHash = createHash('sha256').update(fs.readFileSync(dllPath)).digest('hex').slice(0, 8);
-const dllName = `AcadMcpBridge-${version}-${dllHash}.dll`;
+dllName = `AcadMcpBridge-${version}-${dllHash}.dll`;
 fs.renameSync(dllPath, path.join(BUNDLE, 'Contents', 'Win64', dllName));
 
 // Autoloader manifest: AutoCAD 2021-2024 (R24.x, .NET Framework 4.8) load the DLL at startup.
@@ -86,6 +91,7 @@ const packageContents = `<?xml version="1.0" encoding="utf-8"?>
 </ApplicationPackage>
 `;
 fs.writeFileSync(path.join(BUNDLE, 'PackageContents.xml'), packageContents);
+}
 
 // ---- server
 fs.rmSync(STAGE, { recursive: true, force: true });
@@ -129,6 +135,15 @@ write('icon.png', fs.readFileSync(path.join(ROOT, 'icon.png')));
 write('server/THIRD_PARTY_NOTICES.txt', NOTICES);
 write('LICENSE', fs.readFileSync(path.join(REPO, 'LICENSE')));
 fs.writeFileSync(path.join(DIST, 'THIRD_PARTY_NOTICES.txt'), NOTICES);
+const mcpbDir = path.join(ROOT, 'node_modules', '@anthropic-ai', 'mcpb');
+const mcpbBin = path.join(mcpbDir, JSON.parse(fs.readFileSync(path.join(mcpbDir, 'package.json'), 'utf8')).bin);
+const mcpb = (...args) => execFileSync(process.execPath, [mcpbBin, ...args], { stdio: 'inherit' });
+if (SKIP_BRIDGE) {
+  mcpb('validate', path.join(STAGE, 'manifest.json'));
+  console.log(`
+=> ${path.join(STAGE, 'server', 'index.mjs')} (SKIP_BRIDGE: no bridge, no .mcpb)`);
+  process.exit(0);
+}
 const bundleFiles = {};
 for (const rel of ['PackageContents.xml', `Contents/Win64/${dllName}`]) {
   const data = fs.readFileSync(path.join(BUNDLE, rel));
@@ -138,10 +153,7 @@ for (const rel of ['PackageContents.xml', `Contents/Win64/${dllName}`]) {
 // Zip of the bundle for a manual install (unzip into %APPDATA%\Autodesk\ApplicationPlugins).
 fs.writeFileSync(path.join(DIST, `AcadMcpBridge-${version}.bundle.zip`), Buffer.from(zipSync(bundleFiles, { level: 9 })));
 
-const mcpbDir = path.join(ROOT, 'node_modules', '@anthropic-ai', 'mcpb');
-const mcpbBin = path.join(mcpbDir, JSON.parse(fs.readFileSync(path.join(mcpbDir, 'package.json'), 'utf8')).bin);
 const out = path.join(DIST, `${manifest.name}-${version}.mcpb`);
-const mcpb = (...args) => execFileSync(process.execPath, [mcpbBin, ...args], { stdio: 'inherit' });
 mcpb('validate', path.join(STAGE, 'manifest.json'));
 fs.rmSync(out, { force: true });
 mcpb('pack', STAGE, out);

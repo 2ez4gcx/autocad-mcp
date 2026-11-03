@@ -1,0 +1,49 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.2ez4gcx/autocad-mcp",
+  "title": "AutoCAD MCP",
+  "description": "Let AI draw in AutoCAD: plans from images, KT/KC/NT sets, TCVN calc, quantities, sheets, PDF.",
+  "version": "1.2.0",
+  "websiteUrl": "https://github.com/2ez4gcx/autocad-mcp",
+  "repository": {
+    "url": "https://github.com/2ez4gcx/autocad-mcp",
+    "source": "github",
+    "id": "1443812223"
+  },
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/2ez4gcx/autocad-mcp/v1.2.0/mcpb/icon.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/2ez4gcx/autocad-mcp/releases/download/v1.2.0/autocad-mcp-1.2.0.mcpb",
+      "version": "1.2.0",
+      "fileSha256": "f808ae1c5dc3a07a63823bc5e11c8b4dcd245db0e26b644159ed899e14c7ecbb",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "AUTOCAD_MCP_PORT",
+          "description": "TCP port of the ACAD MCP Bridge add-in in AutoCAD (type MCPPORT in AutoCAD to change it there too)",
+          "format": "number",
+          "default": "9877",
+          "isRequired": false
+        },
+        {
+          "name": "AUTOCAD_MCP_TIMEOUT",
+          "description": "Seconds to wait for AutoCAD to answer one command",
+          "format": "number",
+          "default": "120",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
