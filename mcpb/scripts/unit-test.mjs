@@ -4,11 +4,12 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildElevation, buildSection } from '../src/elevation.mjs';
-import { buildPlan, hull, planAssumptions, PlanError } from '../src/plan.mjs';
+import { buildElevation, buildSection, floorsOf } from '../src/elevation.mjs';
+import { buildPlan, hull, planAssumptions, PlanError, uStairGeom } from '../src/plan.mjs';
 import { beamDetail, footingDetail, kgPerM, rcSection, rebarSchedule } from '../src/structure.mjs';
 import { fitScale, layerSpecs, layerStyles, ROLE, styleParams, titleBlock } from '../src/standards.mjs';
-import { ceilingPlan, cleanPoly, cutBoxes, dejog, floorFinishPlan, furniturePlan, interiorElevation, joineryDetail, materialSchedule, offsetPoly, patternLines, polyArea, resolveFinish, resolveItems, roomEdge } from '../src/interior.mjs';
+import { symbolDef } from '../src/symbols.mjs';
+import { ceilingPlan, cleanPoly, cutBoxes, dejog, floorFinishPlan, furniturePlan, generalNotes, interiorElevation, joineryDetail, materialSchedule, notesBlock, offsetPoly, patternLines, polyArea, resolveFinish, resolveItems, roomEdge, wallFinishPlan } from '../src/interior.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 let passed = 0;
@@ -63,6 +64,16 @@ test('straight continuation needs no extra polygon area outside the wall', () =>
   for (const poly of j) for (const q of poly) assert.ok(Math.abs(q[1]) <= 100 + 1e-6);
 });
 
+// A block-local point in the drawing (insert point, rotation, X mirror).
+const world = (b, q) => {
+  const a = ((b.rotation ?? 0) * Math.PI) / 180;
+  const sx = Array.isArray(b.scale) ? b.scale[0] : 1;
+  const x = q[0] * sx, y = q[1];
+  return [b.at[0] + x * Math.cos(a) - y * Math.sin(a), b.at[1] + x * Math.sin(a) + y * Math.cos(a)];
+};
+const nearPt = (p, q, tol = 0.5) => Math.hypot(p[0] - q[0], p[1] - q[1]) <= tol;
+const tagOf = (ents, code) => ents.find((e) => e.type === 'block' && /^MCP_THE_/.test(e.name) && e.attributes?.MA === code);
+
 test('door: wall cut through the whole thickness, leaf + arc on the toward side, tag', () => {
   const p = buildPlan({
     walls: [{ id: 'W1', points: [[0, 0], [5000, 0]], thickness: 200 }],
@@ -72,13 +83,21 @@ test('door: wall cut through the whole thickness, leaf + arc on the toward side,
   assert.equal(p.cuts.length, 1);
   const cut = p.cuts[0];
   assert.ok(hasPt(cut, [1000, -101]) && hasPt(cut, [1900, 101]));
-  const leaf = p.entities.find((e) => e.type === 'line' && e.layer === 'A-DOOR');
-  assert.deepEqual(leaf.from, [1000, 100]);
-  assert.deepEqual(leaf.to, [1000, 1000]);
-  const arc = p.entities.find((e) => e.type === 'arc');
-  assert.deepEqual(arc.end, [1900, 100]);
-  assert.ok(near(Math.hypot(arc.mid[0] - 1000, arc.mid[1] - 100), 900, 1e-3));
-  assert.ok(p.entities.some((e) => e.type === 'text' && e.text === 'D1'));
+  // a block: leaf from the hinge into the room, arc back to the far jamb
+  const door = p.entities.find((e) => e.type === 'block' && e.layer === 'A-DOOR');
+  assert.equal(door.name, 'MCP_CUA_DI_900');
+  assert.equal(door.attributes.MA, 'D1');
+  const leaf = door.def.entities.find((e) => e.type === 'line');
+  assert.ok(nearPt(world(door, leaf.from), [1000, 100]) && nearPt(world(door, leaf.to), [1000, 1000]));
+  const arc = door.def.entities.find((e) => e.type === 'arc');
+  assert.ok(nearPt(world(door, arc.end), [1900, 100]));
+  const m = world(door, arc.mid);
+  assert.ok(near(Math.hypot(m[0] - 1000, m[1] - 100), 900, 0.2));
+  assert.ok(tagOf(p.entities, 'D1'));
+  // hinge at the end: mirrored, the leaf at the far jamb
+  const q = buildPlan({ walls: [{ id: 'W1', points: [[0, 0], [5000, 0]], thickness: 200 }], openings: [{ wall: 'W1', offset: 1000, width: 900, type: 'door', toward: [1500, 2000], hinge: 'end' }], dimensions: false });
+  const d2 = q.entities.find((e) => e.type === 'block' && e.layer === 'A-DOOR');
+  assert.ok(nearPt(world(d2, [0, 900]), [1900, 1000]) && nearPt(world(d2, [900, 0]), [1000, 100]), JSON.stringify(d2));
 });
 
 test('window: four lines across the opening on A-GLAZ, opening by centre point', () => {
@@ -87,9 +106,15 @@ test('window: four lines across the opening on A-GLAZ, opening by centre point',
     openings: [{ wall: 0, at: [0, 2000], width: 1200, type: 'window' }],
     dimensions: false,
   });
-  const lines = p.entities.filter((e) => e.layer === 'A-GLAZ');
+  const win = p.entities.filter((e) => e.layer === 'A-GLAZ');
+  assert.equal(win.length, 1);
+  assert.equal(win[0].name, 'MCP_CUA_SO_1200_220');
+  const lines = win[0].def.entities;
   assert.equal(lines.length, 4);
-  for (const l of lines) assert.ok(near(Math.abs(l.from[1] - l.to[1]), 1200));
+  for (const l of lines) {
+    const a = world(win[0], l.from), b = world(win[0], l.to);
+    assert.ok(near(Math.abs(a[1] - b[1]), 1200, 0.2) && near(a[0], b[0], 0.2));
+  }
 });
 
 test('window tags go outside the building, door tags away from the swing', () => {
@@ -103,13 +128,13 @@ test('window tags go outside the building, door tags away from the swing', () =>
     dimensions: false,
     room_options: { text_height: 3 },
   });
-  const tag = (t) => p.entities.find((e) => e.text === t).at;
+  const tag = (t) => tagOf(p.entities, t).at;
   assert.ok(tag('S1')[1] < -100, 'S1 below the front wall');
   assert.ok(tag('S2')[1] > 4100, 'S2 above the back wall');
   assert.ok(tag('D1')[1] < -100, 'D1 outside, the door swings in');
   assert.equal(p.room_options.text_height, 300);
   const q = buildPlan({ walls: [{ points: [[0, 0], [4000, 0]] }], openings: [{ wall: 0, offset: 500, width: 900, type: 'window', tag: 'S9', tag_at: [1, 2] }], dimensions: false });
-  assert.deepEqual(q.entities.find((e) => e.text === 'S9').at, [1, 2]);
+  assert.deepEqual(tagOf(q.entities, 'S9').at, [1, 2]);
 });
 
 test('opening outside its wall and overlapping openings are refused', () => {
@@ -136,9 +161,10 @@ test('grids, columns at intersections, exterior dimension chains', () => {
   assert.deepEqual(bottom.map((c) => c.points.length), [4, 3, 2]);
   assert.deepEqual(bottom[0].points.map((q) => q[0]), [-150, 2000, 3000, 9150]); // columns stand 50 mm proud of the 200 mm walls
   assert.ok(bottom.every((c) => c.style === 'MCP-1-100' && c.layer === 'A-ANNO-DIMS'));
-  const bubbles = p.entities.filter((e) => e.type === 'circle' && e.layer === 'S-GRID-IDEN');
+  const bubbles = p.entities.filter((e) => e.name === 'MCP_TRUC' && e.layer === 'S-GRID-IDEN');
   assert.equal(bubbles.length, 10);
-  const labels = p.entities.filter((e) => e.type === 'text' && e.layer === 'S-GRID-IDEN').map((e) => e.text).sort();
+  assert.ok(bubbles.every((b) => b.scale === 100));
+  const labels = bubbles.map((e) => e.attributes.SO).sort();
   assert.deepEqual(labels, ['1', '1', '2', '2', '3', '3', 'A', 'A', 'B', 'B']);
 });
 
@@ -165,8 +191,12 @@ test('stairs and symbols', () => {
   });
   assert.equal(p.entities.filter((e) => e.layer === 'A-FLOR-STRS' && e.type === 'line').length, 9);
   assert.ok(p.entities.some((e) => e.text === 'UP'));
-  assert.ok(p.entities.some((e) => e.text === '+0.450'));
-  assert.ok(p.entities.some((e) => e.text === 'N'));
+  assert.ok(p.entities.some((e) => e.name === 'MCP_COTE' && e.attributes.COTE === '+0.450'));
+  assert.ok(p.entities.some((e) => e.name === 'MCP_HUONG_BAC' && e.attributes.KY_HIEU === 'N'));
+  assert.equal(p.entities.filter((e) => e.name === 'MCP_MAT_CAT' && e.attributes.TEN === 'A').length, 2);
+  for (const n of ['MCP_COTE', 'MCP_HUONG_BAC', 'MCP_MAT_CAT', 'MCP_TRUC', 'MCP_THE_3', 'MCP_THE_TRAN_6', 'MCP_DEN_DOWNLIGHT', 'MCP_KY_HIEU_MD']) {
+    assert.ok(symbolDef(n)?.entities?.length, n);
+  }
 });
 
 test('standards: layers, styles, title block, scale fitting', () => {
@@ -181,7 +211,18 @@ test('standards: layers, styles, title block, scale fitting', () => {
   assert.equal(st.ltscale, 20);
   const tb = titleBlock({ paper: 'A3', info: { title: 'MẶT BẰNG TẦNG 1', scale: '1:100' } });
   assert.deepEqual(tb.size, [420, 297]);
-  assert.ok(tb.entities.some((e) => e.text === 'MẶT BẰNG TẦNG 1'));
+  // one block insert: the values are its attributes, every one defined in the block
+  assert.equal(tb.entities.length, 1);
+  const ins = tb.entities[0];
+  assert.equal(ins.name, 'MCP_KHUNG_TEN_DOC_A3'); // the vertical strip by default on landscape A3
+  assert.ok(['CHU_DAU_TU', 'DU_AN', 'CONG_TRINH', 'SO_BAN_VE', 'GHI_CHU_CHUNG', 'TEN_BAN_VE_2'].filter((t) => t !== 'DU_AN').every((t) => t in ins.attributes));
+  const bottom = titleBlock({ paper: 'A3', style: 'bottom', info: { title: 'X' } }).entities[0];
+  assert.equal(bottom.name, 'MCP_KHUNG_TEN_A3_NGANG');
+  assert.equal(titleBlock({ paper: 'A4', orientation: 'portrait' }).entities[0].name, 'MCP_KHUNG_TEN_A4_DUNG');
+  assert.equal(ins.attributes.TEN_BAN_VE, 'MẶT BẰNG TẦNG 1');
+  assert.equal(ins.attributes.TY_LE, '1:100');
+  assert.deepEqual(Object.keys(ins.attributes).sort(), ins.def.attributes.map((a) => a.tag).sort());
+  assert.ok(ins.def.entities.every((e) => e.layer === '0'));
   const [[x0, y0], [x1, y1]] = tb.area;
   assert.ok(x1 - x0 > 150 && y1 - y0 > 150);
   assert.equal(fitScale([30000, 20000], [380, 250]), 100);
@@ -337,7 +378,13 @@ test('furniture: a bed against wall A is centred with its back on the wall, code
   assert.ok(r.assumed.some((a) => a.item === 'items[0].size') && r.assumed.some((a) => a.item === 'items[0].offset'));
   const ents = furniturePlan(r.items, { scale: 50 });
   noNaN(ents);
-  assert.ok(ents.some((e) => e.type === 'text' && e.text === 'FN-01'));
+  assert.ok(tagOf(ents, 'FN-01'));
+  // the bed is a block with its code, name and size; back on the wall (its frame y points into the room)
+  const b = ents.find((e) => e.type === 'block' && e.name.startsWith('NT_FN-01_bed'));
+  assert.ok(b && b.attributes.MA === 'FN-01' && b.attributes.KICH_THUOC === `${bed.w}x${bed.d}x${bed.h}`, JSON.stringify(b));
+  assert.ok(nearPt(world(b, [0, 0]), bed.o) && nearPt(world(b, [0, 100]), [bed.o[0] + bed.ey[0] * 100, bed.o[1] + bed.ey[1] * 100]));
+  assert.ok(nearPt(world(b, [100, 0]), [bed.o[0] + bed.ex[0] * 100, bed.o[1] + bed.ex[1] * 100]));
+  assert.ok(b.def.entities.every((e) => e.layer === '0' || e.layer === 'A-HIDD' || e.layer === 'A-GLAZ'));
   assert.throws(() => resolveItems([{ type: 'piano', room: 'PHÒNG NGỦ', wall: 'A' }], { 'PHÒNG NGỦ': ROOM }), /type must be one of/);
 });
 
@@ -348,7 +395,23 @@ test('interior elevation: window and bed on wall A, wardrobe seen from the side,
   noNaN(r.entities);
   assert.equal(r.openings, 1);
   assert.ok(r.items.some((s) => s.includes('bed (front)')) && r.items.some((s) => s.includes('wardrobe (side)')), r.items.join(';'));
-  assert.ok(r.entities.some((e) => e.type === 'text' && e.text.startsWith('WL-01')) && r.entities.some((e) => e.type === 'text' && e.text.startsWith('CL-01')));
+  // material notes: tag multileaders (code boxed, short description) in a row above, floor and skirting under it
+  const leaders = r.entities.filter((e) => e.type === 'leader');
+  const code = (l) => l.attributes.MA;
+  assert.ok(leaders.some((e) => code(e) === 'WL-01') && leaders.some((e) => code(e) === 'CL-01'), leaders.map(code).join(','));
+  assert.ok(leaders.every((l) => /^MCP_GHI_CHU_(DUOI_)?\d+$/.test(l.block) && l.leader_linetype === 'DASHED' && l.attributes.MO_TA.length <= 26));
+  const top = leaders.filter((l) => !l.block.includes('DUOI')), under = leaders.filter((l) => l.block.includes('DUOI'));
+  assert.ok(under.some((l) => code(l) === 'FL-01') && under.some((l) => code(l) === 'SK-01'));
+  assert.ok(top.every((l) => l.points[2][1] > l.points[0][1]) && under.every((l) => l.points[2][1] < l.points[0][1]));
+  // none crosses another
+  const segs = leaders.map((l) => l.points.map((p, i, a) => (i ? [a[i - 1], p] : null)).filter(Boolean));
+  const crosses = ([a, b], [c, d]) => {
+    const o = (p, q, r2) => Math.sign((q[0] - p[0]) * (r2[1] - p[1]) - (q[1] - p[1]) * (r2[0] - p[0]));
+    return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+  };
+  for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++) for (const s1 of segs[i]) for (const s2 of segs[j]) assert.ok(!crosses(s1, s2), `${leaders[i].text} x ${leaders[j].text}`);
+  for (const l of leaders) assert.ok(near(l.points[0][0], l.points[1][0], 0.01), 'first run straight up or down');
+  assert.ok(r.entities.some((e) => e.layer === 'A-FURN') && r.entities.some((e) => e.layer === 'A-FLOR-CASE'), 'bed and wardrobe on their own layers');
   assert.ok(r.entities.filter((e) => e.type === 'dim_chain').length === 2);
   const c = resolveFinish('PHÒNG NGỦ');
   const wallC = interiorElevation({ spec: ROOM_SPEC, room: 'PHÒNG NGỦ', poly: ROOM, finish: c, items, wall: 'C', scale: 30 });
@@ -363,7 +426,8 @@ test('ceiling plan: drop band, cove, downlights in the band, lamp, tags; WC flat
   const dl = r.lights.find((l) => l.kind === 'downlight');
   assert.ok(dl && dl.qty >= 10, JSON.stringify(r.lights));
   assert.ok(r.lights.some((l) => l.kind === 'strip' && l.qty > 10) && r.lights.some((l) => l.kind === 'ceiling_lamp'));
-  assert.ok(r.entities.some((e) => e.type === 'text' && e.text === '+2.850'));
+  assert.ok(r.entities.some((e) => /^MCP_THE_TRAN_/.test(e.name) && e.attributes.COTE === '+2.850'));
+  assert.ok(r.entities.filter((e) => e.name === 'MCP_DEN_DOWNLIGHT' && e.attributes.MA === 'LT-01').length >= dl.qty);
   assert.equal(finishes.WC.ceiling.drop, null);
 });
 
@@ -378,10 +442,71 @@ test('floor finish plan: no joint inside the room label, tags, legend with areas
   assert.deepEqual(r.legend.map((l) => [l.code, l.area_m2]), [['FL-01', 24]]);
 });
 
+// a bedroom and a WC with a door between them
+const TWO = {
+  walls: [
+    { id: 'W', points: [[0, 0], [8000, 0], [8000, 4000], [0, 4000]], closed: true, thickness: 200 },
+    { id: 'P', points: [[6000, 0], [6000, 4000]], thickness: 100 },
+  ],
+  openings: [{ wall: 'P', at: [6000, 1000], width: 700, type: 'door', tag: 'D2' }],
+  rooms: [{ name: 'PHÒNG NGỦ', at: [3000, 2000] }, { name: 'WC', at: [7000, 2000] }],
+};
+const TWO_ROOMS = { 'PHÒNG NGỦ': cleanPoly([[100, 100], [5950, 100], [5950, 3900], [100, 3900]]), WC: cleanPoly([[6050, 100], [7900, 100], [7900, 3900], [6050, 3900]]) };
+const TWO_FIN = { 'PHÒNG NGỦ': resolveFinish('PHÒNG NGỦ'), WC: resolveFinish('WC') };
+
+test('floor finish plan notes: transition strip at the door, floor drain and fall in the WC, set-out and drop notes', () => {
+  const r = floorFinishPlan({ rooms: TWO_ROOMS, finishes: TWO_FIN, labels: { 'PHÒNG NGỦ': [3000, 2000], WC: [7000, 2000] }, scale: 50, legendAt: [9000, 4000], spec: TWO });
+  noNaN(r.entities);
+  // a solid strip across the door on the wall axis (x 6000, y 650..1350)
+  const strip = r.entities.find((e) => e.type === 'hatch' && e.pattern === 'SOLID' && e.boundary.some((p) => near(p[1], 650, 1)));
+  assert.ok(strip && strip.boundary.every((p) => Math.abs(p[0] - 6000) < 20), JSON.stringify(strip));
+  const drain = r.entities.find((e) => e.name === 'MCP_PHEU_THU' && e.at[0] > 6050 && e.at[0] < 7900);
+  assert.ok(drain, 'a floor drain in the WC');
+  assert.ok(r.entities.some((e) => /^MCP_DOC/.test(e.name) && e.attributes.I === 'i=1%'), 'fall arrow');
+  assert.ok(r.entities.some((e) => e.type === 'text' && e.text.includes('HẠ 20')), 'drop note');
+  assert.ok(r.entities.some((e) => e.type === 'text' && e.text.includes('LÁT TỪ TÂM')), 'set-out note');
+  assert.ok(r.assumed.some((a) => a.item === 'WC.floor.drop' && a.value === 20));
+  assert.ok(r.legendBottom < 4000 - 30 * 50, `legend bottom ${r.legendBottom}`);
+});
+
+test('wall finish plan: bands broken at the door, tile joints in the WC, tags and legend areas', () => {
+  const r = wallFinishPlan({ spec: TWO, rooms: TWO_ROOMS, finishes: TWO_FIN, labels: { 'PHÒNG NGỦ': [3000, 2000], WC: [7000, 2000] }, scale: 50, legendAt: [9000, 4000] });
+  noNaN(r.entities);
+  const bands = r.entities.filter((e) => e.type === 'line' && e.layer === 'A-WALL-FNSH');
+  assert.ok(bands.length > 20, `${bands.length} band lines`);
+  // no band along the bedroom face x = 5950 across the door (y 650..1350)
+  const across = bands.filter((e) => Math.abs(e.from[0] - e.to[0]) < 1 && e.from[0] > 5800 && e.from[0] < 5950)
+    .some((e) => Math.min(e.from[1], e.to[1]) < 1000 && Math.max(e.from[1], e.to[1]) > 1000);
+  assert.ok(!across, 'the band stops at the door');
+  // the WC is tiled: two band lines and joint ticks every 600 along its walls
+  const wcTicks = bands.filter((e) => e.from[0] > 6050 && e.from[0] < 7900 && e.from[1] > 100 && e.from[1] < 3900 && Math.hypot(e.to[0] - e.from[0], e.to[1] - e.from[1]) < 60);
+  assert.ok(wcTicks.length >= 4, `${wcTicks.length} joints`);
+  assert.ok(tagOf(r.entities, 'WL-01') && tagOf(r.entities, 'WL-02'));
+  assert.ok(r.entities.some((e) => e.type === 'text' && e.text.startsWith('ỐP ĐẾN TRẦN')));
+  const wl1 = r.legend.find((l) => l.code === 'WL-01');
+  assert.ok(wl1 && wl1.area_m2 > 30, JSON.stringify(r.legend));
+});
+
+test('ceiling plan modes: finish without lights (step widths dimensioned), lighting without level tags; general notes', () => {
+  const rooms = { 'PHÒNG NGỦ': ROOM };
+  const finishes = { 'PHÒNG NGỦ': resolveFinish('PHÒNG NGỦ') };
+  const fin = ceilingPlan({ rooms, finishes, scale: 50, legendAt: [7000, 4000], mode: 'finish' });
+  assert.ok(!fin.entities.some((e) => /^MCP_DEN_/.test(e.name ?? '')) && fin.lights === null);
+  assert.ok(fin.entities.some((e) => e.type === 'dim' && e.kind === 'aligned'), 'the band width');
+  assert.ok(fin.entities.some((e) => /^MCP_THE_TRAN_/.test(e.name ?? '')));
+  assert.ok(fin.entities.some((e) => e.type === 'text' && e.text === 'CHÚ THÍCH VẬT LIỆU TRẦN'));
+  const lit = ceilingPlan({ rooms, finishes, scale: 50, legendAt: [7000, 4000], mode: 'lighting' });
+  assert.ok(lit.entities.some((e) => e.name === 'MCP_DEN_DOWNLIGHT') && !lit.entities.some((e) => /^MCP_THE_TRAN_/.test(e.name ?? '')));
+  assert.ok(lit.lights.some((l) => l.kind === 'downlight'));
+  assert.ok(generalNotes('floor').length >= 6 && generalNotes('lighting', 'en')[0].startsWith('Dimensions'));
+  const nb = notesBlock(generalNotes('wall'), [0, 0], 50);
+  assert.ok(nb[0].text === 'GHI CHÚ:' && nb[1].type === 'mtext' && nb[1].text.startsWith('1. ') && nb[1].text.includes('\n6. '));
+});
+
 test('joinery: kitchen front + section with notes, wardrobe; schedule areas and counts', () => {
   const k = joineryDetail({ kind: 'kitchen', width: 2400, sink: 600, hob: 1800 });
   noNaN(k.entities);
-  assert.ok(k.entities.some((e) => e.type === 'text' && e.text.startsWith('Mặt đá')) && k.entities.some((e) => e.text === 'MẶT CẮT 1-1'));
+  assert.ok(k.entities.some((e) => e.type === 'leader' && e.text.startsWith('Mặt đá')) && k.entities.some((e) => e.text === 'MẶT CẮT 1-1'));
   assert.ok(k.assumed.some((a) => a.item === 'materials.top'));
   const w = joineryDetail({ kind: 'wardrobe', width: 1800 });
   noNaN(w.entities);
@@ -391,8 +516,67 @@ test('joinery: kitchen front + section with notes, wardrobe; schedule areas and 
   assert.equal(row('FL-01').qty, 24);
   assert.ok(near(row('SK-01').qty, 20 - 0.9, 0.01), `skirting ${row('SK-01').qty}`);
   assert.equal(row('FN-01').qty, 1);
+  // the drawn table shows each item's and light's block in its symbol column
+  assert.equal(s.drawn[0][1], 'KÝ HIỆU');
+  const fn = s.drawn.find((r) => r[0] === 'FN-01');
+  assert.ok(fn[1].block.startsWith('NT_FN-01_bed') && fn[1].def.entities.length, JSON.stringify(fn[1]).slice(0, 80));
+  const withLight = materialSchedule({ spec: ROOM_SPEC, rooms: {}, finishes: {}, lights: [{ kind: 'downlight', code: 'LT-01', description: 'Đèn', unit: 'cái', qty: 3 }] });
+  assert.equal(withLight.drawn[1][1].block, 'MCP_DEN_DOWNLIGHT');
+  assert.equal(withLight.rows[0].symbol, 'MCP_DEN_DOWNLIGHT');
   // walls: 20 m x 2.85 m minus the window 1.2 x (2400 - 900) and the door 0.9 x 2.4
   assert.ok(near(row('WL-01').qty, 20 * 2.85 - 1.2 * 1.5 - 0.9 * 2.4, 0.01), `walls ${row('WL-01').qty}`);
+});
+
+// ---- buildings of several floors
+const STAIR = { type: 'u', region: [[200, 3000], [2550, 6700]], direction: 'up', turn: 'right' };
+const TOWN = {
+  grids: { x: [100, 4900], y: [100, 9900] },
+  heights: { ground: -450 },
+  floors: [
+    { walls: [{ id: 'W1', points: [[100, 100], [4900, 100], [4900, 9900], [100, 9900]], closed: true, thickness: 200 }],
+      openings: [{ wall: 'W1', segment: 0, at: [3500, 100], width: 1200, type: 'window', tag: 'S1' }], stairs: [STAIR],
+      rooms: [{ name: 'PHÒNG KHÁCH', at: [2500, 8000] }] },
+    { openings: [{ wall: 'W1', segment: 0, at: [3500, 100], width: 1200, type: 'window', tag: 'S1' }], stairs: [STAIR],
+      balconies: [{ region: [[0, -1200], [5000, 0]] }], rooms: [{ name: 'PHÒNG NGỦ', at: [2500, 8000] }] },
+    { name: 'TUM', height: 2800, walls: [{ id: 'T1', points: [[100, 2900], [2650, 2900], [2650, 6800], [100, 6800]], closed: true, thickness: 200 }],
+      parapet: { walls: ['W1'], height: 1000 }, roof: { type: 'flat', parapet: 0 }, rooms: [{ name: 'SÂN THƯỢNG', at: [3800, 1500] }] },
+  ],
+};
+
+test('floors: levels from the heights, walls taken from the floor below, parapet walls, stairs arriving above', () => {
+  const F = floorsOf(TOWN);
+  assert.deepEqual(F.map((f) => [f.name, f.level, f.height]), [['TẦNG 1', 0, 3600], ['TẦNG 2', 3600, 3300], ['TUM', 6900, 2800]]);
+  assert.equal(F[1].spec.walls[0].id, 'W1');
+  assert.deepEqual(F[2].spec.walls.map((w) => [w.id, w.height]), [['T1', undefined], ['W1-TC', 1000]]);
+  assert.equal(F[1].spec.stairs_below.length, 1);
+  assert.equal(F[1].slab, 120);
+  const g = uStairGeom(STAIR, 3300);
+  assert.equal(g.risers, 19);
+  assert.ok(near(g.going, (3700 - 1125) / 9, 0.01) && near(g.w, 1125, 1e-9));
+  // floor 2: the stair goes up and comes up from below: LÊN and XUỐNG; the tum only XUỐNG
+  const txt = (spec) => buildPlan(spec).entities.filter((e) => e.type === 'text').map((e) => e.text);
+  assert.ok(txt(F[1].spec).includes('LÊN') && txt(F[1].spec).includes('XUỐNG'));
+  assert.ok(!txt(F[2].spec).includes('LÊN') && txt(F[2].spec).includes('XUỐNG'));
+});
+
+test('stacked elevation: every floor level, parapet top, tum roof; balcony railing', () => {
+  const e = buildElevation(TOWN, { side: 'bottom' });
+  assert.ok(!JSON.stringify(e.entities).includes('null'));
+  for (const lv of [-450, 0, 3600, 6900, 7900]) assert.ok(e.levels.includes(lv), `level ${lv} in ${e.levels}`);
+  assert.ok(e.levels.includes(6900 + 2800 + 120), 'tum roof top');
+  // balusters every 150 between the railing posts of the 5 m balcony
+  const bal = e.entities.filter((x) => x.type === 'line' && near(x.from[1], 3600, 1) && near(x.to[1], 3600 + 1050, 1));
+  assert.ok(bal.length > 25, `balusters ${bal.length}`);
+});
+
+test('section through the stair: slabs at each floor, flight cut (hatched steps), floors of rooms', () => {
+  const s = buildSection(TOWN, { from: [700, -2000], to: [700, 11000], look: 'right', label: 'A' });
+  assert.ok(!JSON.stringify(s.entities).includes('null'));
+  const steps = s.entities.filter((x) => x.type === 'hatch' && x.boundary.length > 15);
+  assert.ok(steps.length >= 2, `cut flights ${steps.length}`);
+  assert.ok(s.levels.includes(3600) && s.levels.includes(6900));
+  assert.deepEqual(s.rooms, ['TẦNG 1: PHÒNG KHÁCH', 'TẦNG 2: PHÒNG NGỦ']);
+  assert.throws(() => floorsOf({ floors: [{ walls: [], parapet: { walls: ['W1'] } }] }), /no floor below/);
 });
 
 // ---- smoke test: the bundled server starts, lists its tools and reports a clear error without AutoCAD
@@ -424,7 +608,7 @@ async function smoke() {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const list = await rpc('tools/list', {});
     const names = list.result.tools.map((t) => t.name);
-    assert.equal(names.length, 41, names.join(','));
+    assert.equal(names.length, 42, names.join(','));
     for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff']) assert.ok(names.includes(t));
     const ping = await rpc('tools/call', { name: 'ping', arguments: {} });
     assert.equal(ping.result.isError, true);
@@ -439,6 +623,9 @@ async function smoke() {
     assert.deepEqual(dr.assumed.map((a) => a.item), ['walls.thickness', 'walls.material']);
     const dryEl = await rpc('tools/call', { name: 'draw_elevation', arguments: { dry_run: true } });
     assert.ok(JSON.parse(dryEl.result.content[0].text).assumed.some((a) => a.item === 'roofs'));
+    const dryB = await rpc('tools/call', { name: 'draw_plan', arguments: { ...TOWN, dry_run: true } });
+    const db = JSON.parse(dryB.result.content[0].text);
+    assert.deepEqual(db.floors.map((f) => f.level), [0, 3600, 6900], dryB.result.content[0].text.slice(0, 300));
   } finally {
     child.kill();
   }

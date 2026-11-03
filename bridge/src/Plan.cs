@@ -294,10 +294,12 @@ namespace AcadMcp
         /// Keeps a room label off the walls: a name wider than the room is wrapped at the space nearest its middle, then the
         /// label is shifted sideways to stay inside; a warning when it still does not fit.
         /// </summary>
-        static void FitLabel(MText m, Loop hole, string title, string tail, Dictionary<string, object> ro1)
+        /// <returns>The lines of the name as placed (one, or two when wrapped).</returns>
+        static string[] FitLabel(MText m, Loop hole, string title, string tail, Dictionary<string, object> ro1)
         {
             Point3d at = m.Location;
-            if (Math.Abs(m.Rotation) > 1e-9 || !SpanAt(hole, at, out double l, out double r)) return;
+            var lines = new[] { title };
+            if (Math.Abs(m.Rotation) > 1e-9 || !SpanAt(hole, at, out double l, out double r)) return lines;
             double gap = m.TextHeight * 0.4;
             double room = r - l - 2 * gap;
             if (m.ActualWidth > room && title.Contains(" "))
@@ -305,14 +307,15 @@ namespace AcadMcp
                 int mid = title.Length / 2, best = -1;
                 for (int k = 0; k < title.Length; k++)
                     if (title[k] == ' ' && (best < 0 || Math.Abs(k - mid) < Math.Abs(best - mid))) best = k;
-                string wrapped = title.Substring(0, best) + "\\P" + title.Substring(best + 1);
+                lines = new[] { title.Substring(0, best), title.Substring(best + 1) };
+                string wrapped = MTextEscape(lines[0]) + "\\P" + MTextEscape(lines[1]);
                 m.Contents = tail == null ? wrapped : wrapped + "\\P" + tail;
             }
             double w = m.ActualWidth;
             if (w > room)
             {
                 ro1["warning"] = "The label is wider than the room (" + U.R(w) + " > " + U.R(room) + "): shorten the name or lower room_options.text_height.";
-                return;
+                return lines;
             }
             double x = Math.Max(l + gap + w / 2, Math.Min(r - gap - w / 2, at.X));
             if (Math.Abs(x - at.X) > 1e-6)
@@ -320,7 +323,11 @@ namespace AcadMcp
                 m.Location = new Point3d(x, at.Y, at.Z);
                 ro1["label_moved"] = new List<object> { U.R(x), U.R(at.Y) };
             }
+            return lines;
         }
+
+        /// <summary>Text for an MText or a field code: backslashes and braces escaped.</summary>
+        static string MTextEscape(string s) => s.Replace("\\", "\\\\").Replace("{", "\\{").Replace("}", "\\}");
 
         static List<List<Point3d>> Polys(P p, string key)
         {
@@ -443,6 +450,7 @@ namespace AcadMcp
                         var ro1 = new Dictionary<string, object> { { "name", name } };
                         if (rs.Has("number")) ro1["number"] = rs.Str("number");
                         string areaText = null;
+                        ObjectId boundaryId = ObjectId.Null;
                         if (hole == null)
                         {
                             ro1["warning"] = "The point is not inside a space closed by walls (missing wall, gap, or point outside): area not measured. " +
@@ -462,6 +470,7 @@ namespace AcadMcp
                                 var pl = dr.MakePoly(hole.Points3d(), hole.BulgeList(), true, null);
                                 dr.Add(pl, new P(new Dictionary<string, object> { { "layer", ro.Str("area_layer") ?? "A-AREA" } }, "room_options"));
                                 ro1["boundary_handle"] = pl.Handle.ToString();
+                                boundaryId = pl.ObjectId;
                             }
                             P fh = rs.Obj("hatch");
                             if (fh != null)
@@ -483,7 +492,27 @@ namespace AcadMcp
                             var lps = new P(lp, rs.Path);
                             var m = dr.MakeMText(lps, text, at);
                             dr.Add(m, lps, false);
-                            if (hole != null) FitLabel(m, hole, title, areaText == null ? null : areaText + " " + unit, ro1);
+                            string[] lines = hole != null ? FitLabel(m, hole, title, areaText == null ? null : areaText + " " + unit, ro1) : new[] { title };
+                            if (boundaryId != ObjectId.Null && ro.Bool("area_field", true))
+                            {
+                                try
+                                {
+                                    // the area line is a field of the A-AREA boundary (m², the decimals and separator of the label):
+                                    // it follows when the walls (and so the boundary) change
+                                    string fmt = "%lu2%pr" + dec + (sep == "," ? "%ds44" : "") + "%ct8[" + (toM * toM).ToString("0.##############", CultureInfo.InvariantCulture) + "]";
+                                    string head = title == "" ? "" : string.Join("\\P", lines.Select(MTextEscape)) + "\\P";
+                                    string code = head + "%<\\AcObjProp Object(%<\\_ObjId " + boundaryId.OldIdPtr.ToInt64() + ">%).Area \\f \"" + fmt + "\">% " + unit;
+                                    var fld = new Field(code);
+                                    fld.Evaluate();
+                                    m.SetField(fld);
+                                    tr.AddNewlyCreatedDBObject(fld, true);
+                                    ro1["area_field"] = true;
+                                }
+                                catch (Exception e)
+                                {
+                                    Bridge.Log("room area field: " + e.Message);
+                                }
+                            }
                             ro1["label_handle"] = m.Handle.ToString();
                         }
                         roomsOut.Add(ro1);

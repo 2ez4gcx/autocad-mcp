@@ -6,11 +6,11 @@ AutoCAD MCP lets Claude work directly in the drawing you have open in AutoCAD. I
 
 It works like [SketchUp MCP](https://github.com/2ez4gcx/sketchup-mcp): a Claude Desktop extension (`.mcpb`) that runs on the Node.js built into Claude Desktop, plus a small add-in that runs inside AutoCAD (the **ACAD MCP Bridge**, a .NET add-in). No Python or Node.js install is needed.
 
-Current version: **1.0.0**.
+Current version: **1.1.0**.
 
 ## Features
 
-41 tools. Lengths are in drawing units (mm in a metric drawing), areas in m², angles in degrees counter-clockwise from +X.
+42 tools. Lengths are in drawing units (mm in a metric drawing), areas in m², angles in degrees counter-clockwise from +X.
 
 | Group | Tools |
 |---|---|
@@ -18,7 +18,7 @@ Current version: **1.0.0**.
 | Standards | `setup_layers`, `setup_styles` |
 | Drawing & editing | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
 | Elevations, sections & structure | `draw_elevation`, `draw_section`, `draw_structure_detail`, `rebar_schedule` |
-| Interior design | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
+| Interior design | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
 | Images & 3D sources | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
 | Sheets & files | `create_layout`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
 | Scripting | `run_lisp` |
@@ -41,11 +41,28 @@ Highlights:
 - **Interior design** (from the plan of `draw_plan`; material codes as in SketchUp MCP: FL floor, SK skirting, WL wall, CL ceiling, JN joinery, FN furniture, SN sanitary, EQ equipment, LT lighting, one code per specification):
   - `draw_furniture_plan`: a 1:50 copy of the plan with a furniture library (beds, nightstands, wardrobes, sofas, tables and chairs, desks, TV cabinets, kitchen base and wall cabinets with sink and hob, hood, fridge, washer, toilet, vanity, shower, bathtub, shoe cabinet, bookshelf) placed against a wall of a room by offset, code tags kept clear of each other, room names moved clear of the furniture and the door swings, elevation keys A-D;
   - `draw_floor_finish_plan`: the real tile or plank joints of each room (centred tiles or from a start point, staggered planks) kept clear of the room names, code tags and a legend with the area of each finish;
-  - `draw_ceiling_plan`: drop bands along the walls with the step line and LED cove, downlights in the band (or a grid), a ceiling lamp or a pendant over each dining table, level tags, light legend with counts;
+  - `draw_floor_finish_plan` also marks the details a site needs:
+    - a stainless transition strip under each door where the finish or the level changes;
+    - in wet rooms and outdoors, a floor drain (in the shower when there is one), the fall arrow "i=1%" and the drop (20 mm wet rooms, 50 mm outdoors);
+    - how the tiles are set out (LÁT TỪ TÂM);
+  - `draw_wall_finish_plan`: a band along the inside face of every wall in the pattern of its finish (one line for paint, two lines with the tile joints for tiles), broken at the doors and windows; the kitchen splashback behind the base cabinets; a code tag per room with the tiling height; the legend with the area of each wall finish;
+  - `draw_ceiling_plan`: drop bands along the walls with the step line and LED cove, downlights in the band (or a grid), a ceiling lamp or a pendant over each dining table, level tags (level over code), light legend with counts. `mode=finish` gives the ceiling finish plan (materials, levels, the step widths dimensioned, ceiling legend with areas; no lights), `mode=lighting` the lighting layout (lights and their legend; no level tags);
+  - every interior plan ends with its general notes (GHI CHÚ: units, site checks, material approval, and per plan: tile joints and falls, paint and tiling build-ups, board and access panels, set-out of the lights), or the notes you give;
   - `draw_interior_elevation`: each wall of a room seen from inside: cut walls, floor and ceiling (drop band), the doors and windows of the wall, the furniture and joinery backed on it (front view) and in the corners (side view), nearer items hiding what is behind them, wall tile joints, kitchen backsplash, skirting, dimension chains and material notes with leaders;
   - `draw_joinery_detail`: kitchen run (base cabinets with doors/drawers/sink module, wall cabinet runs and hood, backsplash) or wardrobe: front at 1:10 with modules, hinge sides and handles, section 1-1 through the carcass with panel thicknesses and material notes; taken straight from a cabinet of the layout plan;
   - `material_schedule`: floors and ceilings in m², skirting in m (doors deducted), walls in m² (openings and backsplash deducted), furniture, joinery, sanitary ware, equipment and lights by count, one row per code with its rooms; table and CSV.
   Finishes default by kind of room (dry rooms porcelain 600x600, paint, gypsum ceiling with a drop band; WC anti-slip tiles, wall tiles to the ceiling, moisture-resistant ceiling; yards no ceiling) and every result lists what was assumed.
+- **Buildings of several floors** (`draw_plan` with `floors`): each floor has its own walls (or keeps those of the floor below), openings, stairs, balconies, rooms and roof; floor heights default to 3600 (ground floor) and 3300, slabs 120; parapets are copied from the walls below at their own height; a U stair shows UP on the ground floor, UP/DOWN in between and DOWN on the top floor; balconies get their slab edge and railing. The floor plans are drawn side by side, the elevations and sections stack every floor (levels of each floor and parapet, balcony railings, stairwell holes in the slabs, the stair cut along its flights), and the interior tools take `floor`.
+- **Blocks, fields and multileaders, not bare lines**:
+  - doors, windows and sliding doors are blocks, one per size (`MCP_CUA_DI_900`, `MCP_CUA_DI_2C_1400`, `MCP_CUA_SO_1200_220`), inserted rotated or mirrored, with code, type and width attributes;
+  - furniture and sanitary ware are one block per kind and size (`NT_<code>_<type>_<width>x<depth>`, attributes code, name, size);
+  - lights (`MCP_DEN_*`), code tags, ceiling tags, grid bubbles, level marks, section marks, the north arrow, interior elevation keys, bar marks and the title block are blocks too, their values attributes. `quantity_takeoff group_by=block` counts them with their values, and ATTEDIT or the properties palette edits them.
+
+  Definitions are made the first time they are used. The AutoCAD API cannot author dynamic blocks, so each size is its own definition.
+  Room labels show the area as a field of the room's `A-AREA` boundary: stretch the boundary, then REGEN or UPDATEFIELD.
+  The material notes of interior elevations are multileaders whose content is a tag block (code boxed, a short description under it), in a row above the elevation (floor and skirting in a row under it), dashed and in the same order as what they name, so no two cross. Joinery details keep a column of text multileaders.
+  Furniture and door tags are hexagons, material tags rectangles. Every drawing is titled with an underlined name and "TỶ LỆ: 1/50".
+  The material schedule table shows each item's and light's block next to its code.
 - **Professional layers** (`setup_layers`): an AIA/NCS-style architectural set with lineweights for monochrome plotting and descriptions in Vietnamese or English: `S-GRID` (CENTER), `S-COLS`, `A-WALL` (0.5 mm), `A-WALL-PATT`, `A-DOOR`, `A-GLAZ`, `A-OPEN`, `A-FLOR-STRS`, `A-FURN`, `A-FLOR-FIXT`, `A-AREA` (no plot), `A-ANNO-ROOM`, `A-ANNO-TEXT`, `A-ANNO-DIMS`, `A-ANNO-SYMB`, `A-ANNO-TTLB`, `A-ANNO-NOTE`, `A-ELEV`, `A-SECT`, `A-FLOR-CASE`, `A-CLNG`, `E-LITE`, `A-DETL`, `S-CONC`, `S-REBR`, `S-REBR-STIR`, `X-IMAGE` (no plot)... A layer scheme the drawing already has is followed instead (`draw_plan` takes a role-to-layer map).
 - **Styles for a plot scale** (`setup_styles`): mm units, a TrueType text style (`MCP-ARIAL`, so Vietnamese never shows as `?`), a dimension style `MCP-1-<scale>` with architectural ticks and text above the line, a multileader style, table text and LTSCALE.
 - **Working from images**: `view_image` shows an image file to Claude with a crop (zoom into a detail to read dimensions) and a pixel grid with coordinates; `attach_image` puts it in the drawing as a faded underlay on `X-IMAGE`, calibrated from two pixels of a known dimension and anchored on a drawing point; `draw_entities` can take points in image pixels (`image_handle`) to trace; `screenshot` renders the drawing off screen (white background, your view is not touched) so Claude compares its work with the source.
@@ -54,7 +71,16 @@ Highlights:
 - **Editing** by handle: move, copy (repeated), rotate, scale, mirror, rectangular and polar arrays, offset (towards a point or both sides), explode (block attribute values are kept); properties, text and attribute values.
 - **Quantities** (`quantity_takeoff`): per layer, block or type: counts, lengths (m), areas of closed outlines (m²), hatch areas (m²) and block counts with the tally of attribute values; CSV for Excel (`csv_format=semicolon` for Excel with Vietnamese/European regional settings: `;` separators, decimal commas).
 - **Drawing QA** (`check_drawing`): stacked duplicates (they double quantities), polylines that look closed but are not, open outlines on area layers, Vietnamese text in SHX styles (shows `?`), missing fonts, unresolved xrefs and images, objects on Defpoints, typed-over dimension values, objects far from the rest, objects on layer 0, colors/linetypes/lineweights not ByLayer, layers outside the naming standard.
-- **Sheets** (`create_layout`, `export_pdf`): a layout on ISO A0-A4 with `DWG To PDF.pc3` and `monochrome.ctb`, a frame with ISO/TCVN margins, a 180 mm title block (company, project, client, title, scale, date, drawn/checked, drawing number, revision, sheet) and a locked viewport at a standard scale fitted automatically, placed above or beside the title block, wherever the view fits (a warning if a given scale would crop it). `export_pdf` plots layouts into one multi-page PDF (layouts on different paper sizes give one PDF per size, e.g. `set_A3.pdf`, `set_A1.pdf`) or a model-space window at a scale.
+- **Fields**:
+  - room areas are fields of the room boundaries;
+  - in the finish schedule, floor and ceiling quantities are formula fields summing the room boundaries;
+  - the bar schedule totals (bars, length, weight per row, per diameter, overall) are table formulas: change a count or a length in the table and the weights follow;
+  - the title block's scale is a field of the viewport's scale, and its drawing number a field of the layout name.
+
+  Decimal commas in Vietnamese.
+- **Sheets** (`create_layout`, `export_pdf`): a layout on ISO A0-A4 with `DWG To PDF.pc3` and `monochrome.ctb`, a frame with ISO/TCVN margins, a title block and a locked viewport.
+  - The title block on landscape A3-A0 is the vertical strip of Vietnamese construction sets: revisions, notes, client, project, item, consultant, chief of project, chief of division, designer, checker, drawing name, contract, version, phase, drawing number, scale and date, plus a general note along the bottom. `title_block.style=bottom` gives the 180 mm bottom block, which A4 and portrait sheets use. Either one is a block with attributes.
+  - The viewport is at a standard scale fitted automatically, placed above or beside the title block, wherever the view fits (a warning if a given scale would crop it). `export_pdf` plots layouts into one multi-page PDF (layouts on different paper sizes give one PDF per size, e.g. `set_A3.pdf`, `set_A1.pdf`) or a model-space window at a scale.
 - **Files** (`save_drawing`, `screenshot save_path`): DWG 2018/2013/2010/2007/2004/2000 and DXF; `copy=true` (the default for older versions and DXF) writes an export copy and leaves the open drawing as it is, otherwise Save As; PNG images of the drawing up to 4096 px.
 - **`run_lisp`**: when no tool fits, Claude runs AutoLISP (results come back as JSON) as one Undo group. The code never touches the disk, so AutoCAD's SECURELOAD does not ask about it.
 - **Every drawing edit is one Undo step** (`MCP_<TOOL>` in AutoCAD's Undo list).
@@ -66,7 +92,7 @@ Highlights:
 Claude Desktop
     |  MCP over stdio
     v
-autocad-mcp-1.0.0.mcpb        Node.js MCP server, runs on the Node built into Claude Desktop
+autocad-mcp-1.1.0.mcpb        Node.js MCP server, runs on the Node built into Claude Desktop
     |  one JSON request per command, TCP 127.0.0.1:9877 (localhost only)
     v
 ACAD MCP Bridge               .NET add-in inside AutoCAD (autoloader bundle), runs commands on AutoCAD's main thread
@@ -85,9 +111,9 @@ The bridge runs inside AutoCAD (not over COM from outside): every command runs o
 
 ## Install
 
-1. **Install the extension in Claude Desktop**: *Settings > Extensions*, drag and drop `autocad-mcp-1.0.0.mcpb` into the window (or *Advanced settings > Install Extension...*), click *Install*. The build is not code-signed, so Claude Desktop may warn about it.
-2. **Install the bridge in AutoCAD**: in a new chat ask Claude *"Install the ACAD MCP Bridge in AutoCAD"* (tool `install_autocad_bridge`). It copies `AcadMcpBridge.bundle` into `%APPDATA%\Autodesk\ApplicationPlugins`, which AutoCAD loads at startup. Manual install: unzip `AcadMcpBridge-1.0.0.bundle.zip` into that folder.
-3. **Restart AutoCAD.** The add-in is not digitally signed: when AutoCAD asks about `AcadMcpBridge-1.0.0.dll`, choose **Always Load**. Each new bridge build is a new file, so AutoCAD asks again after an update. (To never be asked, you can add the bundle folder to *Options > Files > Trusted Locations*, if your IT policy allows it.) Type `MCPSTATUS` in AutoCAD: it should say `ACAD MCP Bridge v1.0.0: RUNNING on 127.0.0.1:9877`. Then ask Claude *"Ping AutoCAD"*.
+1. **Install the extension in Claude Desktop**: *Settings > Extensions*, drag and drop `autocad-mcp-1.1.0.mcpb` into the window (or *Advanced settings > Install Extension...*), click *Install*. The build is not code-signed, so Claude Desktop may warn about it.
+2. **Install the bridge in AutoCAD**: in a new chat ask Claude *"Install the ACAD MCP Bridge in AutoCAD"* (tool `install_autocad_bridge`). It copies `AcadMcpBridge.bundle` into `%APPDATA%\Autodesk\ApplicationPlugins`, which AutoCAD loads at startup. Manual install: unzip `AcadMcpBridge-1.1.0.bundle.zip` into that folder.
+3. **Restart AutoCAD.** The add-in is not digitally signed: when AutoCAD asks about `AcadMcpBridge-1.1.0.dll`, choose **Always Load**. Each new bridge build is a new file, so AutoCAD asks again after an update. (To never be asked, you can add the bundle folder to *Options > Files > Trusted Locations*, if your IT policy allows it.) Type `MCPSTATUS` in AutoCAD: it should say `ACAD MCP Bridge v1.1.0: RUNNING on 127.0.0.1:9877`. Then ask Claude *"Ping AutoCAD"*.
 
 Options in *Settings > Extensions > AutoCAD MCP > Configure*: the bridge port (default 9877; if you change it, also type `MCPPORT` in AutoCAD) and the timeout per command (default 120 s).
 

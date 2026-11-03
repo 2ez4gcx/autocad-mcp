@@ -4,8 +4,9 @@
 //   - view space: the viewer looks along v; u = horizontal position (to the viewer's right), w = depth (away from viewer)
 //   - visibility: the nearest wall/column face wins along u; roofs, columns and facade pieces hide what is behind them
 //     (line segments are clipped against the convex silhouettes of every nearer element)
-import { buildWalls, findSegment, gridList, num, openingSpan, PlanError, pt, rectAround, segRect } from './plan.mjs';
-import { dimStyleName, ROLE, TEXT_STYLE } from './standards.mjs';
+import { buildWalls, findSegment, gridList, num, openingSpan, PlanError, pt, rectAround, segRect, uStairGeom } from './plan.mjs';
+import { dimStyleName, ROLE, TEXT_STYLE, viewTitle } from './standards.mjs';
+import { sym } from './symbols.mjs';
 
 const add = (a, b) => [a[0] + b[0], a[1] + b[1]];
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
@@ -69,7 +70,8 @@ export function buildModel(spec) {
     const size = c.diameter ? [c.diameter, c.diameter] : Array.isArray(c.size) ? c.size : [c.size ?? 400, c.size ?? 400];
     return { poly: rectAround(at, num(size[0], 'size'), num(size[1], 'size'), c.rotation ?? 0), top: c.height ?? H.top };
   });
-  const pts = walls.flatMap((w) => w.segs.flatMap((s) => segRect(s)));
+  const fullWalls = walls.filter((w) => w.height === undefined || w.height >= H.top - 1);
+  const pts = (fullWalls.length ? fullWalls : walls).flatMap((w) => w.segs.flatMap((s) => segRect(s)));
   const bbox = {
     x0: Math.min(...pts.map((p) => p[0])), x1: Math.max(...pts.map((p) => p[0])),
     y0: Math.min(...pts.map((p) => p[1])), y1: Math.max(...pts.map((p) => p[1])),
@@ -95,6 +97,102 @@ export function buildModel(spec) {
     };
   });
   return { walls, H, openings, columns, grids, roofs, bbox, rooms: spec.rooms || [], assumed };
+}
+
+// ---------------------------------------------------------------- floors
+
+export const FLOOR_DEFAULTS = { first: 3600, upper: 3300, slab: 120 };
+
+/**
+ * Floors of the description. With floors [{name, level, height, walls, openings, columns, rooms, stairs, balconies,
+ * parapet, roof | roofs, slab}] each floor is a plan of its own with heights relative to its floor (levels follow from
+ * the heights: 3600 for the ground floor, 3300 above unless given); a floor without walls or columns takes those of
+ * the floor below; parapet {walls: [ids of walls of the floor below], height: 1000} adds low walls on them (roof
+ * terrace); U stairs of a floor arrive on the floor above (drawn going down there). Without floors the plan is a
+ * one-storey building.
+ */
+export function floorsOf(spec) {
+  if (!Array.isArray(spec.floors) || !spec.floors.length) {
+    return [{ spec, index: 0, level: 0, height: null, name: spec.name ?? null, slab: null, single: true, top: true }];
+  }
+  const { floors, ...shared } = spec;
+  const out = [];
+  let level = num(floors[0].level ?? 0, 'floors[0].level');
+  let prev = null;
+  floors.forEach((f, i) => {
+    const name = `floors[${i}]`;
+    const height = num(f.height ?? (i === 0 ? FLOOR_DEFAULTS.first : FLOOR_DEFAULTS.upper), `${name}.height`, { positive: true });
+    if (i > 0 && f.level !== undefined) level = num(f.level, `${name}.level`);
+    const inherit = (k) => (f[k] === undefined || f[k] === 'below' ? (prev ? prev.spec[k] : undefined) : f[k]);
+    const walls = [...(inherit('walls') || [])];
+    if (f.parapet) {
+      if (!prev) throw new PlanError(`${name}.parapet: the ground floor has no floor below`);
+      const ids = f.parapet.walls;
+      const src = prev.spec.walls.map((w, k) => ({ w, id: w.id ?? `W${k + 1}` })).filter((x) => !ids || ids.includes(x.id));
+      if (!src.length) throw new PlanError(`${name}.parapet.walls: no wall of the floor below has those ids`);
+      const ph = num(f.parapet.height ?? 1000, `${name}.parapet.height`, { positive: true });
+      for (const { w, id } of src) walls.push({ ...w, id: `${id}-TC`, height: ph, thickness: f.parapet.thickness ?? w.thickness });
+    }
+    const isTop = i === floors.length - 1;
+    const roofs = f.roofs ?? (f.roof ? [f.roof] : isTop ? (shared.roofs ?? [{ type: 'flat' }]) : []);
+    const fs = {
+      ...shared, ...f, name: f.name ?? `TẦNG ${i + 1}`, walls, columns: inherit('columns') ?? [], roofs,
+      heights: { ...(shared.heights || {}), ...(f.heights || {}), floor: 0, top: height },
+      openings: f.openings ?? [], rooms: f.rooms ?? [], stairs: f.stairs ?? [], balconies: f.balconies ?? [],
+      levels: f.levels ?? [], entities: f.entities ?? [],
+      sections: i === 0 ? (f.sections ?? shared.sections ?? []) : (f.sections ?? []),
+      stairs_below: prev ? prev.spec.stairs.filter((st) => st.type === 'u').map((st) => ({ ...st, height: prev.height })) : [],
+    };
+    delete fs.floors;
+    delete fs.parapet;
+    delete fs.roof;
+    const slab = num(f.slab ?? (i === 0 ? (fs.heights.slab ?? HEIGHT_DEFAULTS.slab) : FLOOR_DEFAULTS.slab), `${name}.slab`, { positive: true });
+    const entry = { spec: fs, index: i, level, height, name: fs.name, slab, top: isTop };
+    out.push(entry);
+    prev = entry;
+    level += height;
+  });
+  return out;
+}
+
+/** The floors with their models; roof bases become absolute levels and remember their floor. */
+export function buildBuilding(spec) {
+  return floorsOf(spec).map((f) => {
+    const M = buildModel(f.spec);
+    for (const R of M.roofs) {
+      R.base += f.level;
+      R.floor = f.index;
+    }
+    return { ...f, M, height: f.height ?? M.H.top, slab: f.slab ?? M.H.slab };
+  });
+}
+
+/** What the building model assumed: per floor (once per item), floor heights and slabs, the roof over the top. */
+export function buildingAssumed(spec, B) {
+  if (B.length === 1) return B[0].M.assumed;
+  const out = [];
+  const seen = new Set();
+  const push = (a) => {
+    const k = `${a.item}|${a.value}`;
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(a);
+    }
+  };
+  spec.floors.forEach((f, i) => {
+    if (f.height === undefined) push({ item: `floors[${i}].height`, value: B[i].height, note: B[i].name });
+    if (i > 0 && f.slab === undefined) push({ item: `floors[${i}].slab`, value: B[i].slab, note: `${B[i].name}: floor slab` });
+    for (const [k, st] of (f.stairs || []).entries()) {
+      if (st.type === 'u' && st.risers === undefined) {
+        const g = uStairGeom(st, B[i].height, `floors[${i}].stairs[${k}]`);
+        push({ item: `floors[${i}].stairs[${k}]`, value: `${g.risers} risers ${Math.round(g.riser)} / going ${Math.round(g.going)}`, note: B[i].name });
+      }
+    }
+  });
+  const top = spec.floors[spec.floors.length - 1];
+  if (!top.roofs && !top.roof && !spec.roofs) push({ item: 'roof', value: 'flat roof over the top floor' });
+  for (const f of B) for (const a of f.M.assumed) push(a.item.startsWith('roofs[') ? { ...a, item: `${f.name}.${a.item}` } : a);
+  return out;
 }
 
 /** Heights taken from HEIGHT_DEFAULTS because the description does not give them (only those the drawing uses). */
@@ -380,11 +478,15 @@ function roofElement(R, V) {
 
 // ---------------------------------------------------------------- shared annotation
 
+/** Levels whose marks would overlap (closer than minGap) are left to the higher one; the dimension chain keeps all. */
+function spaced(levels, minGap) {
+  const kept = [];
+  for (const lv of [...levels].sort((a, b) => b - a)) if (!kept.length || kept[kept.length - 1] - lv >= minGap) kept.push(lv);
+  return kept;
+}
+
 function levelMark(x, y, value, scale, out) {
-  const s = 3 * scale;
-  out.push({ type: 'polyline', points: [P([x, y]), P([x - s / 2, y + s * 0.85]), P([x + s / 2, y + s * 0.85])], closed: true, layer: L.symbol });
-  out.push({ type: 'line', from: P([x - s / 2, y + s * 0.85]), to: P([x + s * 4, y + s * 0.85]), layer: L.symbol });
-  out.push({ type: 'text', text: value, at: P([x + s * 0.7, y + s * 1.1]), height: 2.5 * scale, layer: L.symbol, style: TEXT_STYLE });
+  out.push(sym('MCP_COTE', P([x, y]), { scale, attrs: { COTE: value }, layer: L.symbol }));
 }
 
 export const fmtLevel = (mm) => (Math.abs(mm) < 0.5 ? '±0.000' : `${mm > 0 ? '+' : '-'}${(Math.abs(mm) / 1000).toFixed(3)}`);
@@ -398,8 +500,7 @@ function gridMarks(M, V, X, y0, scale, out, uFilter) {
     .filter((g) => !uFilter || uFilter(g.u)).sort((a, b) => a.u - b.u);
   for (const g of marks) {
     out.push({ type: 'line', from: P([X(g.u), y0 + 3 * scale]), to: P([X(g.u), y0 - 2 * r]), layer: L.grid });
-    out.push({ type: 'circle', center: P([X(g.u), y0 - 3 * r]), radius: r, layer: L.gridTag });
-    out.push({ type: 'text', at: P([X(g.u), y0 - 3 * r]), text: g.label, height: 4 * scale, align: 'middle_center', layer: L.gridTag, style: TEXT_STYLE });
+    out.push(sym('MCP_TRUC', P([X(g.u), y0 - 3 * r]), { scale, attrs: { SO: String(g.label) }, layer: L.gridTag, half: [4.5, 4.5] }));
   }
   if (marks.length >= 2) {
     out.push({
@@ -411,8 +512,7 @@ function gridMarks(M, V, X, y0, scale, out, uFilter) {
 }
 
 function titleBlock(text, cx, y, scale, out) {
-  out.push({ type: 'text', text, at: P([cx, y]), height: 5 * scale, align: 'center', layer: L.text, style: TEXT_STYLE });
-  out.push({ type: 'text', text: `TỶ LỆ 1:${scale}`, at: P([cx, y - 7 * scale]), height: 3 * scale, align: 'center', layer: L.text, style: TEXT_STYLE });
+  out.push(...viewTitle(text, cx, y, scale, L.text));
 }
 
 function segEntities(lines) {
@@ -438,46 +538,109 @@ function openingLines(op, uA, uB, sillY, headY, layer) {
 
 // ---------------------------------------------------------------- elevation
 
+/** Faces grouped by their top (a parapet in front must not hide the taller walls behind it), nearest per group. */
+function piecesByHeight(cands, uMin, uMax) {
+  const groups = new Map();
+  for (const c of cands) {
+    const k = Math.round(c.top);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(c);
+  }
+  return [...groups.values()].flatMap((g) => visiblePieces(g, uMin, uMax));
+}
+
+/** Parts of [a, b] not covered by the intervals. */
+function uncovered(a, b, ivs) {
+  let parts = [[a, b]];
+  for (const [c, d] of ivs) {
+    const next = [];
+    for (const [s, e] of parts) {
+      if (d <= s || c >= e) { next.push([s, e]); continue; }
+      if (c > s) next.push([s, c]);
+      if (d < e) next.push([d, e]);
+    }
+    parts = next;
+  }
+  return parts.filter(([s, e]) => e - s > 1);
+}
+
+/** Balcony of a floor in the view: u range, nearest depth and depth range. */
+function balconyInView(bc, V, name) {
+  const q0 = pt(bc.region[0], `${name}.region[0]`), q1 = pt(bc.region[1], `${name}.region[1]`);
+  const cs = [q0, [q1[0], q0[1]], q1, [q0[0], q1[1]]];
+  const us = cs.map(V.u), ws = cs.map(V.w);
+  return { u0: Math.min(...us), u1: Math.max(...us), w0: Math.min(...ws), w1: Math.max(...ws), railing: num(bc.railing ?? 1100, `${name}.railing`, { positive: true }) };
+}
+
 /**
  * Elevation of one side of the plan: side bottom|top|left|right (the viewer stands on that side of the plan and
- * looks at the building), at = drawing point of the left end of the facade at level ±0.000.
+ * looks at the building), at = drawing point of the left end of the facade at level ±0.000. With floors, every floor
+ * is drawn at its level (floor lines, balconies with railings, parapets, the stair tower and its roof).
  */
 export function buildElevation(spec, opts = {}) {
-  const M = buildModel(spec);
+  const B = buildBuilding(spec);
+  const M0 = B[0].M;
   const scale = num(opts.scale ?? spec.scale ?? 100, 'scale', { positive: true });
   const side = opts.side ?? 'bottom';
   if (!SIDES[side]) throw new PlanError('side must be bottom, top, left or right (the side of the plan the viewer stands on)');
   const V = viewOf(SIDES[side]);
-  const H = M.H;
-  const pieces = visiblePieces(faceCandidates(M, V));
-  if (!pieces.length) throw new PlanError('no wall faces this side');
-  const roofs = M.roofs.map((R) => roofElement(R, V));
-  const uMin = Math.min(...pieces.map((p) => p.u0));
-  const uMax = Math.max(...pieces.map((p) => p.u1));
+  const H = M0.H;
+  const roofs = B.flatMap((f) => f.M.roofs).map((R) => roofElement(R, V));
+  const elements = [];
+  const perFloor = B.map((f) => ({ f, pieces: piecesByHeight(faceCandidates(f.M, V)) }));
+  const all = perFloor.flatMap((p) => p.pieces);
+  if (!all.length) throw new PlanError('no wall faces this side');
+  const uMin = Math.min(...all.map((p) => p.u0));
+  const uMax = Math.max(...all.map((p) => p.u1));
   const at = opts.at ? pt(opts.at, 'at') : [0, 0];
   const X = (u) => at[0] + (u - uMin);
   const Y = (y) => at[1] + y;
-  const elements = [];
+  let wallTop = -Infinity;
+  const lowTops = new Set(); // tops of low walls (parapets of a roof terrace) get a level of their own
 
-  // Facade pieces (walls and columns) with their openings.
-  for (const pc of pieces) {
-    const top = pc.c.top;
-    const gableEnd = pc.c.kind === 'wall' && roofs.some((rf) => !rf.alongU && rf.R.type === 'gable' && Math.abs(pc.depth - rf.w0) <= (pc.c.s.o2 - pc.c.s.o1) + 1);
-    const segs = [
-      { a: [pc.u0, H.ground], b: [pc.u0, top], layer: L.outline },
-      { a: [pc.u1, H.ground], b: [pc.u1, top], layer: L.outline },
-    ];
-    if (pc.c.kind === 'wall') segs.push({ a: [pc.u0, H.floor], b: [pc.u1, H.floor], layer: L.line }); // plinth line
-    if (!gableEnd) segs.push({ a: [pc.u0, top], b: [pc.u1, top], layer: L.outline });
-    elements.push({ depth: pc.depth, sil: rectPoly(pc.u0, H.ground, pc.u1, top), segs });
-    if (pc.c.kind !== 'wall') continue;
-    for (const op of M.openings.filter((o) => o.s === pc.c.s)) {
-      const ua = V.u(add(op.s.a, mul(op.s.d, op.span.from)));
-      const ub = V.u(add(op.s.a, mul(op.s.d, op.span.to)));
-      const uA = Math.max(Math.min(ua, ub), pc.u0), uB = Math.min(Math.max(ua, ub), pc.u1);
-      if (uB - uA < 10) continue;
-      elements.push({ depth: pc.depth - 0.01, segs: openingLines(op, uA, uB, op.sill, op.head, L.line) });
+  // Facade pieces (walls and columns) with their openings, floor by floor.
+  for (const { f, pieces } of perFloor) {
+    const M = f.M, z = f.level;
+    const bottom = f.index === 0 ? M.H.ground : 0;
+    const above = perFloor[f.index + 1]?.pieces.map((p) => [p.u0, p.u1]) ?? [];
+    for (const pc of pieces) {
+      const top = pc.c.top;
+      wallTop = Math.max(wallTop, z + top);
+      if (top < M.H.top - 1) lowTops.add(z + top);
+      const gableEnd = pc.c.kind === 'wall' && roofs.some((rf) => rf.R.floor === f.index && !rf.alongU && rf.R.type === 'gable' && Math.abs(pc.depth - rf.w0) <= (pc.c.s.o2 - pc.c.s.o1) + 1);
+      const segs = [
+        { a: [pc.u0, z + bottom], b: [pc.u0, z + top], layer: L.outline },
+        { a: [pc.u1, z + bottom], b: [pc.u1, z + top], layer: L.outline },
+      ];
+      if (pc.c.kind === 'wall') segs.push({ a: [pc.u0, z + M.H.floor], b: [pc.u1, z + M.H.floor], layer: L.line }); // plinth / floor line
+      if (!gableEnd) {
+        // the top edge is part of the outline where no floor above stands on it
+        const free = top >= M.H.top - 1 ? uncovered(pc.u0, pc.u1, above) : [[pc.u0, pc.u1]];
+        for (const [s, e] of free) segs.push({ a: [s, z + top], b: [e, z + top], layer: L.outline });
+        for (const [s, e] of uncovered(pc.u0, pc.u1, free)) segs.push({ a: [s, z + top], b: [e, z + top], layer: L.line });
+      }
+      elements.push({ depth: pc.depth, sil: rectPoly(pc.u0, z + bottom, pc.u1, z + top), segs });
+      if (pc.c.kind !== 'wall') continue;
+      for (const op of M.openings.filter((o) => o.s === pc.c.s)) {
+        const ua = V.u(add(op.s.a, mul(op.s.d, op.span.from)));
+        const ub = V.u(add(op.s.a, mul(op.s.d, op.span.to)));
+        const uA = Math.max(Math.min(ua, ub), pc.u0), uB = Math.min(Math.max(ua, ub), pc.u1);
+        if (uB - uA < 10) continue;
+        elements.push({ depth: pc.depth - 0.01, segs: openingLines(op, uA, uB, z + op.sill, z + op.head, L.line) });
+      }
     }
+    // Balconies: slab edge (hides what is behind it) and the railing (rails and balusters, see-through).
+    (f.spec.balconies || []).forEach((bc, i) => {
+      const b = balconyInView(bc, V, `floors[${f.index}].balconies[${i}]`);
+      const slab = rectPoly(b.u0, z - f.slab, b.u1, z);
+      const segs = segsOfPoly(slab, L.outline);
+      const rt = z + b.railing;
+      segs.push({ a: [b.u0, rt], b: [b.u1, rt], layer: L.line }, { a: [b.u0, rt - 50], b: [b.u1, rt - 50], layer: L.line });
+      segs.push({ a: [b.u0, z], b: [b.u0, rt], layer: L.line }, { a: [b.u1, z], b: [b.u1, rt], layer: L.line });
+      for (let u = b.u0 + 150; u < b.u1 - 75; u += 150) segs.push({ a: [u, z], b: [u, rt - 50], layer: L.line });
+      elements.push({ depth: b.w0, sil: slab, segs });
+      wallTop = Math.max(wallTop, rt);
+    });
   }
   for (const rf of roofs) elements.push(...rf.els);
   elements.sort((a, b) => b.depth - a.depth);
@@ -493,22 +656,27 @@ export function buildElevation(spec, opts = {}) {
     pattern: 'EARTH', scale: 0.15 * scale, layer: L.cutHatch,
   });
 
-  // Levels (right) and the height chain (left).
-  const ridge = Math.max(...roofs.map((r) => r.topY), ...pieces.map((p) => p.c.top));
-  const visibleOps = M.openings.filter((o) => pieces.some((p) => p.c.s === o.s));
-  const win = visibleOps.find((o) => o.type === 'window');
-  const heights = [H.ground, H.floor, ...(win ? [win.sill, win.head] : []), H.top, ridge];
+  // Levels (right) and the height chain (left): one storey shows the window, several the floor levels.
+  const ridge = Math.max(...roofs.map((r) => r.topY), wallTop);
+  let heights;
+  if (B.length === 1) {
+    const visibleOps = M0.openings.filter((o) => all.some((p) => p.c.s === o.s));
+    const win = visibleOps.find((o) => o.type === 'window');
+    heights = [H.ground, H.floor, ...(win ? [win.sill, win.head] : []), H.top, ridge];
+  } else {
+    heights = [H.ground, ...B.map((f) => f.level), ...lowTops, wallTop, ridge];
+  }
   const uniq = [...new Set(heights.map((v) => Math.round(v)))].sort((a, b) => a - b);
   const xr = X(uHi) + 8 * scale;
-  for (const lv of uniq) levelMark(xr, Y(lv), fmtLevel(lv), scale, ents);
+  for (const lv of spaced(uniq, 3.2 * scale)) levelMark(xr, Y(lv), fmtLevel(lv), scale, ents);
   ents.push({
     type: 'dim_chain', points: uniq.map((lv) => P([X(uLo), Y(lv)])), direction: 'vertical', at: P([X(uLo) - 12 * scale, Y(uniq[0])]),
     style: dimStyleName(scale), layer: L.dims, total: uniq.length > 2,
   });
-  const marks = gridMarks(M, V, X, Y(H.ground) - 10 * scale, scale, ents);
+  const marks = gridMarks(M0, V, X, Y(H.ground) - 10 * scale, scale, ents);
   const label = marks.length >= 2 ? ` TRỤC ${marks[0].label}-${marks[marks.length - 1].label}` : '';
   titleBlock(opts.title ?? `MẶT ĐỨNG${label}`, (X(uLo) + X(uHi)) / 2, Y(H.ground) - 10 * scale - 9 * 4.5 * scale - 8 * scale, scale, ents);
-  return { entities: ents, extent: { min: [X(uLo) - 12 * scale - 10 * scale, Y(H.ground) - 90 * scale], max: [xr + 20 * scale, Y(ridge) + 5 * scale] }, levels: uniq, assumed: M.assumed };
+  return { entities: ents, extent: { min: [X(uLo) - 12 * scale - 10 * scale, Y(H.ground) - 90 * scale], max: [xr + 20 * scale, Y(ridge) + 5 * scale] }, levels: uniq, assumed: buildingAssumed(spec, B) };
 }
 
 // ---------------------------------------------------------------- section
@@ -527,82 +695,160 @@ function roomAt(M, p) {
     .find((x) => !crosses(p, pt(x.r.at, 'rooms.at')))?.r;
 }
 
+/** Range of u where the cut line crosses a rectangle region (null when it misses). */
+function cutThrough(region, V, wc, cu0, cu1) {
+  const q0 = region[0], q1 = region[1];
+  const cs = [q0, [q1[0], q0[1]], q1, [q0[0], q1[1]]];
+  const ws = cs.map(V.w);
+  if (wc < Math.min(...ws) || wc > Math.max(...ws)) return null;
+  const us = cs.map(V.u);
+  const u0 = Math.max(Math.min(...us), cu0), u1 = Math.min(Math.max(...us), cu1);
+  return u1 - u0 > 1 ? [u0, u1] : null;
+}
+
+/**
+ * U stair in a section parallel to its flights: the flight the plane passes through is cut (steps, waist slab,
+ * hatched), the half landing is cut, the flight beyond is drawn in outline, the one in front of the plane is left out.
+ */
+function stairSection(g, z, V, wc, d, cutEls, fills, scale) {
+  if (Math.abs(dot(g.u, d)) < 0.99) return false;
+  // b of the cut plane (constant along it, the flights being parallel to the cut)
+  const pAny = mul(V.v, wc);
+  const bCut = dot(pAny, g.n);
+  if (bCut < g.b0 - 1 || bCut > g.b1 + 1) return false;
+  const U = (a) => V.u(g.at(a, bCut));
+  const t = 120;
+  const tan = g.riser / g.going;
+  const tv = t * Math.sqrt(1 + tan * tan);
+  const aL = g.a0 + g.run;
+  const zL = z + g.n1 * g.riser;
+  const flight = (aStart, dirA, zStart, nRisers) => {
+    // steps from aStart going dirA (+1 / -1 in a), rising nRisers risers from zStart; returns the profile polygon
+    const pts = [[U(aStart), zStart]];
+    for (let k = 0; k < nRisers; k++) {
+      const a = aStart + dirA * k * g.going;
+      pts.push([U(a), zStart + (k + 1) * g.riser]);
+      if (k < nRisers - 1) pts.push([U(a + dirA * g.going), zStart + (k + 1) * g.riser]);
+    }
+    const aEnd = aStart + dirA * (nRisers - 1) * g.going;
+    // the waist: parallel to the nosing line, tv below it, down to the floor
+    pts.push([U(aEnd), zStart + nRisers * g.riser - tv]);
+    if (g.riser >= tv) pts.push([U(aStart), zStart + g.riser - tv]);
+    else pts.push([U(aStart + (dirA * (tv - g.riser)) / tan), zStart]);
+    return pts;
+  };
+  const wBand = (band) => {
+    const ws = [g.at(g.a0, band[0]), g.at(g.a0, band[1])].map(V.w);
+    return [Math.min(...ws), Math.max(...ws)];
+  };
+  const parts = [
+    { band: g.f1, poly: flight(g.a0, 1, z, g.n1) },
+    { band: g.f2, poly: flight(aL, -1, zL, g.n2) },
+  ];
+  for (const p of parts) {
+    const [w0, w1] = wBand(p.band);
+    const poly = ccw(p.poly);
+    if (wc >= w0 - 1 && wc <= w1 + 1) {
+      cutEls.push({ depth: wc, segs: segsOfPoly(poly, L.cut) });
+      fills.push({ type: 'hatch', boundary: poly, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+    } else if (w0 > wc) {
+      cutEls.push({ depth: w0, segs: segsOfPoly(poly, L.line) });
+    }
+  }
+  const land = rectPoly(Math.min(U(aL), U(g.a1)), zL - t, Math.max(U(aL), U(g.a1)), zL);
+  cutEls.push({ depth: wc, sil: land, segs: segsOfPoly(land, L.cut) });
+  fills.push({ type: 'hatch', boundary: land, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+  return true;
+}
+
 /**
  * Section along a cut line from -> to (as the plan's section mark), looking to its left (default) or right.
- * at = drawing point of the left end of the cut at level ±0.000.
+ * at = drawing point of the left end of the cut at level ±0.000. With floors: every floor's walls and openings at
+ * its level, the floor slabs (open over the stairwells, out over the balconies), U stairs cut along their flights,
+ * parapets and the stair tower roof.
  */
 export function buildSection(spec, opts = {}) {
-  const M = buildModel(spec);
+  const B = buildBuilding(spec);
+  const M0 = B[0].M;
   const scale = num(opts.scale ?? spec.scale ?? 100, 'scale', { positive: true });
   const a = pt(opts.from, 'from'), b = pt(opts.to, 'to');
   if (dist(a, b) < 1) throw new PlanError('from and to must differ');
   const d = unit(sub(b, a));
   const v = opts.look === 'right' ? mul(left(d), -1) : left(d);
   const V = viewOf(v);
-  const H = M.H;
+  const H = M0.H;
   const F = H.foundation;
   const wc = V.w(a);
   const cu0 = Math.min(V.u(a), V.u(b)), cu1 = Math.max(V.u(a), V.u(b));
   const at = opts.at ? pt(opts.at, 'at') : [0, 0];
   const cutEls = [];
   const fills = [];
-  const cutWalls = [];
+  const notes = [];
 
-  // Walls crossing the cut.
-  for (const w of M.walls) for (const s of w.segs) {
-    const poly = segRect(s);
-    const us = [];
-    for (let i = 0; i < 4; i++) {
-      const p = poly[i], q = poly[(i + 1) % 4];
-      const wp = V.w(p) - wc, wq = V.w(q) - wc;
-      if (Math.abs(wp) < 1e-9) us.push(V.u(p));
-      if (wp * wq < 0) us.push(V.u(add(p, mul(sub(q, p), wp / (wp - wq)))));
-    }
-    if (us.length < 2) continue;
-    const ua = Math.max(Math.min(...us), cu0), ub = Math.min(Math.max(...us), cu1);
-    if (ub - ua < 1) continue;
-    const wa = V.w(s.a), wb = V.w(s.b);
-    if (Math.abs(wb - wa) < 1e-9) continue; // wall lying in the cut plane
-    const along = ((wc - wa) / (wb - wa)) * s.L;
-    const pAxis = add(s.a, mul(s.d, Math.max(0, Math.min(s.L, along))));
-    const top = wallTopAt(M, s, pAxis);
-    const op = M.openings.find((o) => o.s === s && along >= o.span.from - 0.5 && along <= o.span.to + 0.5);
-    const base = -F.depth + F.height;
-    const ranges = op ? [[base, op.type === 'window' ? op.sill : H.floor], [op.head, top]] : [[base, top]];
-    for (const [y0, y1] of ranges) {
-      if (y1 - y0 < 1) continue;
-      const poly2 = rectPoly(ua, y0, ub, y1);
-      cutEls.push({ depth: wc, sil: poly2, segs: segsOfPoly(poly2, L.cut) });
-      fills.push({ type: 'hatch', boundary: poly2, pattern: 'ANSI31', scale: 0.6 * scale, layer: L.cutHatch });
-    }
-    if (op) {
-      const lt = Math.min(200, top - op.head);
-      if (lt > 50) fills.push({ type: 'hatch', boundary: rectPoly(ua, op.head, ub, op.head + lt), pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
-      if (op.type === 'window') {
-        const um = (ua + ub) / 2;
-        for (const du of [-15, 15]) fills.push({ type: 'line', from: [um + du, op.sill], to: [um + du, op.head], layer: L.glass });
+  // Walls crossing the cut, floor by floor.
+  const perFloor = B.map((f) => {
+    const M = f.M, z = f.level, next = B[f.index + 1];
+    const cutWalls = [];
+    for (const w of M.walls) for (const s of w.segs) {
+      const poly = segRect(s);
+      const us = [];
+      for (let i = 0; i < 4; i++) {
+        const p = poly[i], q = poly[(i + 1) % 4];
+        const wp = V.w(p) - wc, wq = V.w(q) - wc;
+        if (Math.abs(wp) < 1e-9) us.push(V.u(p));
+        if (wp * wq < 0) us.push(V.u(add(p, mul(sub(q, p), wp / (wp - wq)))));
+      }
+      if (us.length < 2) continue;
+      const ua = Math.max(Math.min(...us), cu0), ub = Math.min(Math.max(...us), cu1);
+      if (ub - ua < 1) continue;
+      const wa = V.w(s.a), wb = V.w(s.b);
+      if (Math.abs(wb - wa) < 1e-9) continue; // wall lying in the cut plane
+      const along = ((wc - wa) / (wb - wa)) * s.L;
+      const pAxis = add(s.a, mul(s.d, Math.max(0, Math.min(s.L, along))));
+      const top = wallTopAt(M, s, pAxis);
+      // a full-height wall under a floor stops at the underside of its slab
+      const topCut = next && w.height === undefined ? top - next.slab : top;
+      const op = M.openings.find((o) => o.s === s && along >= o.span.from - 0.5 && along <= o.span.to + 0.5);
+      const base = f.index === 0 ? -F.depth + F.height : 0;
+      const ranges = op ? [[base, op.type === 'window' ? op.sill : M.H.floor], [op.head, topCut]] : [[base, topCut]];
+      for (const [y0, y1] of ranges) {
+        if (y1 - y0 < 1) continue;
+        const poly2 = rectPoly(ua, z + y0, ub, z + y1);
+        cutEls.push({ depth: wc, sil: poly2, segs: segsOfPoly(poly2, L.cut) });
+        fills.push({ type: 'hatch', boundary: poly2, pattern: 'ANSI31', scale: 0.6 * scale, layer: L.cutHatch });
+      }
+      if (op) {
+        const lt = Math.min(200, topCut - op.head);
+        if (lt > 50) fills.push({ type: 'hatch', boundary: rectPoly(ua, z + op.head, ub, z + op.head + lt), pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+        if (op.type === 'window') {
+          const um = (ua + ub) / 2;
+          for (const du of [-15, 15]) fills.push({ type: 'line', from: [um + du, z + op.sill], to: [um + du, z + op.head], layer: L.glass });
+        }
+      }
+      cutWalls.push({ ua, ub, top: z + top, s, low: w.height !== undefined && w.height < M.H.top - 1 });
+      if (f.index > 0) continue;
+      // Footing under the wall: lean concrete + footing.
+      const cx = (ua + ub) / 2;
+      const fw = Math.max(F.width, ub - ua);
+      const foot = rectPoly(cx - fw / 2, -F.depth, cx + fw / 2, -F.depth + F.height);
+      cutEls.push({ depth: wc, sil: foot, segs: segsOfPoly(foot, L.cut) });
+      fills.push({ type: 'hatch', boundary: foot, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+      if (F.lean > 0) {
+        const lean = rectPoly(cx - fw / 2 - 100, -F.depth - F.lean, cx + fw / 2 + 100, -F.depth);
+        cutEls.push({ depth: wc, segs: segsOfPoly(lean, L.line) });
+        fills.push({ type: 'hatch', boundary: lean, pattern: 'AR-SAND', scale: 0.02 * scale, layer: L.cutHatch });
       }
     }
-    cutWalls.push({ ua, ub, top, s });
-    // Footing under the wall: lean concrete + footing.
-    const cx = (ua + ub) / 2;
-    const fw = Math.max(F.width, ub - ua);
-    const foot = rectPoly(cx - fw / 2, -F.depth, cx + fw / 2, -F.depth + F.height);
-    cutEls.push({ depth: wc, sil: foot, segs: segsOfPoly(foot, L.cut) });
-    fills.push({ type: 'hatch', boundary: foot, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
-    if (F.lean > 0) {
-      const lean = rectPoly(cx - fw / 2 - 100, -F.depth - F.lean, cx + fw / 2 + 100, -F.depth);
-      cutEls.push({ depth: wc, segs: segsOfPoly(lean, L.line) });
-      fills.push({ type: 'hatch', boundary: lean, pattern: 'AR-SAND', scale: 0.02 * scale, layer: L.cutHatch });
-    }
-  }
-  if (!cutWalls.length) throw new PlanError('the cut line crosses no wall: put it across the building (the plan\'s section mark)');
-  cutWalls.sort((p, q) => p.ua - q.ua);
-  const uMin = cutWalls[0].ua, uMax = cutWalls[cutWalls.length - 1].ub;
+    cutWalls.sort((p, q) => p.ua - q.ua);
+    return { f, cutWalls };
+  });
+  const cut0 = perFloor[0].cutWalls;
+  if (!cut0.length) throw new PlanError('the cut line crosses no wall: put it across the building (the plan\'s section mark)');
+  const uMin = cut0[0].ua, uMax = cut0[cut0.length - 1].ub;
 
-  // Floor slab and fill between the walls.
-  for (let i = 0; i + 1 < cutWalls.length; i++) {
-    const u0 = cutWalls[i].ub, u1 = cutWalls[i + 1].ua;
+  // Ground floor slab and fill between the walls.
+  for (let i = 0; i + 1 < cut0.length; i++) {
+    const u0 = cut0[i].ub, u1 = cut0[i + 1].ua;
     if (u1 - u0 < 10) continue;
     const slab = rectPoly(u0, H.floor - H.slab, u1, H.floor);
     cutEls.push({ depth: wc, sil: slab, segs: segsOfPoly(slab, L.cut) });
@@ -612,18 +858,64 @@ export function buildSection(spec, opts = {}) {
     }
   }
 
-  // Roof cut by the plane.
-  let roofTop = Math.max(...cutWalls.map((c) => c.top));
-  for (const R of M.roofs) {
+  // Upper floor slabs: over the walls of the floor below and this one, out over balconies, open over stairwells.
+  let uSpanLo = uMin, uSpanHi = uMax;
+  for (const { f, cutWalls } of perFloor.slice(1)) {
+    const below = perFloor[f.index - 1].cutWalls;
+    const walls2 = [...below, ...cutWalls];
+    if (!walls2.length) continue;
+    let lo = Math.min(...walls2.map((c) => c.ua)), hi = Math.max(...walls2.map((c) => c.ub));
+    (f.spec.balconies || []).forEach((bc) => {
+      const r = cutThrough([pt(bc.region[0], 'balcony'), pt(bc.region[1], 'balcony')], V, wc, -Infinity, Infinity);
+      if (!r) return;
+      lo = Math.min(lo, r[0]);
+      hi = Math.max(hi, r[1]);
+      // railing post at the free end, cut
+      const rail = num(bc.railing ?? 1100, 'railing', { positive: true });
+      for (const uEnd of [r[0], r[1]]) {
+        if (uEnd > Math.min(...walls2.map((c) => c.ua)) - 1 && uEnd < Math.max(...walls2.map((c) => c.ub)) + 1) continue;
+        const post = rectPoly(uEnd - (uEnd === r[0] ? 0 : 50), f.level, uEnd + (uEnd === r[0] ? 50 : 0), f.level + rail);
+        cutEls.push({ depth: wc, sil: post, segs: segsOfPoly(post, L.cut) });
+      }
+    });
+    const holes = [];
+    for (const st of perFloor[f.index - 1].f.spec.stairs.filter((x) => x.type === 'u')) {
+      const r = cutThrough([pt(st.region[0], 'stair'), pt(st.region[1], 'stair')], V, wc, -Infinity, Infinity);
+      if (r) holes.push(r);
+    }
+    for (const [u0, u1] of uncovered(lo, hi, holes)) {
+      const slab = rectPoly(u0, f.level - f.slab, u1, f.level);
+      cutEls.push({ depth: wc, sil: slab, segs: segsOfPoly(slab, L.cut) });
+      fills.push({ type: 'hatch', boundary: slab, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+    }
+    uSpanLo = Math.min(uSpanLo, lo);
+    uSpanHi = Math.max(uSpanHi, hi);
+  }
+
+  // Stairs going up from each floor, cut along their flights.
+  for (const { f } of perFloor) {
+    (f.spec.stairs || []).filter((st) => st.type === 'u').forEach((st, i) => {
+      const r = cutThrough([pt(st.region[0], 'stair'), pt(st.region[1], 'stair')], V, wc, -Infinity, Infinity);
+      if (!r) return;
+      const g = uStairGeom(st, f.height, `floors[${f.index}].stairs[${i}]`);
+      if (!stairSection(g, f.level, V, wc, d, cutEls, fills, scale)) notes.push(`the cut crosses the stair of ${f.name ?? 'the floor'} across its flights: drawn as the open stairwell only`);
+    });
+  }
+
+  // Roofs cut by the plane (parapets on the outer cut walls of their own floor).
+  let roofTop = Math.max(...perFloor.flatMap((p) => p.cutWalls.map((c) => c.top)));
+  const roofList = B.flatMap((f) => f.M.roofs);
+  for (const R of roofList) {
     const rf = roofElement(R, V);
     if (wc < rf.w0 - R.overhang || wc > rf.w1 + R.overhang) continue;
     const tan = Math.tan(R.pitch * DEG), tv = R.thickness / Math.cos(R.pitch * DEG);
     const u0 = Math.max(rf.u0, cu0 - R.overhang), u1 = Math.min(rf.u1, cu1 + R.overhang);
+    const own = (perFloor[R.floor ?? 0]?.cutWalls ?? cut0).filter((c) => !c.low);
     if (R.type === 'flat') {
       const slab = rectPoly(u0, R.base, u1, R.base + R.thickness);
       cutEls.push({ depth: wc, sil: slab, segs: segsOfPoly(slab, L.cut) });
       fills.push({ type: 'hatch', boundary: slab, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
-      if (R.parapet > 0) for (const cw of [cutWalls[0], cutWalls[cutWalls.length - 1]]) {
+      if (R.parapet > 0 && own.length) for (const cw of [own[0], own[own.length - 1]]) {
         const par = rectPoly(cw.ua, R.base + R.thickness, cw.ub, R.base + R.thickness + R.parapet);
         cutEls.push({ depth: wc, sil: par, segs: segsOfPoly(par, L.cut) });
         fills.push({ type: 'hatch', boundary: par, pattern: 'ANSI31', scale: 0.6 * scale, layer: L.cutHatch });
@@ -654,12 +946,12 @@ export function buildSection(spec, opts = {}) {
   // Porch: columns outside the cut walls stand on the floor slab, which runs out to their outer faces (cut when the
   // plane passes between the columns, else seen beyond), with the plinth face down to the ground.
   const edges = { lo: uMin, hi: uMax };
-  for (const side of ['lo', 'hi']) {
-    const cols = M.columns.filter((c) => (side === 'lo' ? Math.max(...c.poly.map(V.u)) < uMin : Math.min(...c.poly.map(V.u)) > uMax));
+  for (const sd of ['lo', 'hi']) {
+    const cols = M0.columns.filter((c) => (sd === 'lo' ? Math.max(...c.poly.map(V.u)) < uMin : Math.min(...c.poly.map(V.u)) > uMax));
     if (!cols.length) continue;
     const us = cols.flatMap((c) => c.poly.map(V.u)), ws = cols.flatMap((c) => c.poly.map(V.w));
-    const edge = side === 'lo' ? Math.min(...us) : Math.max(...us);
-    const [p0, p1] = side === 'lo' ? [edge, uMin] : [uMax, edge];
+    const edge = sd === 'lo' ? Math.min(...us) : Math.max(...us);
+    const [p0, p1] = sd === 'lo' ? [edge, uMin] : [uMax, edge];
     const slab = rectPoly(p0, H.floor - H.slab, p1, H.floor);
     if (wc >= Math.min(...ws) && wc <= Math.max(...ws)) {
       cutEls.push({ depth: wc, sil: slab, segs: segsOfPoly(slab, L.cut) });
@@ -671,28 +963,30 @@ export function buildSection(spec, opts = {}) {
       cutEls.push({ depth: wc + 1, segs: [{ a: [p0, H.floor], b: [p1, H.floor], layer: L.line }] });
     }
     cutEls.push({ depth: wc, segs: [{ a: [edge, H.ground], b: [edge, H.floor], layer: L.cut }] });
-    edges[side] = edge;
+    edges[sd] = edge;
   }
-  // The drawing spans the cut walls, the porch and the roofs cut by the plane (eaves overhangs).
-  const cutRoofs = M.roofs.map((R) => roofElement(R, V)).filter((rf) => wc >= rf.w0 - rf.R.overhang && wc <= rf.w1 + rf.R.overhang);
-  const uLo = Math.min(edges.lo, ...cutRoofs.map((rf) => Math.max(rf.u0, cu0 - rf.R.overhang)));
-  const uHi = Math.max(edges.hi, ...cutRoofs.map((rf) => Math.min(rf.u1, cu1 + rf.R.overhang)));
+  // The drawing spans the cut walls, the porch, the balconies and the roofs cut by the plane (eaves overhangs).
+  const cutRoofs = roofList.map((R) => roofElement(R, V)).filter((rf) => wc >= rf.w0 - rf.R.overhang && wc <= rf.w1 + rf.R.overhang);
+  const uLo = Math.min(edges.lo, uSpanLo, ...cutRoofs.map((rf) => Math.max(rf.u0, cu0 - rf.R.overhang)));
+  const uHi = Math.max(edges.hi, uSpanHi, ...cutRoofs.map((rf) => Math.min(rf.u1, cu1 + rf.R.overhang)));
 
-  // What is seen beyond the cut: wall faces, columns and their openings (thin lines), hidden by the cut parts.
-  const beyondPieces = visiblePieces(faceCandidates(M, V, wc), uLo, uHi);
+  // What is seen beyond the cut, floor by floor: wall faces, columns and their openings (thin lines).
   const beyondEls = [];
-  for (const pc of beyondPieces) {
-    const top = pc.c.top;
-    const segs = [
-      { a: [pc.u0, H.floor], b: [pc.u0, top], layer: L.line }, { a: [pc.u1, H.floor], b: [pc.u1, top], layer: L.line },
-      { a: [pc.u0, top], b: [pc.u1, top], layer: L.line },
-    ];
-    beyondEls.push({ depth: pc.depth, sil: rectPoly(pc.u0, H.floor, pc.u1, top), segs });
-    if (pc.c.kind !== 'wall') continue;
-    for (const op of M.openings.filter((o) => o.s === pc.c.s)) {
-      const ua = V.u(add(op.s.a, mul(op.s.d, op.span.from))), ub = V.u(add(op.s.a, mul(op.s.d, op.span.to)));
-      const uA = Math.max(Math.min(ua, ub), pc.u0), uB = Math.min(Math.max(ua, ub), pc.u1);
-      if (uB - uA >= 10) beyondEls.push({ depth: pc.depth - 0.01, segs: openingLines(op, uA, uB, op.sill, op.head, L.line) });
+  for (const { f } of perFloor) {
+    const M = f.M, z = f.level;
+    for (const pc of piecesByHeight(faceCandidates(M, V, wc), uLo, uHi)) {
+      const top = pc.c.top;
+      const segs = [
+        { a: [pc.u0, z + M.H.floor], b: [pc.u0, z + top], layer: L.line }, { a: [pc.u1, z + M.H.floor], b: [pc.u1, z + top], layer: L.line },
+        { a: [pc.u0, z + top], b: [pc.u1, z + top], layer: L.line },
+      ];
+      beyondEls.push({ depth: pc.depth, sil: rectPoly(pc.u0, z + M.H.floor, pc.u1, z + top), segs });
+      if (pc.c.kind !== 'wall') continue;
+      for (const op of M.openings.filter((o) => o.s === pc.c.s)) {
+        const ua = V.u(add(op.s.a, mul(op.s.d, op.span.from))), ub = V.u(add(op.s.a, mul(op.s.d, op.span.to)));
+        const uA = Math.max(Math.min(ua, ub), pc.u0), uB = Math.min(Math.max(ua, ub), pc.u1);
+        if (uB - uA >= 10) beyondEls.push({ depth: pc.depth - 0.01, segs: openingLines(op, uA, uB, z + op.sill, z + op.head, L.line) });
+      }
     }
   }
   const elements = [...beyondEls, ...cutEls].sort((p, q) => q.depth - p.depth);
@@ -700,9 +994,9 @@ export function buildSection(spec, opts = {}) {
   const Y = (y) => at[1] + y;
   const ents = [];
   for (const l of hiddenLines(elements)) ents.push({ type: 'line', from: P([X(l.a[0]), Y(l.a[1])]), to: P([X(l.b[0]), Y(l.b[1])]), layer: l.layer });
-  for (const f of fills) {
-    if (f.type === 'hatch') ents.push({ ...f, boundary: f.boundary.map((q) => P([X(q[0]), Y(q[1])])) });
-    else ents.push({ ...f, from: P([X(f.from[0]), Y(f.from[1])]), to: P([X(f.to[0]), Y(f.to[1])]) });
+  for (const fl of fills) {
+    if (fl.type === 'hatch') ents.push({ ...fl, boundary: fl.boundary.map((q) => P([X(q[0]), Y(q[1])])) });
+    else ents.push({ ...fl, from: P([X(fl.from[0]), Y(fl.from[1])]), to: P([X(fl.to[0]), Y(fl.to[1])]) });
   }
 
   // Ground outside the building.
@@ -711,34 +1005,46 @@ export function buildSection(spec, opts = {}) {
     ents.push({ type: 'hatch', boundary: [P([g0, Y(H.ground)]), P([g1, Y(H.ground)]), P([g1, Y(H.ground) - 2 * scale]), P([g0, Y(H.ground) - 2 * scale])], pattern: 'EARTH', scale: 0.15 * scale, layer: L.cutHatch });
   }
 
-  // Room names between the cut walls, above the door and window heads (seen beyond) when there is room for them.
+  // Room names between the cut walls of each floor, above the door and window heads when there is room for them.
   const roomsOut = [];
-  const headMax = Math.max(H.floor, ...M.openings.map((o) => o.head));
-  const yRoom = H.top - headMax >= 4 * 2.5 * scale ? (headMax + H.top) / 2 : H.floor + 1400;
-  for (let i = 0; i + 1 < cutWalls.length; i++) {
-    const u0 = cutWalls[i].ub, u1 = cutWalls[i + 1].ua;
-    if (u1 - u0 < 600) continue;
-    const um = (u0 + u1) / 2;
-    const pPlan = add(a, mul(V.r, um - V.u(a)));
-    const room = roomAt(M, pPlan);
-    if (!room) continue;
-    roomsOut.push(room.name);
-    ents.push({ type: 'text', text: String(room.name), at: P([X(um), Y(yRoom)]), height: 2.5 * scale, align: 'middle_center', layer: L.text, style: TEXT_STYLE });
+  for (const { f, cutWalls } of perFloor) {
+    const M = f.M, z = f.level;
+    const headMax = Math.max(M.H.floor, ...M.openings.map((o) => o.head));
+    const yRoom = M.H.top - headMax >= 2 * 2.5 * scale ? (headMax + M.H.top - (B[f.index + 1]?.slab ?? 0)) / 2 : M.H.floor + 1400;
+    const full = cutWalls.filter((c) => !c.low);
+    for (let i = 0; i + 1 < full.length; i++) {
+      const u0 = full[i].ub, u1 = full[i + 1].ua;
+      if (u1 - u0 < 600) continue;
+      const um = (u0 + u1) / 2;
+      const pPlan = add(a, mul(V.r, um - V.u(a)));
+      const room = roomAt(M, pPlan);
+      if (!room || room.label === false) continue;
+      roomsOut.push(B.length > 1 ? `${f.name}: ${room.name}` : room.name);
+      ents.push({ type: 'text', text: String(room.name), at: P([X(um), Y(z + yRoom)]), height: 2.5 * scale, align: 'middle_center', layer: L.text, style: TEXT_STYLE });
+    }
   }
 
   // Levels, height chain, grids, title.
-  const ops = M.openings.filter((o) => cutWalls.some((c) => c.s === o.s));
-  const heights = [-F.depth, H.ground, H.floor, ...ops.map((o) => o.head), H.top, roofTop];
+  let heights;
+  if (B.length === 1) {
+    const ops = M0.openings.filter((o) => cut0.some((c) => c.s === o.s));
+    heights = [-F.depth, H.ground, H.floor, ...ops.map((o) => o.head), H.top, roofTop];
+  } else {
+    heights = [-F.depth, H.ground, ...B.map((f) => f.level), Math.max(...perFloor.flatMap((p) => p.cutWalls.map((c) => c.top))), roofTop];
+  }
   const uniq = [...new Set(heights.map((x) => Math.round(x)))].sort((p, q) => p - q);
   const xr = Math.max(X(uMax) + 16 * scale, X(uHi) + 10 * scale);
-  for (const lv of uniq.filter((x) => x >= H.ground - 1)) levelMark(xr, Y(lv), fmtLevel(lv), scale, ents);
+  for (const lv of spaced(uniq.filter((x) => x >= H.ground - 1), 3.2 * scale)) levelMark(xr, Y(lv), fmtLevel(lv), scale, ents);
   ents.push({
     type: 'dim_chain', points: uniq.map((lv) => P([X(uLo), Y(lv)])), direction: 'vertical', at: P([Math.min(X(uMin) - 18 * scale, X(uLo) - 10 * scale), Y(uniq[0])]),
     style: dimStyleName(scale), layer: L.dims, total: uniq.length > 2,
   });
   const yGrid = Y(-F.depth - F.lean) - 8 * scale;
-  gridMarks(M, V, X, yGrid, scale, ents, (u) => u >= edges.lo - 1 && u <= edges.hi + 1);
+  gridMarks(M0, V, X, yGrid, scale, ents, (u) => u >= edges.lo - 1 && u <= edges.hi + 1);
   const label = opts.label ?? 'A';
   titleBlock(opts.title ?? `MẶT CẮT ${label}-${label}`, (X(uLo) + X(uHi)) / 2, yGrid - 9 * 4.5 * scale - 8 * scale, scale, ents);
-  return { entities: ents, rooms: roomsOut, levels: uniq, cut_walls: cutWalls.length, assumed: [...M.assumed, ...foundationAssumptions(spec)] };
+  return {
+    entities: ents, rooms: roomsOut, levels: uniq, cut_walls: perFloor.reduce((s2, p) => s2 + p.cutWalls.length, 0),
+    assumed: [...buildingAssumed(spec, B), ...foundationAssumptions(spec)], notes: notes.length ? notes : undefined,
+  };
 }

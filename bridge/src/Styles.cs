@@ -132,6 +132,7 @@ namespace AcadMcp
                     rec.Dimtih = false;
                     rec.Dimtoh = false;
                     rec.Dimtofl = true;
+                    rec.Dimtix = true;  // text stays between the extension lines (chains of short segments stay readable)
                     rec.Dimtmove = 2; // text moves freely, no leader
                     rec.Dimatfit = 3;
                     rec.Dimlfac = ds.Num("length_factor", 1);
@@ -165,9 +166,18 @@ namespace AcadMcp
                     }
                     mls.Scale = scale;
                     mls.TextHeight = rec.Dimtxt;
-                    mls.ArrowSize = ds.Num("leader_arrow_size", 2.5);
                     mls.TextStyleId = textStyle;
                     mls.ContentType = ContentType.MTextContent;
+                    mls.ArrowSymbolId = ArrowBlock(db, tr, ds.Str("leader_arrow") ?? "small_dot");
+                    mls.ArrowSize = ds.Num("leader_arrow_size", 1.5);
+                    mls.EnableLanding = true;
+                    mls.EnableDogleg = true;
+                    mls.DoglegLength = ds.Num("leader_landing", 3);
+                    mls.LandingGap = ds.Num("leader_gap", 1);
+                    mls.TextAttachmentDirection = TextAttachmentDirection.AttachmentHorizontal;
+                    mls.SetTextAttachmentType(TextAttachmentType.AttachmentMiddle, LeaderDirectionType.LeftLeader);
+                    mls.SetTextAttachmentType(TextAttachmentType.AttachmentMiddle, LeaderDirectionType.RightLeader);
+                    mls.LeaderLineColor = Autodesk.AutoCAD.Colors.Color.FromColorIndex(Autodesk.AutoCAD.Colors.ColorMethod.ByLayer, 256);
                     if (ds.Bool("set_current", true)) db.MLeaderstyle = mls.ObjectId;
                 }
 

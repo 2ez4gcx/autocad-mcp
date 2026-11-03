@@ -7,7 +7,8 @@
 // JN built-in joinery, FN loose furniture, SN sanitary ware, EQ equipment, LT lighting.
 import { buildModel } from './elevation.mjs';
 import { num, PlanError, pt } from './plan.mjs';
-import { dimStyleName, ROLE, TEXT_STYLE } from './standards.mjs';
+import { dimStyleName, FIELD, ROLE, TEXT_STYLE, viewTitle } from './standards.mjs';
+import { blockName, ceilingSym, LIGHT_BLOCKS, noteLeader, noteWidth, sym, tagSym } from './symbols.mjs';
 
 const r2 = (v) => Math.round(v * 100) / 100;
 const P = (p) => [r2(p[0]), r2(p[1])];
@@ -28,8 +29,98 @@ export const IL = {
   floor: ROLE.floor_hatch, ceiling: ROLE.ceiling, light: ROLE.light, strip: ROLE.light_strip, note: ROLE.note,
   elev: ROLE.elevation, elevOut: ROLE.elevation_outline, elevPatt: ROLE.elevation_hatch, cut: ROLE.section, cutPatt: ROLE.section_hatch,
   detail: ROLE.detail, detailCut: ROLE.detail_cut, detailPatt: ROLE.detail_hatch, dims: ROLE.dims, symbol: ROLE.symbol,
-  text: ROLE.text, glass: ROLE.window, room: ROLE.room_tag,
+  text: ROLE.text, glass: ROLE.window, room: ROLE.room_tag, wallFinish: ROLE.wall_finish,
 };
+
+// ---------------------------------------------------------------- general notes
+
+const NOTES = {
+  vi: {
+    common: [
+      'Kích thước ghi bằng mm, cao độ ghi bằng m, tính từ mặt sàn hoàn thiện của tầng.',
+      'Nhà thầu kiểm tra kích thước thực tế tại công trình trước khi thi công, báo lại thiết kế khi có sai khác.',
+      'Vật liệu theo mã trong bảng thống kê vật liệu hoàn thiện; mẫu vật liệu trình chủ đầu tư và thiết kế duyệt trước khi thi công.',
+    ],
+    furniture: [
+      'Đồ rời (FN) thể hiện vị trí bố trí; đồ gỗ đóng tại chỗ (JN) theo bản vẽ chi tiết đồ gỗ.',
+      'Thiết bị vệ sinh (SN), thiết bị (EQ) lắp đặt theo hướng dẫn của nhà sản xuất; chờ sẵn cấp thoát nước, điện theo vị trí thiết bị.',
+    ],
+    floor: [
+      'Gạch lát mạch 2 mm, keo chà ron màu theo mẫu duyệt; lát từ tâm phòng (ghi LÁT TỪ TÂM) hoặc từ điểm ghi trên bản vẽ.',
+      'Sàn khu vệ sinh hạ 20 mm, sân và ban công hạ 50 mm so với sàn trong nhà; chống thấm trước khi lát, dốc i=1% về phễu thu.',
+      'Nẹp chuyển tiếp inox dưới cánh cửa tại vị trí thay đổi vật liệu hoặc cao độ sàn.',
+    ],
+    wall: [
+      'Tường sơn: bả matit 2 lớp, sơn lót kháng kiềm 1 lớp, sơn phủ 2 lớp theo mã màu duyệt.',
+      'Gạch ốp tường mạch 2 mm, ốp từ mặt sàn hoàn thiện; khu vệ sinh ốp đến trần, chống thấm chân tường cao 300 trước khi ốp.',
+      'Khu bếp ốp gạch từ mặt đá bếp đến đáy tủ bếp trên.',
+    ],
+    ceiling: [
+      'Trần thạch cao khung chìm, tấm dày 9 mm; khu ẩm ướt dùng tấm chống ẩm; bả, sơn hoàn thiện như tường.',
+      'Cao độ trần tính từ mặt sàn hoàn thiện; giật cấp và khe hắt đèn theo kích thước trên bản vẽ.',
+      'Bố trí lỗ thăm trần 600x600 tại vị trí thiết bị kỹ thuật (máy lạnh, quạt hút, van).',
+    ],
+    lighting: [
+      'Vị trí đèn định vị theo tim đèn, đo từ mặt tường hoàn thiện.',
+      'Chủng loại, công suất, nhiệt độ màu của đèn theo bảng ký hiệu đèn và chỉ dẫn kỹ thuật.',
+      'Phối hợp bản vẽ điện để bố trí công tắc, ổ cắm và mạch đèn.',
+    ],
+  },
+  en: {
+    common: [
+      'Dimensions in mm, levels in m from the finished floor of the storey.',
+      'The contractor checks all dimensions on site before work and reports any difference to the designer.',
+      'Materials by the codes of the finish schedule; samples approved by the client and the designer before work.',
+    ],
+    furniture: ['Loose furniture (FN) shows the layout; built-in joinery (JN) per the joinery details.', 'Sanitary ware (SN) and equipment (EQ) installed to the maker\'s instructions, with services at their positions.'],
+    floor: ['Tile joints 2 mm, grout colour as approved; tiles set out from the room centre (CENTRED) or the point shown.', 'Wet rooms 20 mm and balconies/yards 50 mm below the indoor floor; waterproofed before tiling, falls 1% to the drains.', 'Stainless transition strips under the doors where the floor finish or level changes.'],
+    wall: ['Painted walls: 2 coats of skim, 1 alkali-resistant primer, 2 top coats in the approved colour.', 'Wall tiles 2 mm joints from the finished floor; to the ceiling in wet rooms, waterproofing 300 high before tiling.', 'Kitchen splashback tiled from the worktop to the underside of the wall cabinets.'],
+    ceiling: ['Gypsum board ceilings on concealed frames, 9 mm boards, moisture resistant in wet rooms.', 'Ceiling levels from the finished floor; steps and cove slots as dimensioned.', 'Access panels 600x600 at the services (air conditioning, extract fans, valves).'],
+    lighting: ['Lights set out at their centres from the finished wall faces.', 'Types, wattage and colour temperature per the lighting legend and the specification.', 'Switches, sockets and circuits per the electrical drawings.'],
+  },
+};
+
+/** The general notes of an interior sheet (kind: furniture, floor, wall, ceiling, lighting). */
+export function generalNotes(kind, lang = 'vi') {
+  const N = NOTES[lang] ?? NOTES.vi;
+  return [...N.common, ...(N[kind] ?? [])];
+}
+
+/** General notes as a title and one numbered mtext, width in paper mm; returns the entities. */
+export function notesBlock(lines, at, scale, lang = 'vi', width = 95) {
+  const text = lines.map((l, i) => `${i + 1}. ${l}`).join('\n');
+  return [
+    textE(lang === 'en' ? 'NOTES:' : 'GHI CHÚ:', at, 3 * scale, IL.text),
+    { type: 'mtext', text, at: P([at[0], at[1] - 5 * scale]), height: r2(2.5 * scale), width: r2(width * scale), layer: IL.text, style: TEXT_STYLE, line_spacing: 1.1 },
+  ];
+}
+
+/** Openings of the plan model on the room face e: [{ua, ub, op}] along the face frame. */
+function openingsOn(M, e, F) {
+  const out = [];
+  if (!M) return out;
+  for (const op of M.openings) {
+    const s = op.s;
+    if (Math.abs(cross(s.d, F.r)) > 0.01) continue;
+    const A = add(s.a, mul(s.d, op.span.from)), B = add(s.a, mul(s.d, op.span.to));
+    if (Math.abs(dot(sub(A, e.a), F.n)) > Math.max(Math.abs(s.o1), Math.abs(s.o2)) + 5) continue;
+    const ua = Math.max(F.u0, Math.min(F.u(A), F.u(B))), ub = Math.min(F.u1, Math.max(F.u(A), F.u(B)));
+    if (ub - ua > 10) out.push({ ua, ub, op });
+  }
+  return out;
+}
+
+/** [u0, u1] minus the gaps (sorted runs). */
+function runsBetween(u0, u1, gaps) {
+  const runs = [];
+  let u = u0;
+  for (const [a, b] of [...gaps].sort((p, q) => p[0] - q[0])) {
+    if (a > u + 1) runs.push([u, Math.min(a, u1)]);
+    u = Math.max(u, b);
+  }
+  if (u1 > u + 1) runs.push([u, u1]);
+  return runs;
+}
 
 // ---------------------------------------------------------------- entities and text
 
@@ -52,18 +143,15 @@ export function textWidth(s, h) {
   return w * h;
 }
 
-/** Code in a box (material / item tag). Returns its box [x0, y0, x1, y1]. */
-function tagBox(text, at, h, layer, out) {
-  const w = textWidth(text, h) + 1.2 * h, hh = 1.9 * h;
-  const box = [at[0] - w / 2, at[1] - hh / 2, at[0] + w / 2, at[1] + hh / 2];
-  out.push(rectE(box[0], box[1], box[2], box[3], layer));
-  out.push(textE(text, at, h, layer, 'middle_center'));
-  return box;
+/** Code in a box (material / item tag): an MCP_THE_<n> block, the code its attribute. Returns its box [x0, y0, x1, y1]. */
+function tagBox(text, at, h, layer, out, shape = 'box') {
+  const e = tagSym(text, at, h / 2, layer, shape);
+  out.push(e);
+  return e.box;
 }
 
 function title(text, x, y, sc, out, layer = IL.text) {
-  out.push(textE(text, [x, y], 5 * sc, layer, 'center'));
-  out.push(textE(`TỶ LỆ 1:${sc}`, [x, y - 7 * sc], 3 * sc, layer, 'center'));
+  out.push(...viewTitle(text, x, y, sc, layer));
 }
 
 const fmtM = (v, dec = 2) => v.toFixed(dec).replace('.', ',');
@@ -740,6 +828,37 @@ function emit(shapes, m, layerOf, out) {
   }
 }
 
+/**
+ * An item as a block insert: the plan symbol in the item's own frame (back-left corner at the origin, width along X,
+ * depth along Y), base lines on layer 0 so they take the insert's layer, hidden and glass lines on their own layers;
+ * code, name and size as attributes (counted by quantity_takeoff / count_blocks).
+ */
+function furnitureBlock(it, m, box) {
+  const shapes = it.def.plan(it.w, it.d, it.h, it.opts);
+  const base = IL[it.def.role] ?? IL.furniture;
+  const ents = [];
+  emit(shapes, (p) => p, (role) => (role === 'hidden' || it.def.overhead ? IL.hidden : role === 'glass' ? IL.glass : '0'), ents);
+  // the plan of a few kinds depends on their options: those get a short geometry hash in the name
+  const name = blockName(['NT', it.code, it.type, `${r2(it.w)}x${r2(it.d)}`], it.def.plan.length >= 4 ? JSON.stringify(shapes) : null);
+  const def = {
+    name, description: `${it.code} ${it.description ?? it.def.vi}`, entities: ents,
+    attributes: [
+      { tag: 'MA', prompt: 'Mã', at: [it.w / 2, it.d / 2], height: 100, invisible: true },
+      { tag: 'TEN', prompt: 'Tên', at: [it.w / 2, it.d / 2 - 150], height: 100, invisible: true },
+      { tag: 'KICH_THUOC', prompt: 'Kích thước RxSxC', at: [it.w / 2, it.d / 2 - 300], height: 100, invisible: true },
+    ],
+  };
+  // the frame (ex, ey) as rotation + X mirror: rotation puts the block's Y on ey, then X is ex or its reverse
+  const rot = (Math.atan2(it.ey[1], it.ey[0]) * 180) / Math.PI - 90;
+  const sx = Math.sign(dot(it.ex, [it.ey[1], -it.ey[0]])) || 1;
+  const at = m([0, 0]);
+  return {
+    type: 'block', name, def, at: P(at), rotation: r2(((rot % 360) + 360) % 360), scale: sx < 0 ? [-1, 1, 1] : 1, layer: it.def.overhead ? IL.hidden : base,
+    attributes: { MA: it.code, TEN: it.description ?? it.def.vi, KICH_THUOC: `${r2(it.w)}x${r2(it.d)}x${r2(it.h)}` },
+    box: box ?? entBox({ points: [[0, 0], [it.w, 0], [it.w, it.d], [0, it.d]].map(m) }),
+  };
+}
+
 function itemLayer(it) {
   const base = IL[it.def.role] ?? IL.furniture;
   return (role) => (role === 'hidden' || it.def.overhead ? IL.hidden : role === 'glass' ? IL.glass : base);
@@ -747,6 +866,7 @@ function itemLayer(it) {
 
 /** Bounding box [x0, y0, x1, y1] of a draw_entities spec (arcs and circles by centre and radius). */
 export function entBox(e) {
+  if (e.box) return e.box;
   const pts = [e.from, e.to, e.at, e.start, e.mid, e.end, ...(e.points || []), ...(e.boundary || [])].filter(Array.isArray);
   if (e.center && e.radius) pts.push([e.center[0] - e.radius, e.center[1] - e.radius], [e.center[0] + e.radius, e.center[1] + e.radius]);
   else if (e.center) pts.push(e.center);
@@ -807,9 +927,9 @@ export function furniturePlan(items, { offset = [0, 0], scale = 50, tags = true 
   const placed = [];
   for (const [k, it] of items.entries()) {
     const m = frameMap(it, offset);
-    emit(it.def.plan(it.w, it.d, it.h, it.opts), m, itemLayer(it), out);
+    out.push(furnitureBlock(it, m, feet[k]));
     if (!tags || it.def.overhead) continue;
-    const tw = textWidth(it.code, th) + 1.2 * th, thh = 1.9 * th;
+    const tw = tagSym(it.code, [0, 0], th / 2, IL.note, 'hex').box[2] * 2, thh = 1.9 * th;
     const quad = [[0, 0], [it.w, 0], [it.w, it.d], [0, it.d]].map(m);
     const boxAt = (c) => [c[0] - tw / 2, c[1] - thh / 2, c[0] + tw / 2, c[1] + thh / 2];
     const clear = (c, own) => !placed.some((b) => overlaps(b, boxAt(c))) && feet.every((f, j) => !f || j === k || own || !overlaps(f, boxAt(c)));
@@ -823,13 +943,17 @@ export function furniturePlan(items, { offset = [0, 0], scale = 50, tags = true 
       for (const step of [0, 1, 2]) for (const fx of [0.5, 0.25, 0.75, 0, 1]) cands.push(m([it.w * fx, it.d + 60 + ext + step * (thh + 60)]));
       loc = cands.find((c) => clear(c, false)) ?? cands[0];
     }
-    placed.push(tagBox(it.code, loc, th, IL.note, out));
+    placed.push(tagBox(it.code, loc, th, IL.note, out, 'hex'));
   }
   return out;
 }
 
 /** Elevation key: a circle with arrows to the walls A (top), B (right), C (bottom), D (left). */
-export function elevationKey(at, scale, out, labels = WALL_LABELS) {
+export function elevationKey(at, scale, out, labels = WALL_LABELS, room = '') {
+  if (labels.join('') === 'ABCD') {
+    out.push(sym('MCP_KY_HIEU_MD', at, { scale, attrs: { PHONG: String(room) }, layer: IL.symbol, half: [6.65, 6.65] }));
+    return;
+  }
   const r = 3.5 * scale;
   out.push({ type: 'circle', center: P(at), radius: r2(r), layer: IL.symbol });
   ['top', 'right', 'bottom', 'left'].forEach((side, k) => {
@@ -846,6 +970,7 @@ export function elevationKey(at, scale, out, labels = WALL_LABELS) {
 const WET = /(WC|VỆ SINH|TẮM|TOILET|BATH|WASH)/i;
 const KITCHEN = /(BẾP|KITCHEN)/i;
 const OUTDOOR = /(SÂN|HIÊN|BAN CÔNG|LÔ GIA|LOGIA|BALCONY|TERRACE|PORCH|YARD)/i;
+const STAIRS = /(CẦU THANG|STAIR)/i;
 
 /** Default finishes by the kind of room (from its name). */
 export function defaultFinish(name) {
@@ -857,6 +982,15 @@ export function defaultFinish(name) {
       skirting: null,
       wall: { code: 'WL-02', description: 'Gạch ốp tường 300x600 ốp đến trần', pattern: 'tile', size: [600, 300], height: 'ceiling' },
       ceiling: { code: 'CL-02', description: 'Trần thạch cao chống ẩm khung chìm, sơn trắng', level: 3000, drop: null },
+    };
+  }
+  if (STAIRS.test(n)) {
+    return {
+      kind: 'stair',
+      floor: { code: 'FL-04', description: 'Đá granite ốp bậc thang và chiếu nghỉ', pattern: 'none' },
+      skirting: { code: 'SK-02', description: 'Len đá granite cao 100 theo bậc', height: 100 },
+      wall: { code: 'WL-01', description: 'Sơn nước hoàn thiện màu trắng', pattern: 'paint' },
+      ceiling: null,
     };
   }
   if (OUTDOOR.test(n)) {
@@ -880,8 +1014,9 @@ export function defaultFinish(name) {
 export const BACKSPLASH = { code: 'WL-03', description: 'Gạch ốp tường bếp 600x300', pattern: 'tile', size: [600, 300] };
 
 /** Finishes of a room: the given parts over the defaults (null removes a part); assumed lists what was defaulted. */
-export function resolveFinish(name, given = {}, assumed = []) {
+export function resolveFinish(name, given = {}, assumed = [], floorHeight = null) {
   const def = defaultFinish(name);
+  if (def.ceiling && floorHeight) def.ceiling = { ...def.ceiling, level: Math.min(3000, Math.round((floorHeight - 500) / 50) * 50) };
   const out = { kind: def.kind };
   for (const part of ['floor', 'skirting', 'wall', 'ceiling']) {
     const g = given?.[part];
@@ -912,10 +1047,31 @@ const shiftPoly = (poly, o) => poly.map((p) => add(p, o));
  * Floor joints of each room with a floor finish, kept clear of the room labels, a code tag under each label and the
  * legend (finish, size, area). rooms {name: outline (plan coords)}, labels {name: label point}.
  */
-export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scale = 50, legendAt, lang = 'vi' }) {
+export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scale = 50, legendAt, lang = 'vi', spec = null, items = [] }) {
   const out = [];
   const areas = {};
-  const hLabel = 2.5 * scale, hTag = 2 * scale;
+  const assumed = [];
+  const hLabel = 2.5 * scale, hTag = 2 * scale, hSub = 1.8 * scale;
+  const M = spec?.walls?.length ? buildModel(spec) : null;
+  const roomAt = (p) => Object.entries(rooms).find(([, poly]) => inside(p, poly))?.[0];
+  // Doors between rooms: a transition strip where the finish or the level changes; door centres per room (drains go
+  // to the far side of the room).
+  const doorsOf = {};
+  let strips = 0;
+  for (const op of M?.openings ?? []) {
+    if (op.type === 'window') continue;
+    const s = op.s, n = [-s.d[1], s.d[0]];
+    const mid = (s.o1 + s.o2) / 2, t = Math.abs(s.o2 - s.o1);
+    const at = (along, off) => add(add(s.a, mul(s.d, along)), mul(n, off));
+    const c = at((op.span.from + op.span.to) / 2, mid);
+    const ra = roomAt(add(c, mul(n, t / 2 + 150))), rb = roomAt(add(c, mul(n, -t / 2 - 150)));
+    for (const r of [ra, rb]) if (r) (doorsOf[r] = doorsOf[r] || []).push(c);
+    const fa = ra && finishes[ra]?.floor, fb = rb && finishes[rb]?.floor;
+    if (!fa || !fb || (fa.code === fb.code && finishes[ra].kind === finishes[rb].kind)) continue;
+    const strip = [at(op.span.from, mid - 12.5), at(op.span.to, mid - 12.5), at(op.span.to, mid + 12.5), at(op.span.from, mid + 12.5)].map((p) => add(p, offset));
+    out.push(polyE(strip, true, IL.floor), { type: 'hatch', boundary: strip.map(P), pattern: 'SOLID', layer: IL.floor });
+    strips++;
+  }
   for (const [name, poly0] of Object.entries(rooms)) {
     const f = finishes[name]?.floor;
     if (!f) continue;
@@ -923,6 +1079,20 @@ export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scal
     const at = add(labels[name] ?? centroid(poly0), offset);
     const masks = [labelBox(name, at, hLabel)];
     const tagAt = [at[0], at[1] - 1.75 * hLabel - 0.4 * hTag - 0.95 * hTag];
+    // under the tag: how the tiles are set out and, in wet rooms and outdoors, the drop and the fall
+    const kind = finishes[name]?.kind;
+    const drop = kind === 'wet' ? 20 : kind === 'outdoor' ? 50 : 0;
+    const subs = [];
+    if (f.pattern === 'tile' && (f.start === undefined || f.start === 'center')) subs.push(lang === 'en' ? 'CENTRED' : 'LÁT TỪ TÂM');
+    if (drop) {
+      subs.push(lang === 'en' ? `-${drop} FALL 1%` : `HẠ ${drop}, i=1%`);
+      assumed.push({ item: `${name}.floor.drop`, value: drop, note: 'below the indoor floor, falls 1% to a floor drain' });
+    }
+    const subAt = [tagAt[0], tagAt[1] - 1.9 * hTag];
+    if (subs.length) {
+      const sw = textWidth(subs.join(' - '), hSub);
+      masks.push([subAt[0] - sw / 2 - hSub * 0.3, subAt[1] - hSub, subAt[0] + sw / 2 + hSub * 0.3, subAt[1] + hSub]);
+    }
     if (f.pattern === 'tile' || f.pattern === 'plank') {
       const size = f.size ?? (f.pattern === 'plank' ? [900, 150] : [600, 600]);
       const angle = num(f.angle ?? 0, `${name}.floor.angle`);
@@ -939,12 +1109,37 @@ export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scal
       out.push({ type: 'hatch', boundary: poly.map(P), pattern: f.pattern, scale: f.hatch_scale ?? scale * 0.5, layer: IL.floor });
     }
     if (inside(tagAt, poly)) tagBox(f.code, tagAt, hTag, IL.note, out);
+    if (subs.length && inside(subAt, poly)) out.push(textE(subs.join(' - '), subAt, hSub, IL.note, 'middle_center'));
+    if (drop) {
+      // a floor drain (in the shower, else towards the far side from the door) and the fall arrow to it
+      const shower = items.find((it) => it.type === 'shower' && it.room === name);
+      const c0 = centroid(poly0);
+      let drain;
+      if (shower) drain = frameMap(shower)([shower.w / 2, shower.d / 2]);
+      else {
+        const door = (doorsOf[name] || [])[0] ?? c0;
+        const far = poly0.reduce((m, p) => (len(sub(p, door)) > len(sub(m, door)) ? p : m));
+        drain = add(far, mul(sub(c0, far), 0.3));
+      }
+      out.push(sym('MCP_PHEU_THU', add(drain, offset), { attrs: { MA: lang === 'en' ? 'FD' : 'PT' }, layer: IL.fixture, half: [75, 75] }));
+      const toward = unit(sub(c0, drain));
+      const tail = add(drain, mul(toward, 12 * scale + 120));
+      if (inside(tail, poly0)) {
+        // arrow from the tail to the drain; the text kept upright (head at the start when it points left)
+        const ang = (Math.atan2(-toward[1], -toward[0]) * 180) / Math.PI;
+        const upright = Math.cos((ang * Math.PI) / 180) >= -1e-9;
+        out.push(upright
+          ? sym('MCP_DOC', add(tail, offset), { scale, rotation: r2(ang), attrs: { I: 'i=1%' }, layer: IL.note })
+          : sym('MCP_DOC_NGUOC', add(add(drain, mul(toward, 120)), offset), { scale, rotation: r2(ang + 180), attrs: { I: 'i=1%' }, layer: IL.note }));
+      }
+    }
     const a = Math.abs(polyArea(poly0)) / 1e6;
     areas[f.code] = areas[f.code] || { code: f.code, description: f.description, pattern: f.pattern, size: f.size, area_m2: 0, rooms: [] };
     areas[f.code].area_m2 += a;
     areas[f.code].rooms.push(name);
   }
   const legend = Object.values(areas).map((x) => ({ ...x, area_m2: r2(x.area_m2) }));
+  let legendBottom = null;
   if (legendAt) {
     let y = legendAt[1];
     out.push(textE(lang === 'en' ? 'FLOOR FINISHES' : 'CHÚ THÍCH VẬT LIỆU SÀN', [legendAt[0], y], 3 * scale, IL.text));
@@ -961,11 +1156,151 @@ export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scal
       out.push(textE(`${fmtM(row.area_m2)} m²  (${row.rooms.join(', ')})`, [sw[2] + 3 * scale, y - 9 * scale], 2 * scale, IL.note));
       y -= 17 * scale;
     }
+    // the symbols of the plan
+    const keys = [];
+    if (strips) keys.push(['strip', lang === 'en' ? 'Stainless transition strip' : 'Nẹp chuyển tiếp inox']);
+    if (out.some((e) => e.name === 'MCP_PHEU_THU')) keys.push(['drain', lang === 'en' ? 'Floor drain, fall 1% to it' : 'Phễu thu sàn, dốc i=1% về phễu']);
+    for (const [k, label] of keys) {
+      const p = [legendAt[0] + 10 * scale, y - 4 * scale];
+      if (k === 'strip') {
+        const r = [[p[0] - 8 * scale, p[1] - 0.6 * scale], [p[0] + 8 * scale, p[1] - 0.6 * scale], [p[0] + 8 * scale, p[1] + 0.6 * scale], [p[0] - 8 * scale, p[1] + 0.6 * scale]];
+        out.push(polyE(r, true, IL.floor), { type: 'hatch', boundary: r.map(P), pattern: 'SOLID', layer: IL.floor });
+      } else out.push(sym('MCP_PHEU_THU', p, { scale: scale / 50, attrs: { MA: 'PT' }, layer: IL.fixture }));
+      out.push(textE(label, [legendAt[0] + 23 * scale, p[1]], 2.5 * scale, IL.note, 'middle_left'));
+      y -= 9 * scale;
+    }
+    legendBottom = y;
   }
-  return { entities: out, legend };
+  return { entities: out, legend, assumed, legendBottom };
+}
+
+// ---------------------------------------------------------------- wall finish plan
+
+/**
+ * Wall finish plan: along the inside face of every wall of a room a band of its finish (one line for paint, two lines
+ * with the tile joints for tiles), broken at the doors and windows; the kitchen splashback behind the base cabinets;
+ * per room a code tag with the tiling height; the legend with the area of each finish (openings deducted).
+ */
+export function wallFinishPlan({ spec, rooms, finishes, items = [], labels = {}, offset = [0, 0], scale = 50, legendAt, lang = 'vi' }) {
+  const out = [];
+  const M = spec?.walls?.length ? buildModel(spec) : null;
+  const d1 = 1.5 * scale, d2 = 2.6 * scale, hTag = 2 * scale, hLabel = 2.5 * scale;
+  // door swings (both sides of every door): the tags keep clear of them
+  const swings = (M?.openings ?? []).filter((op) => op.type !== 'window').map((op) => {
+    const s = op.s, n = [-s.d[1], s.d[0]], w = op.span.to - op.span.from;
+    const pts = [op.span.from, op.span.to].flatMap((a) => [-w, w].map((k) => add(add(add(s.a, mul(s.d, a)), mul(n, k)), offset)));
+    return [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
+  });
+  const L = IL.wallFinish;
+  const band = (F, inw, u0, u1, d, extra) => {
+    const p = (u, k) => add(add(add(F.left, mul(F.r, u - F.u0)), mul(inw, k)), offset);
+    out.push(lineE(p(u0, d), p(u1, d), L, extra));
+    return p;
+  };
+  for (const [name, poly0] of Object.entries(rooms)) {
+    const f = finishes[name]?.wall;
+    if (!f) continue;
+    const tile = f.pattern === 'tile';
+    const size = f.size ?? [600, 300];
+    const faces = [];
+    for (const e of edgesOf(poly0)) {
+      if (e.L < 200) continue;
+      const F = wallFrame(e);
+      const mid0 = add(e.a, mul(e.t, e.L / 2));
+      const inw = inside(add(mid0, mul(e.n, -20)), poly0) ? mul(e.n, -1) : e.n;
+      const gaps = openingsOn(M, e, F).map((o) => [o.ua, o.ub]);
+      for (const [u0, u1] of runsBetween(F.u0, F.u1, gaps)) {
+        if (u1 - u0 < d2) continue;
+        // stop short of the corners so the bands of two walls do not cross
+        const a = u0 + (u0 - F.u0 < 1 ? d2 : 0), b = u1 - (F.u1 - u1 < 1 ? d2 : 0);
+        if (b - a < 50) continue;
+        const p = band(F, inw, a, b, d1);
+        if (tile) {
+          band(F, inw, a, b, d2);
+          // joints along the wall, from the corner
+          for (let u = F.u0 + size[0]; u < b - 1; u += size[0]) if (u > a + 1) out.push(lineE(p(u, d1), p(u, d2), L));
+        } else {
+          // paint: short ticks across the line every 6 mm of paper, so the band reads at a glance
+          for (let u = a + 3 * scale; u < b - scale; u += 6 * scale) out.push(lineE(p(u, d1 - 0.5 * scale), p(u, d1 + 0.5 * scale), L));
+        }
+      }
+      faces.push({ e, F, inw });
+    }
+    faces.sort((p, q) => q.e.L - p.e.L);
+    const best = faces[0] ?? null;
+    // the splashback behind the base cabinets of the room
+    for (const it of items.filter((x) => x.type === 'kitchen_base' && x.room === name)) {
+      for (const e of edgesOf(poly0)) {
+        const F = wallFrame(e);
+        if (dot(it.ey, F.n) > -0.99) continue;
+        const back = dot(sub(it.o, e.a), F.n);
+        if (back > 10 || back < -600) continue;
+        const inw = mul(F.n, -1);
+        const ua = Math.max(F.u0, Math.min(F.u(it.o), F.u(add(it.o, mul(it.ex, it.w))))), ub = Math.min(F.u1, Math.max(F.u(it.o), F.u(add(it.o, mul(it.ex, it.w)))));
+        if (ub - ua < 100) continue;
+        const d3 = 3.2 * scale;
+        const p = band(F, inw, ua, ub, d3);
+        for (let u = ua + 300; u < ub - 1; u += 300) out.push(lineE(p(u, d2 + 0.2 * scale), p(u, d3), L));
+        out.push(tagSym(BACKSPLASH.code, add(p((ua + ub) / 2, d3 + 3 * scale), [0, 0]), scale, IL.note));
+      }
+    }
+    if (!best) continue;
+    // the tag on the longest wall, clear of the room name; the tiling height under it
+    const lab = add(labels[name] ?? centroid(poly0), offset);
+    const lbox = labelBox(name, lab, hLabel);
+    // on the longest wall clear of the name and the door swings, else on the next longest
+    let tagAt = null;
+    for (const fc of faces) {
+      for (const k of [0.5, 0.3, 0.7, 0.15, 0.85, 0.4, 0.6, 0.22, 0.78]) {
+        const u = fc.F.u0 + (fc.F.u1 - fc.F.u0) * k;
+        const c = add(add(add(fc.F.left, mul(fc.F.r, u - fc.F.u0)), mul(fc.inw, d2 + 4 * scale)), offset);
+        const tb = [c[0] - 6 * scale, c[1] - 5 * scale, c[0] + 6 * scale, c[1] + 3 * scale];
+        if (!overlaps(tb, lbox) && !swings.some((sb) => overlaps(tb, sb)) && inside(sub(c, offset), poly0)) {
+          tagAt = c;
+          break;
+        }
+      }
+      if (tagAt) break;
+    }
+    tagAt = tagAt ?? add(add(add(best.F.left, mul(best.F.r, (best.F.u1 - best.F.u0) / 2)), mul(best.inw, d2 + 4 * scale)), offset);
+    out.push(tagSym(f.code, tagAt, scale, IL.note));
+    const h = f.height === undefined || f.height === 'ceiling' ? (lang === 'en' ? 'TO CEILING' : 'ĐẾN TRẦN') : `${lang === 'en' ? 'H=' : 'CAO '}${f.height}`;
+    if (tile) out.push(textE(`${lang === 'en' ? 'TILED' : 'ỐP'} ${h}`, [tagAt[0], tagAt[1] - 3.2 * scale], 1.8 * scale, IL.note, 'middle_center'));
+  }
+  // legend: the wall rows of the schedule (areas with the openings and the splashback deducted)
+  const sched = materialSchedule({ spec, rooms, finishes, items, lang });
+  const legend = sched.rows.filter((r) => r.code.startsWith('WL')).map((r) => ({ code: r.code, description: r.description, area_m2: r.qty, rooms: r.rooms }));
+  let legendBottom = null;
+  if (legendAt) {
+    let y = legendAt[1];
+    out.push(textE(lang === 'en' ? 'WALL FINISHES' : 'CHÚ THÍCH VẬT LIỆU TƯỜNG', [legendAt[0], y], 3 * scale, IL.text));
+    y -= 9 * scale;
+    for (const row of legend) {
+      const tiled = Object.values(finishes).some((x) => x.wall?.code === row.code && x.wall.pattern === 'tile') || row.code === BACKSPLASH.code;
+      const x0 = legendAt[0], x1 = legendAt[0] + 16 * scale;
+      out.push(lineE([x0, y], [x1, y], L));
+      if (tiled) {
+        out.push(lineE([x0, y - scale], [x1, y - scale], L));
+        for (let x = x0 + 4 * scale; x < x1; x += 4 * scale) out.push(lineE([x, y], [x, y - scale], L));
+      }
+      out.push(tagSym(row.code, [x1 + 7 * scale, y - 0.5 * scale], scale, IL.note));
+      out.push(textE(row.description, [x1 + 15 * scale, y + 1 * scale], 2.5 * scale, IL.note, 'middle_left'));
+      out.push(textE(`${fmtM(row.area_m2)} m²  (${row.rooms})`, [x1 + 15 * scale, y - 3 * scale], 2 * scale, IL.note, 'middle_left'));
+      y -= 11 * scale;
+    }
+    legendBottom = y;
+  }
+  return { entities: out, legend, legendBottom };
 }
 
 // ---------------------------------------------------------------- reflected ceiling plan
+
+/** A drop band needs room: a room narrower than two bands and 1.2 m keeps a flat ceiling. */
+function tooNarrow(drop, poly) {
+  if (!drop) return false;
+  const xs = poly.map((q) => q[0]), ys = poly.map((q) => q[1]);
+  return Math.min(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) < 2 * drop.width + 1200;
+}
 
 export const LIGHTS = {
   downlight: { code: 'LT-01', vi: 'Đèn downlight âm trần Ø90' },
@@ -975,17 +1310,8 @@ export const LIGHTS = {
 };
 
 function lightSymbol(kind, p, out) {
-  if (kind === 'downlight') {
-    out.push({ type: 'circle', center: P(p), radius: 75, layer: IL.light });
-    out.push(lineE([p[0] - 115, p[1]], [p[0] + 115, p[1]], IL.light), lineE([p[0], p[1] - 115], [p[0], p[1] + 115], IL.light));
-  } else if (kind === 'ceiling_lamp') {
-    out.push({ type: 'circle', center: P(p), radius: 250, layer: IL.light }, { type: 'circle', center: P(p), radius: 170, layer: IL.light });
-    out.push(lineE([p[0] - 320, p[1]], [p[0] + 320, p[1]], IL.light), lineE([p[0], p[1] - 320], [p[0], p[1] + 320], IL.light));
-  } else if (kind === 'pendant') {
-    out.push({ type: 'circle', center: P(p), radius: 200, layer: IL.light });
-    const k = 200 * Math.SQRT1_2;
-    out.push(lineE([p[0] - k, p[1] - k], [p[0] + k, p[1] + k], IL.light), lineE([p[0] - k, p[1] + k], [p[0] + k, p[1] - k], IL.light));
-  }
+  const b = LIGHT_BLOCKS[kind];
+  if (b) out.push(sym(b.name, p, { attrs: { MA: LIGHTS[kind].code }, layer: IL.light, half: [b.half, b.half] }));
 }
 
 /** Points along a closed outline, about one per spacing on each edge, none at the corners. */
@@ -1000,11 +1326,9 @@ function alongEdges(poly, spacing) {
 
 /** Two-line ceiling tag: code over level, boxed. Returns the box. */
 function ceilingTag(code, level, at, h, out) {
-  const w = Math.max(textWidth(code, h), textWidth(level, h)) + 1.2 * h;
-  const box = [at[0] - w / 2, at[1] - 1.9 * h, at[0] + w / 2, at[1] + 1.9 * h];
-  out.push(rectE(box[0], box[1], box[2], box[3], IL.note), lineE([box[0], at[1]], [box[2], at[1]], IL.note));
-  out.push(textE(code, [at[0], at[1] + 0.95 * h], h, IL.note, 'middle_center'), textE(level, [at[0], at[1] - 0.95 * h], h, IL.note, 'middle_center'));
-  return box;
+  const e = ceilingSym(code, level, at, h / 2, IL.note);
+  out.push(e);
+  return e.box;
 }
 
 const fmtLevel = (mm) => (Math.abs(mm) < 0.5 ? '±0.000' : `${mm > 0 ? '+' : '-'}${(Math.abs(mm) / 1000).toFixed(3)}`);
@@ -1014,12 +1338,23 @@ const fmtLevel = (mm) => (Math.abs(mm) < 0.5 ? '±0.000' : `${mm > 0 ? '+' : '-'
  * downlights in the band (or a grid when there is no band), a ceiling lamp in the middle (a pendant over a dining
  * table), level tags, the room name; then the light legend with counts.
  */
-export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scale = 50, spacing = 1200, legendAt, lang = 'vi' }) {
+export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scale = 50, spacing = 1200, legendAt, lang = 'vi', mode = 'both' }) {
   const out = [], warnings = [];
   const counts = {};
+  const finishOnly = mode === 'finish', lightsOnly = mode === 'lighting';
   const count = (kind, n = 1) => {
     counts[kind] = (counts[kind] ?? 0) + n;
   };
+  // the lights are left out of the ceiling finish plan, the level tags out of the lighting plan
+  const light = (kind, p) => {
+    if (finishOnly) return;
+    lightSymbol(kind, p, out);
+    count(kind);
+  };
+  const levelTag = (...a) => {
+    if (!lightsOnly) ceilingTag(...a);
+  };
+  const areas = {};
   const hName = 2.5 * scale, hTag = 2 * scale;
   for (const [name, poly0] of Object.entries(rooms)) {
     const c = finishes[name]?.ceiling;
@@ -1027,11 +1362,18 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
     const ctr = centroid(poly);
     if (!c) {
       out.push(textE(name, ctr, hName, IL.room, 'middle_center'));
-      out.push(textE(lang === 'en' ? '(open to the sky)' : '(không trần)', [ctr[0], ctr[1] - 1.8 * hName], 2 * scale, IL.note, 'middle_center'));
+      const stairWell = finishes[name]?.kind === 'stair';
+      const why = stairWell ? (lang === 'en' ? '(stairwell)' : '(giếng thang)') : (lang === 'en' ? '(open to the sky)' : '(không trần)');
+      out.push(textE(why, [ctr[0], ctr[1] - 1.8 * hName], 2 * scale, IL.note, 'middle_center'));
       continue;
     }
     const level = num(c.level ?? 3000, `${name}.ceiling.level`);
-    const drop = c.drop;
+    const ar = areas[c.code] = areas[c.code] ?? { code: c.code, description: c.description, levels: new Set(), area: 0, rooms: [] };
+    ar.area += Math.abs(polyArea(poly)) / 1e6;
+    ar.rooms.push(name);
+    const narrow = tooNarrow(c.drop, poly);
+    if (narrow) warnings.push(`${name}: narrower than ${2 * c.drop.width + 1200}: flat ceiling without the drop band`);
+    const drop = narrow ? null : c.drop;
     let field = poly;
     if (drop) {
       const inner = offsetPoly(poly, drop.width);
@@ -1043,16 +1385,24 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
           const cove = offsetPoly(poly, drop.width + 80);
           if (cove) {
             out.push(polyE(cove, true, IL.strip, HID));
-            counts.strip_m = (counts.strip_m ?? 0) + perimeter(cove) / 1000;
+            if (!finishOnly) counts.strip_m = (counts.strip_m ?? 0) + perimeter(cove) / 1000;
           }
         }
         const mid = offsetPoly(poly, drop.width / 2);
-        for (const p of alongEdges(mid, spacing)) {
-          lightSymbol('downlight', p, out);
-          count('downlight');
-        }
+        for (const p of alongEdges(mid, spacing)) light('downlight', p);
         const corner = mid.reduce((m, p) => (p[0] + p[1] < m[0] + m[1] ? p : m));
-        ceilingTag(c.code, fmtLevel(level - drop.depth), corner, hTag * 0.8, out);
+        levelTag(c.code, fmtLevel(level - drop.depth), corner, hTag * 0.8, out);
+        ar.levels.add(fmtLevel(level - drop.depth));
+        if (!lightsOnly) {
+          // the band width, dimensioned from the wall face at the middle of the longest wall
+          const e = edgesOf(poly).reduce((m, x) => (x.L > m.L ? x : m));
+          const m0 = add(e.a, mul(e.t, e.L * 0.62));
+          const inw = inside(add(m0, mul(e.n, -20)), poly) ? mul(e.n, -1) : e.n;
+          out.push({
+            type: 'dim', kind: 'aligned', from: P(m0), to: P(add(m0, mul(inw, drop.width))), offset: r2(-6 * scale),
+            style: dimStyleName(scale), layer: IL.dims,
+          });
+        }
       }
     }
     const fc = centroid(field);
@@ -1066,9 +1416,8 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
         for (let j = 0; j < ny; j++) {
           const p = [Math.min(...xs) + ((i + 0.5) * bw) / nx, Math.min(...ys) + ((j + 0.5) * bh) / ny];
           if (inside(p, field)) {
-            lightSymbol('downlight', p, out);
-            count('downlight');
-            gridLights.push(p);
+            light('downlight', p);
+            if (!finishOnly) gridLights.push(p);
           }
         }
       }
@@ -1079,40 +1428,57 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
     if (tables.length) {
       for (const t of tables) {
         const p = add(frameMap(t, offset)([t.w / 2, t.d / 2]), [0, 0]);
-        lightSymbol('pendant', p, out);
-        count('pendant');
-        lamp = lamp ?? p;
+        light('pendant', p);
+        if (!finishOnly) lamp = lamp ?? p;
       }
-    } else if (drop && field !== poly && c.center_light !== false) {
+    } else if (drop && field !== poly && c.center_light !== false && !finishOnly) {
       lamp = fc;
-      lightSymbol('ceiling_lamp', fc, out);
-      count('ceiling_lamp');
+      light('ceiling_lamp', fc);
     }
     // name above and level tag below the middle light (or between the grid lights)
     const clear = lamp ? 420 : gridLights.some((g) => Math.abs(g[0] - fc[0]) < 700 && Math.abs(g[1] - fc[1]) < 300) ? 260 : 0;
     const nameAt = [fc[0], fc[1] + clear + 0.9 * hName];
     out.push(textE(name, inside(nameAt, field) ? nameAt : fc, hName, IL.room, 'middle_center'));
     const tagAt = [fc[0], fc[1] - clear - 2.2 * hTag];
-    ceilingTag(c.code, fmtLevel(level), inside(tagAt, field) ? tagAt : [fc[0], fc[1] - 2.2 * hTag], hTag, out);
+    levelTag(c.code, fmtLevel(level), inside(tagAt, field) ? tagAt : [fc[0], fc[1] - 2.2 * hTag], hTag, out);
+    ar.levels.add(fmtLevel(level));
   }
   const lights = [];
   for (const kind of ['downlight', 'ceiling_lamp', 'pendant']) {
     if (counts[kind]) lights.push({ kind, code: LIGHTS[kind].code, description: LIGHTS[kind].vi, unit: lang === 'en' ? 'pcs' : 'cái', qty: counts[kind] });
   }
   if (counts.strip_m) lights.push({ kind: 'strip', code: LIGHTS.strip.code, description: LIGHTS.strip.vi, unit: 'm', qty: r2(counts.strip_m) });
+  let legendBottom = null;
   if (legendAt) {
     let y = legendAt[1];
-    out.push(textE(lang === 'en' ? 'LIGHTING LEGEND' : 'KÝ HIỆU ĐÈN', [legendAt[0], y], 3 * scale, IL.text));
-    y -= 9 * scale;
-    for (const l of lights) {
+    if (!lightsOnly) {
+      // ceiling finishes: code, description, levels and area
+      out.push(textE(lang === 'en' ? 'CEILING FINISHES' : 'CHÚ THÍCH VẬT LIỆU TRẦN', [legendAt[0], y], 3 * scale, IL.text));
+      y -= 9 * scale;
+      for (const a of Object.values(areas)) {
+        out.push(tagSym(a.code, [legendAt[0] + 6 * scale, y], scale, IL.note));
+        out.push(textE(`${a.description}`, [legendAt[0] + 14 * scale, y + 1.5 * scale], 2.5 * scale, IL.note, 'middle_left'));
+        out.push(textE(`${lang === 'en' ? 'levels' : 'cao độ'} ${[...a.levels].join(', ')}; ${fmtM(a.area)} m² (${a.rooms.join(', ')})`, [legendAt[0] + 14 * scale, y - 2.5 * scale], 2 * scale, IL.note, 'middle_left'));
+        y -= 10 * scale;
+      }
+      y -= 4 * scale;
+    }
+    // lights with their counts (not on the ceiling finish plan)
+    for (const l of finishOnly ? [] : [{ title: true }, ...lights]) {
+      if (l.title) {
+        out.push(textE(lang === 'en' ? 'LIGHTING LEGEND' : 'KÝ HIỆU ĐÈN', [legendAt[0], y], 3 * scale, IL.text));
+        y -= 9 * scale;
+        continue;
+      }
       const p = [legendAt[0] + 5 * scale, y];
-      if (l.kind === 'strip') out.push(lineE([p[0] - 5 * scale, p[1]], [p[0] + 5 * scale, p[1]], IL.strip, HID));
+      if (l.kind === 'strip') out.push(sym(LIGHT_BLOCKS.strip.name, p, { scale: scale / 100, attrs: { MA: LIGHTS.strip.code }, layer: IL.strip }));
       else lightSymbol(l.kind, p, out);
       out.push(textE(`${l.code}  ${l.description}: ${l.kind === 'strip' ? fmtM(l.qty, 1) : l.qty} ${l.unit}`, [p[0] + 9 * scale, p[1]], 2.5 * scale, IL.note, 'middle_left'));
       y -= 9 * scale;
     }
+    legendBottom = y;
   }
-  return { entities: out, lights, warnings };
+  return { entities: out, lights: finishOnly ? null : lights, warnings, legendBottom };
 }
 
 // ---------------------------------------------------------------- interior elevation
@@ -1174,7 +1540,7 @@ export function interiorElevation({ spec, room, poly, finish, items = [], wall, 
   const W = F.u1 - F.u0;
   const c = finish.ceiling;
   const level = c ? num(c.level ?? 3000, 'ceiling.level') : M.H.top;
-  const drop = c?.drop ?? null;
+  const drop = c?.drop && !tooNarrow(c.drop, poly) ? c.drop : null;
   const low = drop ? level - drop.depth : level;
   const slab = M.H.slab ?? 100;
   // the end walls: the edges before and after this face (which is left depends on the viewing direction)
@@ -1219,7 +1585,8 @@ export function interiorElevation({ spec, room, poly, finish, items = [], wall, 
   const occ = [];
   const itemSegs = [];
   for (const s of seen) {
-    const lay = (role) => (role === 'glass' ? IL.glass : role === 'hidden' ? IL.hidden : IL.elev);
+    const own = IL[s.it.def.role] ?? IL.furniture;
+    const lay = (role) => (role === 'glass' ? IL.glass : role === 'hidden' ? IL.hidden : own);
     for (const sh of s.shapes) {
       const layer = lay(sh.role);
       if (sh.k === 'l' || sh.k === 'pl') {
@@ -1320,7 +1687,8 @@ export function interiorElevation({ spec, room, poly, finish, items = [], wall, 
   const xDim = X(F.u0) - tl - 8 * scale;
   out.push({ type: 'dim_chain', points: zs.map((z) => P([X(F.u0) - tl, Y(z)])), direction: 'vertical', at: P([xDim, Y(0)]), total: zs.length > 2, gap: 12 * scale, style: dimStyleName(scale), layer: IL.dims });
 
-  // Material notes in a column on the right, leaders to the element, ordered from the top.
+  // Material notes: code boxes with a short description in a row above the elevation (floor and skirting under it),
+  // dashed multileaders down (up) to the element.
   const freeAt = (zs2) => {
     for (const z of zs2) {
       for (let k = 1; k < 10; k++) {
@@ -1330,33 +1698,98 @@ export function interiorElevation({ spec, room, poly, finish, items = [], wall, 
     }
     return [F.u0 + W / 2, zs2[0]];
   };
-  if (c) notes.push({ text: `${c.code} ${c.description}`, target: drop ? [F.u0 + drop.width / 2, (low + level) / 2] : [F.u0 + W * 0.3, level] });
-  if (wf) notes.push({ text: `${wf.code} ${wf.description}`, target: freeAt([low * 0.62, low * 0.8, low * 0.45]) });
-  if (splash) notes.push({ text: `${BACKSPLASH.code} ${BACKSPLASH.description}`, target: [(splash[0] + splash[2]) / 2 + 150, (splash[1] + splash[3]) / 2] });
-  for (const s of seen) notes.push({ text: `${s.it.code} ${s.it.description}`, target: [(s.box[0] + s.box[2]) / 2, (s.box[1] + s.box[3]) / 2] });
-  if (sk) notes.push({ text: `${sk.code} ${sk.description}`, target: freeAt([skH / 2]) });
-  if (finish.floor) notes.push({ text: `${finish.floor.code} ${finish.floor.description}`, target: [F.u0 + W * 0.15, 0] });
-  const hN = 2.5 * scale, gapN = 2.6 * hN;
-  const xN = X(F.u1) + tr + 12 * scale;
-  notes.sort((p, q) => q.target[1] - p.target[1]);
-  let yPrev = Infinity;
-  for (const n of notes) {
-    const y = Math.min(Y(n.target[1]), yPrev - gapN);
-    yPrev = y;
-    const tgt = [X(n.target[0]), Y(n.target[1])];
-    out.push({ type: 'circle', center: P(tgt), radius: r2(0.6 * scale), layer: IL.note });
-    out.push(polyE([tgt, [xN - 4 * scale, y], [xN - 1 * scale, y]], false, IL.note));
-    out.push(textE(n.text, [xN, y], hN, IL.note, 'middle_left'));
-  }
-  const notesW = Math.max(0, ...notes.map((n) => textWidth(n.text, hN)));
+  const note = (m, target, below = false) => notes.push({ code: m.code, desc: shortDesc(m.description), target, below });
+  if (c) note(c, drop ? [F.u0 + drop.width / 2, (low + level) / 2] : [F.u0 + W * 0.3, level]);
+  if (wf) note(wf, freeAt([low * 0.62, low * 0.8, low * 0.45]));
+  if (splash) note(BACKSPLASH, [(splash[0] + splash[2]) / 2 + 150, (splash[1] + splash[3]) / 2]);
+  for (const s of seen) note({ code: s.it.code, description: s.it.description }, [(s.box[0] + s.box[2]) / 2, (s.box[1] + s.box[3]) / 2]);
+  if (sk) note(sk, freeAt([skH / 2]), true);
+  if (finish.floor) note(finish.floor, [F.u0 + W * 0.15, 0], true);
+  const rows = layoutTags(notes, {
+    X, Y, top: Y(level + 100) + 4 * scale, bottom: yDim - (us.length > 2 ? 17 : 5) * scale, x0: X(F.u0) - tl, x1: X(F.u1) + tr, scale, out,
+  });
   const lbl = label ?? String(wall).toUpperCase();
-  const titleY = Math.min(yDim - 20 * scale, yPrev - 10 * scale);
+  const titleY = rows.bottomY - 8 * scale;
   title(lang === 'en' ? `ELEVATION ${lbl} - ${room}` : `MẶT ĐỨNG ${lbl} - ${room}`, (X(F.u0) + X(F.u1)) / 2, titleY, scale, out);
   return {
     entities: out,
-    extent: { min: [xDim - 18 * scale, titleY - 10 * scale], max: [xN + notesW + 2 * scale, Y(level + 100)] },
+    extent: { min: [Math.min(xDim - 18 * scale, rows.minX), titleY - 10 * scale], max: [Math.max(X(F.u1) + tr + 2 * scale, rows.maxX), rows.topY] },
     openings: ops.length, items: seen.map((s) => `${s.it.code} ${s.it.type} (${s.view})`), skipped,
   };
+}
+
+/** A short description for a note tag: up to the first comma, at most about 26 characters (whole words). */
+export function shortDesc(s) {
+  let t = String(s ?? '').split(',')[0].trim();
+  if (t.length <= 26) return t;
+  const words = t.split(/\s+/);
+  t = '';
+  for (const w of words) {
+    if ((t ? t.length + 1 : 0) + w.length > 26) break;
+    t = t ? `${t} ${w}` : w;
+  }
+  return t || String(s).slice(0, 26);
+}
+
+/**
+ * Elevation notes as tag multileaders: the notes above (below: true under) in one row, each tag as near over its element
+ * as the widths allow and in the same order, so no two leaders cross; each leader rises from its element to the elbow
+ * line (top / bottom) and slants to its tag. Returns the row extents.
+ */
+export function layoutTags(notes, { X, Y, top, bottom, x0, x1, scale, out, layer = IL.note }) {
+  const res = { topY: top, bottomY: bottom, minX: Infinity, maxX: -Infinity };
+  for (const below of [false, true]) {
+    const list = notes.filter((n) => Boolean(n.below) === below)
+      .map((n) => ({ ...n, t: [X(n.target[0]), Y(n.target[1])], w: (noteWidth(n.code, n.desc) + 4) * scale }))
+      .sort((a, b) => a.t[0] - b.t[0]);
+    if (!list.length) continue;
+    // targets in one column would share the rise: nudge them apart
+    for (let i = 1; i < list.length; i++) if (list[i].t[0] - list[i - 1].t[0] < 1.5 * scale) list[i].t = [list[i - 1].t[0] + 1.5 * scale, list[i].t[1]];
+    const c = [];
+    list.forEach((n, i) => c.push(Math.max(n.t[0], i ? c[i - 1] + (list[i - 1].w + n.w) / 2 : x0 + n.w / 2)));
+    // pulled back inside the right end when the row allows it
+    for (let i = list.length - 1; i >= 0; i--) {
+      const lim = i === list.length - 1 ? x1 - list[i].w / 2 : c[i + 1] - (list[i].w + list[i + 1].w) / 2;
+      c[i] = Math.max(Math.min(c[i], lim), i ? c[i - 1] + (list[i - 1].w + list[i].w) / 2 : x0 + list[i].w / 2);
+    }
+    const elbow = below ? bottom : top;
+    const rowY = below ? bottom - 6 * scale : top + 6 * scale;
+    list.forEach((n, i) => {
+      const pts = [n.t, [n.t[0], elbow], [c[i], rowY]];
+      out.push(noteLeader(n.code, n.desc, pts.map(P), scale, layer, dimStyleName(scale), below));
+      res.minX = Math.min(res.minX, c[i] - n.w / 2);
+      res.maxX = Math.max(res.maxX, c[i] + n.w / 2);
+    });
+    if (below) res.bottomY = rowY - 12 * scale;
+    else res.topY = rowY + 11 * scale;
+  }
+  return res;
+}
+
+/**
+ * Notes as multileaders in a column at xN, ordered from the top. Each leader runs level from its element (a dot) to
+ * just before the column, then slants to its text line: no two leaders cross, and each text sits at or near the
+ * height of what it names. Returns the lowest text line.
+ */
+export function layoutNotes(notes, { X, Y, xN, h, scale, floorY = -Infinity, out, layer = IL.note }) {
+  const gap = 2.4 * h, apart = 1.6 * scale;
+  const list = notes.map((n) => ({ ...n, t: [X(n.target[0]), Y(n.target[1])] })).sort((p, q) => q.t[1] - p.t[1] || p.t[0] - q.t[0]);
+  // targets at the same height would share a level run: nudge the lower ones down a little
+  for (let i = 1; i < list.length; i++) if (list[i - 1].t[1] - list[i].t[1] < apart) list[i].t = [list[i].t[0], list[i - 1].t[1] - apart];
+  // text lines: as near their target as the spacing allows, pushed down from the top, then up from the floor line
+  const ys = [];
+  list.forEach((n, i) => ys.push(Math.min(n.t[1], i ? ys[i - 1] - gap : Infinity)));
+  for (let i = list.length - 1; i >= 0; i--) ys[i] = Math.max(ys[i], i === list.length - 1 ? Math.min(floorY, list[i].t[1]) : ys[i + 1] + gap);
+  const xK = xN - 4 * scale; // dogleg (3) + gap (1) of the leader style
+  const xJ = xK - 4 * scale;
+  list.forEach((n, i) => {
+    const pts = [n.t];
+    if (Math.abs(ys[i] - n.t[1]) < 0.01) pts.push([xK, ys[i]]);
+    else pts.push([xJ, n.t[1]], [xK, ys[i]]);
+    pts.push([xN, ys[i]]);
+    out.push({ type: 'leader', points: pts.map(P), text: n.text, height: r2(h), style: TEXT_STYLE, leader_style: dimStyleName(scale), layer });
+  });
+  return ys.length ? ys[ys.length - 1] : Infinity;
 }
 
 function mapShape(s, m) {
@@ -1512,14 +1945,7 @@ export function joineryDetail(p) {
     const r = rectAt[k];
     return { text, target: S((r[0] + r[2]) / 2, (r[1] + r[3]) / 2) };
   }).sort((a, b2) => b2.target[1] - a.target[1]);
-  let yPrev = Infinity;
-  for (const n of targets) {
-    const y = Math.min(n.target[1], yPrev - 2.6 * hN);
-    yPrev = y;
-    out.push({ type: 'circle', center: P(n.target), radius: r2(0.5 * sc), layer: IL.note });
-    out.push(polyE([n.target, [xN - 4 * sc, y], [xN - 1 * sc, y]], false, IL.note));
-    out.push(textE(n.text, [xN, y], hN, IL.note, 'middle_left'));
-  }
+  layoutNotes(targets, { X: (x) => x, Y: (y) => y, xN, h: hN, scale: sc, floorY: Yf(0), out });
   for (const [s0, s1, z] of secDims) dimH([S(s0, z), S(s1, z)], z === 0 ? Yf(0) - 10 * sc : Yf(z) + 8 * sc, 10 * sc);
   dimV([...new Set(zDims)].sort((a, b2) => a - b2).map((z) => S(-120, z)), sx0 - 120 - 10 * sc);
   title('MẶT CẮT 1-1', sx0 + depthMax / 2, Yf(0) - 32 * sc, sc, out);
@@ -1541,14 +1967,21 @@ const CATEGORY = {
  * Finish and material schedule: floors and ceilings by area, skirting by length (doors deducted), walls by area
  * (openings deducted), backsplash, items and lights by count. One row per code with its rooms.
  */
-export function materialSchedule({ spec, rooms, finishes, items = [], lights = [], lang = 'vi' }) {
+export function materialSchedule({ spec, rooms, finishes, items = [], lights = [], lang = 'vi', floor = null, acc = null, handles = null }) {
   const M = spec?.walls?.length ? buildModel(spec) : null;
-  const rows = new Map();
-  const addRow = (code, description, unit, qty, where) => {
+  // acc: rows of the floors already counted (a building), floor: the name put in front of the rooms
+  const rows = acc ?? new Map();
+  // boundary: the room's A-AREA outline when the quantity is its area (the drawn table keeps it as a field of it)
+  const addRow = (code, description, unit, qty, where, symbol = null, boundary = undefined) => {
     const key = `${code}|${description}|${unit}`;
-    const r = rows.get(key) ?? { code, category: CATEGORY[code.slice(0, 2)] ?? '', description, unit, qty: 0, rooms: new Set() };
+    const r = rows.get(key) ?? { code, category: CATEGORY[code.slice(0, 2)] ?? '', description, unit, qty: 0, where: new Map(), boundaries: [], fixed: false };
     r.qty += qty;
-    if (where) r.rooms.add(where);
+    r.symbol = r.symbol ?? symbol;
+    if (boundary) r.boundaries.push(boundary);
+    else r.fixed = true;
+    const f = floor ?? '';
+    if (!r.where.has(f)) r.where.set(f, new Set());
+    if (where) r.where.get(f).add(where);
     rows.set(key, r);
   };
   const splash = {};
@@ -1577,8 +2010,8 @@ export function materialSchedule({ spec, rooms, finishes, items = [], lights = [
         }
       }
     }
-    if (f.floor) addRow(f.floor.code, f.floor.description, 'm²', area, name);
-    if (f.ceiling) addRow(f.ceiling.code, f.ceiling.description, 'm²', area, name);
+    if (f.floor) addRow(f.floor.code, f.floor.description, 'm²', area, name, null, handles?.[name]);
+    if (f.ceiling) addRow(f.ceiling.code, f.ceiling.description, 'm²', area, name, null, handles?.[name]);
     const low = f.ceiling ? (f.ceiling.level ?? 3000) - (f.ceiling.drop?.depth ?? 0) : (M?.H.top ?? 3000);
     if (f.skirting) addRow(f.skirting.code, f.skirting.description, 'm', Math.max(0, per - ops.filter((o) => o.door).reduce((s, o) => s + o.w, 0)), name);
     if (f.wall) {
@@ -1587,20 +2020,47 @@ export function materialSchedule({ spec, rooms, finishes, items = [], lights = [
       addRow(f.wall.code, f.wall.description, 'm²', Math.max(0, (per * hTo) / 1000 - opArea - (splash[name] ?? 0)), name);
     }
   }
-  for (const it of items) addRow(it.code, it.description, lang === 'en' ? 'pcs' : 'cái', 1, it.room);
-  for (const l of lights) addRow(l.code, l.description, l.unit, l.qty, l.room);
-  const out = [...rows.values()].map((r) => ({ ...r, qty: r.unit === 'm²' || r.unit === 'm' ? r2(r.qty) : r.qty, rooms: [...r.rooms].join(', ') }))
+  // items and lights show their block (the symbol drawn on the plans) in the drawn table
+  for (const it of items) {
+    const b = it.def.overhead ? null : furnitureBlock(it, (p) => p, [0, 0, 0, 0]);
+    addRow(it.code, it.description, lang === 'en' ? 'pcs' : 'cái', 1, it.room, b ? { block: b.name, def: b.def } : null);
+  }
+  for (const l of lights) addRow(l.code, l.description, l.unit, l.qty, l.room, LIGHT_BLOCKS[l.kind] ? { block: LIGHT_BLOCKS[l.kind].name } : null);
+  // locations grouped by floor: "TẦNG 1: PHÒNG KHÁCH, BẾP; TẦNG 2: ..."
+  const whereText = (m) => [...m.entries()].map(([f, set]) => (f ? (set.size ? `${f}: ${[...set].join(', ')}` : f) : [...set].join(', '))).filter(Boolean).join('; ');
+  const all = [...rows.values()].map((r) => ({ ...r, qty: r.unit === 'm²' || r.unit === 'm' ? r2(r.qty) : r.qty, rooms: whereText(r.where) }))
     .sort((a, b) => a.code.localeCompare(b.code));
+  const out = all.map(({ symbol, where, boundaries, fixed, ...r }) => ({ ...r, ...(symbol ? { symbol: symbol.block } : {}), ...(boundaries.length && !fixed ? { field: true } : {}) }));
   const HEAD = lang === 'en' ? ['CODE', 'ITEM', 'DESCRIPTION', 'LOCATION', 'UNIT', 'QTY'] : ['MÃ', 'HẠNG MỤC', 'MÔ TẢ', 'VỊ TRÍ', 'ĐV', 'KHỐI LƯỢNG'];
   const table = [HEAD, ...out.map((r) => [r.code, r.category, r.description, r.rooms, r.unit, r.qty])];
-  return { rows: out, table };
+  // drawn: a symbol column after the code
+  const qtyCell = (r) => (r.boundaries.length && !r.fixed ? { field: FIELD.areaM2(r.boundaries, lang) } : r.qty);
+  const drawn = [[HEAD[0], lang === 'en' ? 'SYMBOL' : 'KÝ HIỆU', ...HEAD.slice(1)], ...all.map((r) => [r.code, r.symbol ?? '', r.category, r.description, r.rooms, r.unit, qtyCell(r)])];
+  return { rows: out, table, drawn };
 }
 
 // ---------------------------------------------------------------- plan copies
 
-/** The plan description moved by d (walls, openings, columns, grids, rooms, stairs, levels, north), without its extra entities and section marks. */
-export function shiftSpec(spec, d) {
+const POINT_KEYS = ['from', 'to', 'at', 'center', 'start', 'mid', 'end', 'base'];
+
+/** A draw_entities spec moved by d (its points; vectors such as major_axis stay). */
+export function shiftEntity(e, d) {
+  const mv = (p) => (Array.isArray(p) && p.length >= 2 && typeof p[0] !== 'object' ? [Number(p[0]) + d[0], Number(p[1]) + d[1], ...p.slice(2)] : p);
+  const out = { ...e };
+  for (const k of POINT_KEYS) if (Array.isArray(e[k])) out[k] = mv(e[k]);
+  for (const k of ['points', 'boundary']) if (Array.isArray(e[k])) out[k] = e[k].map(mv);
+  if (Array.isArray(e.boundaries)) out.boundaries = e.boundaries.map((b) => b.map(mv));
+  if (Array.isArray(e.box)) out.box = [e.box[0] + d[0], e.box[1] + d[1], e.box[2] + d[0], e.box[3] + d[1]];
+  return out;
+}
+
+/**
+ * The plan description moved by d (walls, openings, columns, grids, rooms, stairs, balconies, levels, north); without
+ * its extra entities and section marks unless keep (a floor of a building drawn beside the others).
+ */
+export function shiftSpec(spec, d, keep = false) {
   const mv = (p) => (Array.isArray(p) ? [Number(p[0]) + d[0], Number(p[1]) + d[1]] : p);
+  const stair = (st) => ({ ...st, ...(st.start ? { start: mv(st.start) } : {}), ...(st.region ? { region: st.region.map(mv) } : {}) });
   return {
     ...spec,
     walls: (spec.walls || []).map((w) => ({ ...w, points: (w.points || []).map(mv) })),
@@ -1612,11 +2072,13 @@ export function shiftSpec(spec, d) {
       y: (spec.grids.y || []).map((g) => (typeof g === 'object' ? { ...g, at: Number(g.at) + d[1] } : Number(g) + d[1])),
     } : undefined,
     rooms: (spec.rooms || []).map((r) => ({ ...r, at: mv(r.at), hatch: undefined })),
-    stairs: (spec.stairs || []).map((s) => ({ ...s, start: mv(s.start) })),
+    stairs: (spec.stairs || []).map(stair),
+    stairs_below: (spec.stairs_below || []).map(stair),
+    balconies: (spec.balconies || []).map((b) => ({ ...b, region: (b.region || []).map(mv) })),
     levels: (spec.levels || []).map((l) => ({ ...l, at: mv(l.at) })),
     north: spec.north ? { ...spec.north, at: mv(spec.north.at) } : undefined,
-    sections: [],
-    entities: [],
+    sections: keep ? (spec.sections || []).map((x) => ({ ...x, from: mv(x.from), to: mv(x.to) })) : [],
+    entities: keep ? (spec.entities || []).map((e) => shiftEntity(e, d)) : [],
   };
 }
 

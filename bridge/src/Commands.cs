@@ -33,6 +33,7 @@ namespace AcadMcp
             Reg("draw_entities", Mode.Write, DrawEntities);
             Reg("draw_plan", Mode.Write, Plan.DrawPlan);
             Reg("define_block", Mode.Write, DefineBlock);
+            Reg("define_blocks", Mode.Write, DefineBlocks);
             Reg("transform_entities", Mode.Write, Transform);
             Reg("set_properties", Mode.Write, SetProperties);
             Reg("delete_entities", Mode.Write, Delete);
@@ -416,20 +417,63 @@ namespace AcadMcp
 
         static object DefineBlock(Ctx ctx, P p)
         {
-            Database db = ctx.Db;
+            using (Transaction tr = ctx.Db.TransactionManager.StartTransaction())
+            {
+                var r = DefineOne(ctx.Db, tr, p, false);
+                tr.Commit();
+                return r;
+            }
+        }
+
+        /// <summary>Block definitions of symbols and furniture: {blocks: [{name, entities, attributes, ...}]}; those already in the drawing are kept unless replace.</summary>
+        static object DefineBlocks(Ctx ctx, P p)
+        {
+            var list = p.List("blocks") ?? new List<object>();
+            var defined = new List<object>();
+            var kept = new List<object>();
+            // the text style the attributes and labels use, made only when the drawing does not have it yet
+            P st = p.Obj("styles");
+            P ts = st?.Obj("text_style");
+            if (ts != null)
+            {
+                bool has;
+                using (Transaction tr0 = ctx.Db.TransactionManager.StartTransaction())
+                {
+                    has = ((TextStyleTable)tr0.GetObject(ctx.Db.TextStyleTableId, OpenMode.ForRead)).Has(ts.Str("name") ?? "MCP-ARIAL");
+                    tr0.Commit();
+                }
+                if (!has) Styles.Setup(ctx, st);
+            }
+            using (Transaction tr = ctx.Db.TransactionManager.StartTransaction())
+            {
+                var bt = (BlockTable)tr.GetObject(ctx.Db.BlockTableId, OpenMode.ForRead);
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var b = new P(list[i], "blocks[" + i + "]");
+                    string name = b.ReqStr("name");
+                    if (bt.Has(name) && !b.Bool("replace", false)) { kept.Add(name); continue; }
+                    DefineOne(ctx.Db, tr, b, true);
+                    defined.Add(name);
+                }
+                tr.Commit();
+            }
+            return new Dictionary<string, object> { { "defined", defined }, { "kept", kept } };
+        }
+
+        static Dictionary<string, object> DefineOne(Database db, Transaction tr, P p, bool replaceOk)
+        {
             string name = p.ReqStr("name");
             try { SymbolUtilityServices.ValidateSymbolName(name, false); }
             catch (Exception) { throw new McpError("Invalid block name '" + name + "'"); }
             var specs = p.List("entities");
             if (specs == null || specs.Count == 0) throw new McpError("entities is required");
-            using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
                 BlockTableRecord btr;
                 bool existed = bt.Has(name);
                 if (existed)
                 {
-                    if (!p.Bool("replace", false)) throw new McpError("Block '" + name + "' already exists (pass replace=true to redefine it; its references update)");
+                    if (!replaceOk && !p.Bool("replace", false)) throw new McpError("Block '" + name + "' already exists (pass replace=true to redefine it; its references update)");
                     btr = (BlockTableRecord)tr.GetObject(bt[name], OpenMode.ForWrite);
                     if (btr.IsLayout || btr.IsFromExternalReference) throw new McpError("'" + name + "' is a layout or xref");
                     foreach (ObjectId id in btr) tr.GetObject(id, OpenMode.ForWrite).Erase();
@@ -465,17 +509,23 @@ namespace AcadMcp
                         ad.Invisible = a.Bool("invisible", false);
                         ad.LayerId = U.EnsureLayer(db, tr, a.Str("layer") ?? "0", null, null);
                         string al = a.Str("align");
-                        if (al == "center" || al == "middle_center")
+                        var just = new Dictionary<string, AttachmentPoint>
                         {
-                            ad.Justify = al == "center" ? AttachmentPoint.BaseCenter : AttachmentPoint.MiddleCenter;
+                            { "center", AttachmentPoint.BaseCenter }, { "middle_center", AttachmentPoint.MiddleCenter },
+                            { "middle_left", AttachmentPoint.MiddleLeft }, { "middle_right", AttachmentPoint.MiddleRight }, { "right", AttachmentPoint.BaseRight },
+                        };
+                        if (al != null && just.ContainsKey(al))
+                        {
+                            ad.Justify = just[al];
                             ad.AlignmentPoint = ad.Position;
                         }
+                        if (a.Has("rotation")) ad.Rotation = U.Rad(a.Num("rotation", 0));
+                        ad.LockPositionInBlock = true;
                         btr.AppendEntity(ad);
                         tr.AddNewlyCreatedDBObject(ad, true);
                         if (ad.Justify != AttachmentPoint.BaseLeft) ad.AdjustAlignment(db);
                     }
                 }
-                tr.Commit();
                 return new Dictionary<string, object>
                 {
                     { "name", name }, { "redefined", existed }, { "entities", dr.Count }, { "attributes", attrs == null ? 0 : attrs.Count },

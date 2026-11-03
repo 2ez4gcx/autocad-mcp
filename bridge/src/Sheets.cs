@@ -76,6 +76,8 @@ namespace AcadMcp
             }
             // Activating the layout initialises it (AutoCAD may add a default viewport, removed below).
             lm.CurrentLayout = name;
+            var fieldIds = new List<ObjectId>();
+            var pendingAttrs = new List<ObjectId>();
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 var lay = (Layout)tr.GetObject(lid, OpenMode.ForRead);
@@ -105,9 +107,32 @@ namespace AcadMcp
                     vp.On = true;
                     vp.Locked = v.Bool("locked", true);
                     res["viewport_handle"] = vp.Handle.ToString();
+                    // title block attributes that show the viewport (its scale)
+                    foreach (var pf in dr.PendingFields)
+                    {
+                        var ar = (AttributeReference)tr.GetObject(pf.Key, OpenMode.ForWrite);
+                        fieldIds.Add(dr.ApplyField(ar, pf.Value.Replace("{viewport}", Drawer.ObjId(vp.ObjectId))));
+                        pendingAttrs.Add(pf.Key);
+                    }
+                    res["fields"] = dr.PendingFields.Count;
                 }
                 if (dr.CreatedLayers.Count > 0) res["created_layers"] = dr.CreatedLayers;
                 tr.Commit();
+            }
+            // a field of a viewport made in the same transaction reads #### until the viewport is in the drawing:
+            // evaluated again now
+            if (fieldIds.Count > 0)
+            {
+                using (Transaction tr = db.TransactionManager.StartTransaction())
+                {
+                    foreach (ObjectId id in fieldIds) ((Field)tr.GetObject(id, OpenMode.ForWrite)).Evaluate();
+                    foreach (ObjectId id in pendingAttrs)
+                    {
+                        var ar = (AttributeReference)tr.GetObject(id, OpenMode.ForWrite);
+                        if (ar.Justify != AttachmentPoint.BaseLeft) ar.AdjustAlignment(db);
+                    }
+                    tr.Commit();
+                }
             }
             if (!p.Bool("activate", true)) lm.CurrentLayout = "Model";
             res["current_layout"] = lm.CurrentLayout;

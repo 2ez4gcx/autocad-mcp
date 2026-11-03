@@ -6,11 +6,11 @@ AutoCAD MCP cho phép Claude làm việc trực tiếp trên bản vẽ đang m�
 
 Cách hoạt động giống [SketchUp MCP](https://github.com/2ez4gcx/sketchup-mcp): một extension cho Claude Desktop (`.mcpb`, chạy trên Node.js có sẵn trong Claude Desktop) và một add-in nhỏ chạy bên trong AutoCAD (**ACAD MCP Bridge**, add-in .NET). Không cần cài Python hay Node.js.
 
-Phiên bản: **1.0.0**.
+Phiên bản: **1.1.0**.
 
 ## Tính năng
 
-41 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
+42 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
 
 | Nhóm | Tool |
 |---|---|
@@ -18,7 +18,7 @@ Phiên bản: **1.0.0**.
 | Tiêu chuẩn | `setup_layers`, `setup_styles` |
 | Vẽ & sửa | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
 | Mặt đứng, mặt cắt & kết cấu | `draw_elevation`, `draw_section`, `draw_structure_detail`, `rebar_schedule` |
-| Thiết kế nội thất | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
+| Thiết kế nội thất | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
 | Ảnh & nguồn 3D | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
 | Khung tên & file | `create_layout`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
 | Lập trình | `run_lisp` |
@@ -41,11 +41,40 @@ Phiên bản: **1.0.0**.
 - **Thiết kế nội thất** (dựng từ mặt bằng của `draw_plan`; mã vật liệu giống SketchUp MCP: FL sàn, SK len, WL tường, CL trần, JN đồ gỗ đóng tại chỗ, FN nội thất rời, SN thiết bị vệ sinh, EQ thiết bị, LT đèn, mỗi mã một quy cách):
   - `draw_furniture_plan`: bản sao mặt bằng tỷ lệ 1:50 với thư viện đồ nội thất (giường, tab đầu giường, tủ áo, sofa, bàn ghế, bàn làm việc, kệ tivi, tủ bếp dưới/trên có chậu rửa và bếp, máy hút mùi, tủ lạnh, máy giặt, bồn cầu, lavabo, khu tắm đứng, bồn tắm, tủ giày, kệ sách) đặt sát một vách của phòng theo khoảng cách, thẻ mã không đè nhau, tên phòng tự dời ra chỗ trống không đè đồ và cung mở cửa, ký hiệu hướng nhìn mặt đứng A-D;
   - `draw_floor_finish_plan`: ron gạch hoặc ván sàn đúng kích thước thật của từng phòng (gạch căn giữa phòng hoặc từ một điểm, ván lệch 1/3), không đè tên phòng, thẻ mã và bảng chú thích kèm diện tích từng loại sàn;
-  - `draw_ceiling_plan`: trần giật cấp dọc tường có nét giật cấp và đèn LED hắt, downlight trong dải giật cấp (hoặc lưới đèn), đèn ốp trần hoặc đèn thả trên bàn ăn, ký hiệu cao độ trần, bảng ký hiệu đèn kèm số lượng;
+  - `draw_floor_finish_plan` thể hiện thêm các chi tiết cần cho thi công:
+    - nẹp chuyển tiếp inox dưới cửa ở chỗ đổi vật liệu hoặc cao độ sàn;
+    - ở khu vệ sinh và ngoài trời: phễu thu (đặt trong khu tắm nếu có), mũi tên dốc "i=1%", ghi chú sàn hạ 20 mm (vệ sinh) hoặc 50 mm (ngoài trời);
+    - cách lát (LÁT TỪ TÂM);
+  - `draw_wall_finish_plan`: mặt bằng hoàn thiện tường:
+    - dải vật liệu chạy dọc mặt trong từng bức tường theo kiểu hoàn thiện (sơn: 1 nét; gạch ốp: 2 nét có vạch mạch gạch), ngắt ở cửa đi và cửa sổ;
+    - dải gạch ốp bếp sau tủ bếp dưới;
+    - mỗi phòng một thẻ mã, ghi chiều cao ốp;
+    - bảng chú thích kèm diện tích từng loại vật liệu tường;
+  - `draw_ceiling_plan`: trần giật cấp dọc tường có nét giật cấp và đèn LED hắt, downlight trong dải giật cấp (hoặc lưới đèn), đèn ốp trần hoặc đèn thả trên bàn ăn, thẻ trần (cao độ trên, mã dưới), bảng ký hiệu đèn kèm số lượng.
+    - `mode=finish`: mặt bằng hoàn thiện trần (vật liệu, cao độ, kích thước dải giật cấp, bảng chú thích trần kèm diện tích; không có đèn);
+    - `mode=lighting`: mặt bằng bố trí đèn (đèn và bảng ký hiệu; không có thẻ cao độ);
+  - mỗi mặt bằng nội thất có khối GHI CHÚ chung: đơn vị, kiểm tra kích thước thực tế, duyệt mẫu vật liệu. Thêm theo từng loại mặt bằng: mạch gạch và độ dốc sàn; lớp sơn, lớp ốp tường; tấm trần và lỗ thăm trần; định vị đèn. Có thể thay bằng ghi chú của bạn;
   - `draw_interior_elevation`: triển khai từng vách của phòng nhìn từ trong: tường, sàn, trần bị cắt (cả dải giật cấp), cửa đi, cửa sổ của vách, đồ gỗ và nội thất sát vách (hình chiếu đứng) và ở góc phòng (hình chiếu cạnh), đồ phía trước che nét phía sau, ron gạch ốp, gạch ốp bếp, len chân tường, chuỗi kích thước và ghi chú vật liệu có đường dẫn;
   - `draw_joinery_detail`: tủ bếp (tủ dưới có cánh, ngăn kéo, khoang chậu; tủ trên theo từng đoạn, máy hút mùi, gạch ốp) hoặc tủ áo: mặt đứng 1:10 với các mô-đun, chiều mở cánh, tay nắm, mặt cắt 1-1 qua thùng tủ với chiều dày ván và ghi chú vật liệu; lấy thẳng từ tủ đã đặt trên mặt bằng;
   - `material_schedule`: sàn và trần theo m², len theo m (trừ cửa đi), tường theo m² (trừ cửa và phần ốp bếp), nội thất, đồ gỗ, thiết bị vệ sinh, thiết bị, đèn theo số lượng, mỗi mã một dòng kèm phòng; bảng trong bản vẽ và CSV.
   Vật liệu mặc định theo loại phòng (phòng khô gạch porcelain 600x600, sơn nước, trần thạch cao giật cấp; WC gạch chống trơn, gạch ốp đến trần, trần chống ẩm; sân không trần) và mỗi kết quả đều liệt kê các giá trị đã tự giả định.
+- **Nhà nhiều tầng** (`draw_plan` với `floors`): mỗi tầng có tường riêng (hoặc giữ tường tầng dưới), cửa, cầu thang, ban công, phòng và mái riêng. Mặc định tầng 1 cao 3600, các tầng trên 3300, sàn dày 120. Tường mái được chép từ tường tầng dưới với chiều cao riêng. Thang chữ U ghi LÊN ở tầng 1, LÊN/XUỐNG ở tầng giữa, XUỐNG ở tầng trên cùng. Ban công có mép sàn và lan can.
+  Mặt bằng các tầng đặt cạnh nhau. Mặt đứng và mặt cắt chồng đủ các tầng: cao độ từng tầng và tường mái, lan can ban công, lỗ sàn ô thang, thang cắt dọc vế. Các công cụ nội thất nhận `floor`.
+- **Block, field và multileader, không chỉ là nét vẽ**:
+  - cửa đi, cửa sổ, cửa lùa là block, mỗi kích thước một block (`MCP_CUA_DI_900`, `MCP_CUA_DI_2C_1400`, `MCP_CUA_SO_1200_220`), chèn xoay hoặc lật theo hướng mở, có thuộc tính mã, loại, chiều rộng;
+  - đồ nội thất và thiết bị vệ sinh là block theo loại và kích thước (`NT_<mã>_<loại>_<rộng>x<sâu>`, thuộc tính mã, tên, kích thước);
+  - đèn (`MCP_DEN_*`), thẻ mã, thẻ trần, ký hiệu trục, cao độ, mặt cắt, hướng bắc, ký hiệu hướng nhìn mặt đứng nội thất, số hiệu thép và khung tên cũng là block, giá trị là thuộc tính. `quantity_takeoff group_by=block` đếm được kèm giá trị, sửa bằng ATTEDIT hoặc bảng Properties.
+
+  Block được định nghĩa ở lần dùng đầu tiên. API AutoCAD không cho tạo dynamic block, nên mỗi kích thước là một định nghĩa riêng.
+  Nhãn phòng ghi diện tích bằng field liên kết với đường bao `A-AREA` của phòng: kéo đường bao rồi REGEN hoặc UPDATEFIELD.
+  Ghi chú vật liệu ở mặt đứng nội thất:
+  - là multileader mà nội dung là block thẻ: mã đóng khung, mô tả ngắn bên dưới;
+  - xếp một hàng phía trên mặt đứng, riêng sàn và len chân tường đặt một hàng bên dưới;
+  - đường dẫn nét đứt, theo đúng thứ tự đối tượng nên không đường nào cắt nhau.
+
+  Chi tiết đồ gỗ vẫn dùng cột multileader chữ.
+  Thẻ đồ nội thất và cửa hình lục giác, thẻ vật liệu hình chữ nhật. Tên mỗi hình vẽ được gạch chân, kèm "TỶ LỆ: 1/50".
+  Bảng thống kê vật liệu hiện block ký hiệu của đồ và đèn cạnh mã.
 - **Layer chuyên nghiệp** (`setup_layers`): bộ layer kiến trúc kiểu AIA/NCS với nét in cho máy in đen trắng và mô tả tiếng Việt hoặc tiếng Anh: `S-GRID` (CENTER), `S-COLS`, `A-WALL` (0.5 mm), `A-WALL-PATT`, `A-DOOR`, `A-GLAZ`, `A-OPEN`, `A-FLOR-STRS`, `A-FURN`, `A-FLOR-FIXT`, `A-AREA` (không in), `A-ANNO-ROOM`, `A-ANNO-TEXT`, `A-ANNO-DIMS`, `A-ANNO-SYMB`, `A-ANNO-TTLB`, `A-ANNO-NOTE`, `A-ELEV`, `A-SECT`, `A-FLOR-CASE`, `A-CLNG`, `E-LITE`, `A-DETL`, `S-CONC`, `S-REBR`, `S-REBR-STIR`, `X-IMAGE` (không in)... Nếu bản vẽ đã có hệ layer riêng thì làm theo hệ đó (`draw_plan` nhận bảng đối chiếu vai trò -> tên layer).
 - **Style theo tỷ lệ in** (`setup_styles`): đơn vị mm, kiểu chữ TrueType `MCP-ARIAL` (tiếng Việt không bao giờ ra dấu `?`), kiểu kích thước `MCP-1-<tỷ lệ>` với gạch xiên kiến trúc, chữ nằm trên đường kích thước, kiểu leader, chữ trong bảng và LTSCALE.
 - **Làm việc từ ảnh**: `view_image` cho Claude xem một file ảnh, có thể cắt phóng to một vùng (để đọc số kích thước) và lưới tọa độ pixel; `attach_image` chèn ảnh vào bản vẽ làm nền mờ trên layer `X-IMAGE`, hiệu chỉnh tỷ lệ bằng hai pixel của một kích thước đã biết và đặt đúng một điểm (ví dụ giao trục A-1); `draw_entities` nhận tọa độ pixel của ảnh (`image_handle`) để đồ lại; `screenshot` kết xuất bản vẽ ngầm (nền trắng, không đổi màn hình của bạn) để Claude so với ảnh gốc.
@@ -54,7 +83,18 @@ Phiên bản: **1.0.0**.
 - **Sửa** theo handle: di chuyển, sao chép (lặp), xoay, tỷ lệ, đối xứng, mảng chữ nhật/tròn, offset (về phía một điểm hoặc hai bên), phá khối (giữ giá trị thuộc tính); đổi thuộc tính, nội dung chữ, giá trị attribute.
 - **Khối lượng** (`quantity_takeoff`): theo layer, block hoặc loại: số lượng, chiều dài (m), diện tích đường bao kín (m²), diện tích hatch (m²), số block kèm thống kê giá trị thuộc tính; xuất CSV cho Excel (`csv_format=semicolon` cho Excel cài định dạng Việt Nam/châu Âu: dấu `;` và phẩy thập phân).
 - **Kiểm tra bản vẽ** (`check_drawing`): đối tượng trùng chồng (làm khối lượng gấp đôi), polyline trông kín nhưng chưa kín, đường bao hở trên layer diện tích, chữ tiếng Việt dùng font SHX (ra dấu `?`), thiếu font, xref/ảnh mất đường dẫn, đối tượng trên Defpoints, kích thước bị gõ đè số, đối tượng nằm quá xa, đối tượng trên layer 0, màu/nét/độ dày không ByLayer, layer không theo chuẩn đặt tên.
-- **Khung tên** (`create_layout`, `export_pdf`): layout khổ A0-A4 với `DWG To PDF.pc3` và `monochrome.ctb`, khung bản vẽ theo lề ISO/TCVN (lề trái 20 mm), khung tên 180 mm (công ty, công trình, chủ đầu tư, tên bản vẽ, tỷ lệ, ngày, thiết kế/kiểm tra, số bản vẽ, lần sửa, tờ) và khung nhìn khóa ở tỷ lệ chuẩn tự chọn cho vừa, đặt phía trên hoặc bên trái khung tên, chỗ nào chứa vừa hình vẽ (cảnh báo nếu tỷ lệ đã chọn làm cắt mất hình). `export_pdf` in các layout ra một file PDF nhiều trang (layout khác khổ giấy thì mỗi khổ một file, ví dụ `bo_A3.pdf`, `bo_A1.pdf`), hoặc in một vùng model space theo tỷ lệ.
+- **Field**:
+  - diện tích phòng là field của đường bao phòng;
+  - trong bảng thống kê vật liệu, khối lượng sàn và trần là field công thức, cộng diện tích các đường bao phòng;
+  - các cột tổng của bảng thống kê thép (số thanh, chiều dài, trọng lượng từng dòng, theo đường kính, tổng cộng) là công thức của bảng: sửa số thanh hay chiều dài ngay trong bảng thì trọng lượng tự tính lại;
+  - tỷ lệ trên khung tên là field của tỷ lệ viewport, ký hiệu bản vẽ là field của tên layout.
+
+  Số thập phân dùng dấu phẩy.
+- **Khung tên** (`create_layout`, `export_pdf`): layout khổ A0-A4 với `DWG To PDF.pc3` và `monochrome.ctb`, khung bản vẽ theo lề ISO/TCVN (lề trái 20 mm).
+  - Khổ A3-A0 nằm ngang dùng khung tên dải dọc như hồ sơ thi công ở Việt Nam, gồm: bảng sửa đổi, ghi chú, chủ đầu tư, dự án, hạng mục, tư vấn thiết kế, chủ nhiệm, chủ trì, thiết kế, kiểm tra, tên bản vẽ, số hợp đồng, phiên bản, giai đoạn, ký hiệu bản vẽ, tỷ lệ, ngày. Dọc chân tờ có dòng ghi chú chung.
+  - `title_block.style=bottom` cho khung tên 180 mm ở góc dưới, dùng cho khổ A4 và khổ đứng.
+  - Cả hai đều là block có thuộc tính.
+  - Khung nhìn khóa ở tỷ lệ chuẩn tự chọn cho vừa, đặt phía trên hoặc bên trái khung tên, chỗ nào chứa vừa hình vẽ (cảnh báo nếu tỷ lệ đã chọn làm cắt mất hình). `export_pdf` in các layout ra một file PDF nhiều trang (layout khác khổ giấy thì mỗi khổ một file, ví dụ `bo_A3.pdf`, `bo_A1.pdf`), hoặc in một vùng model space theo tỷ lệ.
 - **Xuất file** (`save_drawing`, `screenshot save_path`): DWG 2018/2013/2010/2007/2004/2000 và DXF; `copy=true` (mặc định khi lưu bản cũ hoặc DXF) ghi một bản sao để gửi đi, bản vẽ đang mở giữ nguyên, ngược lại là Save As; ảnh PNG của bản vẽ tới 4096 px.
 - **`run_lisp`**: khi không có tool phù hợp, Claude chạy AutoLISP (kết quả trả về dạng JSON) trong một nhóm Undo. Code không ghi ra đĩa nên AutoCAD không hỏi bảo mật (SECURELOAD).
 - **Mỗi lần sửa bản vẽ là một bước Undo** (`MCP_<TÊN TOOL>` trong danh sách Undo của AutoCAD).
@@ -66,7 +106,7 @@ Phiên bản: **1.0.0**.
 Claude Desktop
     |  MCP qua stdio
     v
-autocad-mcp-1.0.0.mcpb        server MCP Node.js, chạy trên Node có sẵn trong Claude Desktop
+autocad-mcp-1.1.0.mcpb        server MCP Node.js, chạy trên Node có sẵn trong Claude Desktop
     |  mỗi lệnh một yêu cầu JSON, TCP 127.0.0.1:9877 (chỉ trong máy)
     v
 ACAD MCP Bridge               add-in .NET trong AutoCAD (bundle tự nạp), chạy lệnh trên luồng chính của AutoCAD
@@ -85,9 +125,9 @@ Bridge chạy bên trong AutoCAD (không điều khiển qua COM từ bên ngoà
 
 ## Cài đặt
 
-1. **Cài extension vào Claude Desktop**: *Settings > Extensions*, kéo thả `autocad-mcp-1.0.0.mcpb` vào cửa sổ (hoặc *Advanced settings > Install Extension...*), bấm *Install*. Bản build chưa ký số nên Claude Desktop có thể cảnh báo.
-2. **Cài bridge vào AutoCAD**: trong một cuộc trò chuyện mới, nhờ Claude *"Cài ACAD MCP Bridge vào AutoCAD"* (tool `install_autocad_bridge`). Tool chép `AcadMcpBridge.bundle` vào `%APPDATA%\Autodesk\ApplicationPlugins`, AutoCAD tự nạp khi khởi động. Cài tay: giải nén `AcadMcpBridge-1.0.0.bundle.zip` vào thư mục đó.
-3. **Khởi động lại AutoCAD.** Add-in chưa được ký số: khi AutoCAD hỏi về `AcadMcpBridge-1.0.0.dll`, chọn **Always Load**. Mỗi bản bridge mới là một file mới nên sau khi cập nhật AutoCAD sẽ hỏi lại một lần. (Muốn không bao giờ bị hỏi, có thể thêm thư mục bundle vào *Options > Files > Trusted Locations* nếu chính sách IT cho phép.) Gõ `MCPSTATUS` trong AutoCAD, phải thấy `ACAD MCP Bridge v1.0.0: RUNNING on 127.0.0.1:9877`. Sau đó nhờ Claude *"Ping AutoCAD"*.
+1. **Cài extension vào Claude Desktop**: *Settings > Extensions*, kéo thả `autocad-mcp-1.1.0.mcpb` vào cửa sổ (hoặc *Advanced settings > Install Extension...*), bấm *Install*. Bản build chưa ký số nên Claude Desktop có thể cảnh báo.
+2. **Cài bridge vào AutoCAD**: trong một cuộc trò chuyện mới, nhờ Claude *"Cài ACAD MCP Bridge vào AutoCAD"* (tool `install_autocad_bridge`). Tool chép `AcadMcpBridge.bundle` vào `%APPDATA%\Autodesk\ApplicationPlugins`, AutoCAD tự nạp khi khởi động. Cài tay: giải nén `AcadMcpBridge-1.1.0.bundle.zip` vào thư mục đó.
+3. **Khởi động lại AutoCAD.** Add-in chưa được ký số: khi AutoCAD hỏi về `AcadMcpBridge-1.1.0.dll`, chọn **Always Load**. Mỗi bản bridge mới là một file mới nên sau khi cập nhật AutoCAD sẽ hỏi lại một lần. (Muốn không bao giờ bị hỏi, có thể thêm thư mục bundle vào *Options > Files > Trusted Locations* nếu chính sách IT cho phép.) Gõ `MCPSTATUS` trong AutoCAD, phải thấy `ACAD MCP Bridge v1.1.0: RUNNING on 127.0.0.1:9877`. Sau đó nhờ Claude *"Ping AutoCAD"*.
 
 Tùy chọn ở *Settings > Extensions > AutoCAD MCP > Configure*: cổng bridge (mặc định 9877; nếu đổi thì gõ `MCPPORT` trong AutoCAD cho khớp) và thời gian chờ mỗi lệnh (mặc định 120 giây).
 

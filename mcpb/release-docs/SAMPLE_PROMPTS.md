@@ -39,6 +39,15 @@
 - Draw the floor finish plan with wooden planks 150x900 in the bedrooms and 600x600 porcelain elsewhere, then the reflected ceiling plan. / Vẽ mặt bằng lát sàn (phòng ngủ sàn gỗ 150x900, còn lại gạch 600x600) và mặt bằng trần đèn.
 - Draw the interior elevations of the four walls of PHÒNG NGỦ 1 and of the kitchen wall, then the shop drawings of the kitchen JN-03 and the wardrobe JN-01. / Triển khai 4 vách phòng ngủ 1 và vách bếp, chi tiết tủ bếp JN-03 và tủ áo JN-01.
 - Make the finish and material schedule with a CSV for Excel. / Lập bảng thống kê vật liệu hoàn thiện, xuất CSV.
+- Count the doors, windows, furniture and lights by block, with their codes. / Đếm cửa, đồ nội thất và đèn theo block kèm mã.
+- Draw the floor, wall and ceiling finish plans and the lighting layout of floor 2, each with its legend and general notes. / Vẽ mặt bằng hoàn thiện sàn, hoàn thiện tường, hoàn thiện trần và bố trí đèn tầng 2, có chú thích và ghi chú chung.
+- Make the A3 sheets NT-01 to NT-07 with the vertical title strip (client, project, consultant, phase TKTC) and export one PDF. / Dàn tờ A3 NT-01 đến NT-07 với khung tên dải dọc (chủ đầu tư, dự án, tư vấn, giai đoạn TKTC) và xuất một file PDF.
+
+## Buildings of several floors / Nhà nhiều tầng
+
+- Draw a 5x18 m townhouse with three floors and a stair tower (tum): U stair at the back, a 1.2 m balcony on floors 2 and 3, a 1 m parapet on the roof terrace. List what you assume first. / Vẽ nhà phố 5x18 m, 3 tầng + tum, thang chữ U phía sau, ban công 1,2 m tầng 2 và 3, tường mái cao 1 m; liệt kê giả định trước khi vẽ.
+- Draw the front and back elevations and section A-A through the stair. / Vẽ mặt đứng chính, mặt đứng sau và mặt cắt A-A qua cầu thang.
+- Furnish floor 2 and draw its ceiling plan and the interior elevations of PHÒNG NGỦ 1. / Bố trí nội thất tầng 2, vẽ trần đèn và triển khai mặt đứng phòng ngủ 1.
 
 ## Quantities and checks / Khối lượng và kiểm tra
 

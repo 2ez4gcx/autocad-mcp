@@ -1,0 +1,23 @@
+﻿MÃ;HẠNG MỤC;MÔ TẢ;VỊ TRÍ;ĐV;KHỐI LƯỢNG
+CL-01;Trần;Trần thạch cao khung chìm, sơn trắng;"TẦNG 1: PHÒNG KHÁCH, BẾP + ĂN; TẦNG 2: PHÒNG NGỦ 1, SẢNH, PHÒNG NGỦ 2, KHO; TẦNG 3: PHÒNG NGỦ 3, SẢNH, PHÒNG THỜ";m²;188,75
+CL-02;Trần;Trần thạch cao chống ẩm khung chìm, sơn trắng;"TẦNG 1: WC; TẦNG 2: WC; TẦNG 3: WC";m²;13,16
+FL-01;Sàn;Gạch porcelain 600x600;"TẦNG 1: PHÒNG KHÁCH, BẾP + ĂN; TẦNG 2: PHÒNG NGỦ 1, SẢNH, PHÒNG NGỦ 2, KHO; TẦNG 3: PHÒNG NGỦ 3, SẢNH, PHÒNG THỜ";m²;188,75
+FL-02;Sàn;Gạch chống trơn 300x300;"TẦNG 1: WC; TẦNG 2: WC; TẦNG 3: WC";m²;13,16
+FL-03;Sàn;Gạch chống trơn ngoài trời 400x400;"TẦNG 1: SÂN PHƠI; TẦNG 3: SÂN PHƠI; TUM: SÂN THƯỢNG";m²;79,74
+FL-04;Sàn;Đá granite ốp bậc thang và chiếu nghỉ;"TẦNG 1: CẦU THANG; TẦNG 2: CẦU THANG; TẦNG 3: CẦU THANG; TUM: CẦU THANG";m²;34,37
+FN-01;Nội thất rời;Giường ngủ 1600x2000;TẦNG 2: PHÒNG NGỦ 1, PHÒNG NGỦ 2;cái;2
+FN-02;Nội thất rời;Tab đầu giường 450x400;TẦNG 2: PHÒNG NGỦ 1, PHÒNG NGỦ 2;cái;4
+FN-08;Nội thất rời;Bàn làm việc 1200x500;TẦNG 2: PHÒNG NGỦ 1;cái;1
+JN-01;Đồ gỗ đóng tại chỗ;Tủ áo 2400x600x2400;TẦNG 2: PHÒNG NGỦ 1;cái;1
+JN-07;Đồ gỗ đóng tại chỗ;Tủ áo 1800x600x2400;TẦNG 2: PHÒNG NGỦ 2;cái;1
+LT-01;Đèn;Đèn downlight âm trần Ø90;TẦNG 2;cái;48
+LT-02;Đèn;Đèn LED dây hắt trần;TẦNG 2;m;41,98
+LT-03;Đèn;Đèn ốp trần;TẦNG 2;cái;3
+SK-01;Len chân tường;Len chân tường gạch cao 100;"TẦNG 1: PHÒNG KHÁCH, BẾP + ĂN, SÂN PHƠI; TẦNG 2: PHÒNG NGỦ 1, SẢNH, PHÒNG NGỦ 2, KHO; TẦNG 3: PHÒNG NGỦ 3, SẢNH, PHÒNG THỜ, SÂN PHƠI; TUM: SÂN THƯỢNG";m;216
+SK-02;Len chân tường;Len đá granite cao 100 theo bậc;"TẦNG 1: CẦU THANG; TẦNG 2: CẦU THANG; TẦNG 3: CẦU THANG; TUM: CẦU THANG";m;44,95
+SN-01;Thiết bị vệ sinh;Bồn cầu 400x700;TẦNG 2: WC;cái;1
+SN-02;Thiết bị vệ sinh;Lavabo, tủ chậu, gương 800x500;TẦNG 2: WC;cái;1
+SN-03;Thiết bị vệ sinh;Khu tắm đứng, vách kính 900x900;TẦNG 2: WC;cái;1
+WL-01;Tường hoàn thiện;Sơn nước hoàn thiện màu trắng;"TẦNG 1: PHÒNG KHÁCH, CẦU THANG, BẾP + ĂN; TẦNG 2: PHÒNG NGỦ 1, SẢNH, CẦU THANG, PHÒNG NGỦ 2, KHO; TẦNG 3: PHÒNG NGỦ 3, SẢNH, CẦU THANG, PHÒNG THỜ; TUM: CẦU THANG";m²;560,42
+WL-02;Tường hoàn thiện;Gạch ốp tường 300x600 ốp đến trần;"TẦNG 1: WC; TẦNG 2: WC; TẦNG 3: WC";m²;65,94
+WL-04;Tường hoàn thiện;Sơn ngoại thất màu trắng;"TẦNG 1: SÂN PHƠI; TẦNG 3: SÂN PHƠI; TUM: SÂN THƯỢNG";m²;188,72

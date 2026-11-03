@@ -3,7 +3,8 @@
 // draw_entities specs. Sizes and reinforcement come from the user / the structural engineer: nothing is calculated
 // here except lengths, counts and weights.
 import { num, PlanError, pt } from './plan.mjs';
-import { dimStyleName, TEXT_STYLE } from './standards.mjs';
+import { dimStyleName, FIELD, TEXT_STYLE, viewTitle } from './standards.mjs';
+import { sym } from './symbols.mjs';
 
 export const SL = {
   conc: 'S-CONC', concHatch: 'S-CONC-PATT', bar: 'S-REBR', tie: 'S-REBR-STIR', text: 'S-ANNO-TEXT', dims: 'S-ANNO-DIMS',
@@ -58,14 +59,18 @@ function callout(out, from, elbow, text, mark, sc, dir = 1) {
   // One circle per mark: '2+3' (bars of two marks in one layer) becomes two circles side by side.
   for (const [i, m] of String(mark || '').split('+').filter(Boolean).entries()) {
     const c = [end[0] + dir * (2.5 + 5 * i) * sc, end[1]];
+    if (m.length <= 2) {
+      // the bar mark block (its number an attribute)
+      out.push(sym('MCP_SO_HIEU', c, { scale: sc, attrs: { SH: m }, layer: SL.text, half: [2.5, 2.5] }));
+      continue;
+    }
     out.push({ type: 'circle', center: P(...c), radius: 2.5 * sc, layer: SL.text });
-    out.push({ type: 'text', text: m, at: P(...c), height: (m.length > 2 ? 1.8 : 2.5) * sc, align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
+    out.push({ type: 'text', text: m, at: P(...c), height: 1.8 * sc, align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
   }
 }
 
 function title(out, text, x, y, sc) {
-  out.push({ type: 'text', text, at: P(x, y), height: 4 * sc, align: 'center', layer: SL.text, style: TEXT_STYLE });
-  out.push({ type: 'text', text: `TỶ LỆ 1:${sc}`, at: P(x, y - 6 * sc), height: 2.5 * sc, align: 'center', layer: SL.text, style: TEXT_STYLE });
+  out.push(...viewTitle(text, x, y, sc, SL.text, 'vi', 4));
 }
 
 function dim(out, from, to, offset, sc, direction) {
@@ -253,8 +258,7 @@ export function beamDetail(p) {
   const yAx = y0 - stub - 4 * sc;
   for (const [i, ax] of axes.entries()) {
     out.push({ type: 'line', from: P(ax, y0 + h + stub + 3 * sc), to: P(ax, yAx - 9 * sc), layer: SL.grid, scale_linetype: true });
-    out.push({ type: 'circle', center: P(ax, yAx - 13.5 * sc), radius: 4.5 * sc, layer: SL.gridTag });
-    out.push({ type: 'text', text: String(p.axes?.[i] ?? i + 1), at: P(ax, yAx - 13.5 * sc), height: 4 * sc, align: 'middle_center', layer: SL.gridTag, style: TEXT_STYLE });
+    out.push(sym('MCP_TRUC', [ax, yAx - 13.5 * sc], { scale: sc, attrs: { SO: String(p.axes?.[i] ?? i + 1) }, layer: SL.gridTag, half: [4.5, 4.5] }));
   }
   out.push({ type: 'dim_chain', points: axes.map((x) => P(x, y0 - stub)), direction: 'horizontal', at: P(axes[0], yAx), total: axes.length > 2, style: dimStyleName(sc), layer: SL.dims });
   // Callouts: bottom bar under the first span, top and support bars above.
@@ -416,5 +420,17 @@ export function rebarSchedule(rows, lang = 'vi') {
   const table = [HEAD[lang] ?? HEAD.vi, ...out.map((r) => [r.mark, r.shape, r.d, r.length, r.n, r.members, r.total, r.total_length_m, r.weight_kg])];
   for (const [d, kg] of Object.entries(byD).sort((a, b) => Number(a[0]) - Number(b[0]))) table.push([`${T.d}${d}`, '', '', '', '', '', '', '', kg]);
   table.push([T.total, '', '', '', '', '', '', '', totalKg]);
-  return { rows: out, by_diameter_kg: byD, total_kg: totalKg, table };
+  // drawn: the same with formulas; row k of the list is table row k + 2 (title, header). Columns: A mark, B shape,
+  // C d, D length, E n, F members, G bars, H length m, I weight kg (d²/162 kg/m)
+  const R = (i) => i + 3;
+  const F = (e, dec) => ({ field: FIELD.formula(e, lang, dec) });
+  const drawn = [HEAD[lang] ?? HEAD.vi, ...out.map((r, i) => [
+    r.mark, r.shape, r.d, r.length, r.n, r.members, F(`E${R(i)}*F${R(i)}`, 0), F(`G${R(i)}*D${R(i)}/1000`, 2), F(`H${R(i)}*C${R(i)}*C${R(i)}/162`, 2),
+  ])];
+  for (const [d] of Object.entries(byD).sort((a, b) => Number(a[0]) - Number(b[0]))) {
+    const cells = out.map((r, i) => (String(r.d) === d ? `I${R(i)}` : null)).filter(Boolean);
+    drawn.push([`${T.d}${d}`, '', '', '', '', '', '', '', F(cells.join('+'), 2)]);
+  }
+  drawn.push([T.total, '', '', '', '', '', '', '', F(`Sum(I${R(0)}:I${R(out.length - 1)})`, 2)]);
+  return { rows: out, by_diameter_kg: byD, total_kg: totalKg, table, drawn };
 }

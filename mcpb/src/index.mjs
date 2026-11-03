@@ -19,12 +19,13 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as z from 'zod';
-import { buildElevation, buildSection } from './elevation.mjs';
-import { buildPlan, PlanError } from './plan.mjs';
-import { dimStyleName, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, titleBlock, viewStyles } from './standards.mjs';
+import { buildBuilding, buildElevation, buildingAssumed, buildSection, floorsOf } from './elevation.mjs';
+import { buildPlan, planAssumptions, PlanError } from './plan.mjs';
+import { dimStyleName, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, titleBlock, viewStyles, viewTitle } from './standards.mjs';
 import { beamDetail, footingDetail, rcSection, rebarSchedule } from './structure.mjs';
+import { symbolDef } from './symbols.mjs';
 import {
-  ceilingPlan, centroid, cleanPoly, elevationKey, entBox, entityBounds, floorFinishPlan, freePoint, FURNITURE_DOC, furniturePlan, inside,
+  ceilingPlan, centroid, cleanPoly, elevationKey, entBox, entityBounds, floorFinishPlan, freePoint, FURNITURE_DOC, furniturePlan, generalNotes, inside, notesBlock, wallFinishPlan,
   interiorElevation, joineryDetail, labelSize, materialSchedule, polyArea, resolveFinish, resolveItems, shiftSpec,
 } from './interior.mjs';
 
@@ -101,7 +102,58 @@ function call(cmd, params = {}, label = cmd) {
   return exclusive(() => sendNow(cmd, params, label));
 }
 
-function sendNow(cmd, params = {}, label = cmd) {
+/**
+ * Block inserts made by the engines (symbols, lights, furniture, doors) carry their definition (def) or name one of
+ * symbols.mjs: those missing from the drawing are defined first (one define_blocks), then the inserts go without def
+ * and box (the box only places labels here).
+ */
+async function sendNow(cmd, params = {}, label = cmd) {
+  if (cmd === 'define_blocks' || !Array.isArray(params.entities)) return send(cmd, params, label);
+  const defs = new Map();
+  let any = false;
+  const need = (name, def) => {
+    if (defs.has(name)) return;
+    const d = def ?? symbolDef(name);
+    if (d) defs.set(name, d);
+  };
+  const entities = params.entities.map((e) => {
+    if (e && e.type === 'table' && Array.isArray(e.rows)) {
+      // symbol cells {block, def?} of a schedule
+      if (!e.rows.some((r) => Array.isArray(r) && r.some((c) => c && typeof c === 'object' && c.block))) return e;
+      any = true;
+      return {
+        ...e, rows: e.rows.map((r) => (Array.isArray(r) ? r.map((c) => {
+          if (!c || typeof c !== 'object' || !c.block) return c;
+          need(c.block, c.def);
+          return { block: c.block };
+        }) : r)),
+      };
+    }
+    if (e && (e.type === 'leader' || e.type === 'mleader') && e.block) {
+      need(e.block, e.def);
+      if (e.def === undefined) return e;
+      any = true;
+      const { def, ...rest } = e;
+      return rest;
+    }
+    if (!e || (e.type !== 'block' && e.type !== 'insert') || !e.name) return e;
+    need(e.name, e.def);
+    if (e.def === undefined && e.box === undefined) return e;
+    any = true;
+    const { def, box, ...rest } = e;
+    return rest;
+  });
+  if (defs.size) {
+    const styles = withStyles({ language: params.language }).layer_styles;
+    const textStyle = { ...styleParams({ scale: 100 }).text_style, set_current: false };
+    await send('define_blocks', {
+      blocks: [...defs.values()].map((d) => ({ ...d, layer_styles: styles })), styles: { text_style: textStyle },
+    }, `${label} (blocks)`);
+  }
+  return send(cmd, any ? { ...params, entities } : params, label);
+}
+
+function send(cmd, params = {}, label = cmd) {
   const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null));
   clean._timeout = TIMEOUT;
   const data = JSON.stringify({ id: nextId++, cmd, params: clean }) + '\n';
@@ -281,6 +333,8 @@ const FILTER = {
 let language = 'vi';
 // Last plan description given to draw_plan: draw_elevation and draw_section derive from it.
 let lastPlan = null;
+// where draw_plan put each floor of a building (the plans side by side)
+let lastFloors = null;
 const withStyles = (a) => ({ ...a, layer_styles: { ...layerStyles(a.language ?? language), ...(a.layer_styles || {}) } });
 
 // ---------------------------------------------------------------- read
@@ -516,7 +570,15 @@ server.registerTool('draw_plan', {
     '- rooms: [{name, at (point inside), number?, hatch?:{pattern, scale}}] -> area MEASURED from the walls, label "name / ' +
     'xx,xx m²" on A-ANNO-ROOM, closed boundary on A-AREA (not plotted). A room not closed by walls gets a warning; ' +
     'unlabelled_spaces lists closed spaces without a room.\n' +
-    '- stairs: [{start (middle of the first tread edge), direction (deg, 90 = up the page), width, treads, going, label?}]\n' +
+    '- stairs: [{start (middle of the first tread edge), direction (deg, 90 = up the page), width, treads, going, label?}] or ' +
+    'U stairs [{type: "u", region: [[x0,y0],[x1,y1]] (stairwell), direction: up|down|left|right (flight 1 going up), turn: ' +
+    'left|right (side of flight 2), gap: 100, risers?}] -> two flights, half landing, treads, LÊN/XUỐNG walking lines, cut line\n' +
+    '- balconies: [{region (slab outside the walls), railing: 1100}] -> slab edge and railing\n' +
+    '- floors (a building of several storeys): [{name, height (3600 ground floor, 3300 above), level?, walls (default: the ' +
+    'floor below), columns, openings, rooms, stairs, balconies, levels, parapet: {walls: [ids of the floor below], height: ' +
+    '1000} (roof terrace), roof {type: flat|gable...}, slab: 120}] with grids, heights, sections, north shared: one plan per ' +
+    'floor side by side, titled; a U stair arrives on the floor above (drawn going down there); draw_elevation / ' +
+    'draw_section stack the floors; the interior tools take floor.\n' +
     '- levels: [{at, value: "+0.000"}], sections: [{from, to, label, look: left|right}], north: {at, angle}\n' +
     '- dimensions: sides list (default ["bottom","left"]; ["bottom","left","top","right"]; false = none): chains of exterior ' +
     'openings/wall corners, grid spacing and overall size\n' +
@@ -530,6 +592,7 @@ server.registerTool('draw_plan', {
   inputSchema: {
     walls: opt(Specs), openings: opt(Specs), columns: opt(Specs), grid_columns: opt(Obj), grids: opt(Obj),
     rooms: opt(Specs), stairs: opt(Specs), levels: opt(Specs), sections: opt(Specs), north: opt(Obj),
+    balconies: opt(Specs), floors: opt(Specs).describe('Several storeys: see floors above'),
     dimensions: opt(jsonish(z.union([z.boolean(), z.array(z.enum(['bottom', 'left', 'top', 'right']))]))),
     entities: opt(Specs),
     scale: z.number().positive().default(100),
@@ -543,6 +606,7 @@ server.registerTool('draw_plan', {
   },
   annotations: EDIT,
 }, async ({ dry_run, ...args }) => {
+  if (Array.isArray(args.floors) && args.floors.length) return drawBuilding(args, dry_run);
   let plan;
   try {
     plan = buildPlan({ ...args, language: args.language ?? language });
@@ -551,6 +615,7 @@ server.registerTool('draw_plan', {
     throw e;
   }
   lastPlan = { ...args };
+  lastFloors = null;
   if (dry_run) {
     return dryRun(plan.assumed, {
       walls: plan.walls.length, openings: (args.openings || []).length, rooms: plan.rooms.length, entities: plan.entities.length,
@@ -567,6 +632,62 @@ server.registerTool('draw_plan', {
   if (plan.assumed.length) r.assumed = plan.assumed;
   return text(r);
 });
+
+/**
+ * draw_plan of a building: the plan of every floor (titled MẶT BẰNG <floor>) side by side in one Undo step; the
+ * floors' positions are remembered for the interior tools.
+ */
+async function drawBuilding(args, dryRunOnly) {
+  const lang = args.language ?? language;
+  const scale = args.scale ?? 100;
+  const floors = engine('draw_plan', () => floorsOf(args));
+  const plans = floors.map((f) => engine('draw_plan', () => buildPlan({ ...f.spec, language: lang })));
+  const B = engine('draw_plan', () => buildBuilding(args));
+  const assumed = [
+    ...floors.flatMap((f) => planAssumptions(f.spec).map((a) => ({ ...a, item: `${f.name}.${a.item}` }))),
+    ...buildingAssumed(args, B),
+  ];
+  const notes = plans.flatMap((p, i) => p.notes.map((n) => `${floors[i].name}: ${n}`));
+  const summary = floors.map((f, i) => ({ name: f.name, level: f.level, height: f.height, walls: plans[i].walls.length, rooms: plans[i].rooms.length }));
+  lastPlan = { ...args };
+  const widths = plans.map((p) => {
+    const b = entityBounds(p.entities);
+    return b ? b.max[0] - b.min[0] : 20000;
+  });
+  const pitch = Math.max(...widths) + 30 * scale;
+  const offsets = floors.map((f, i) => [i * pitch, 0]);
+  lastFloors = { offsets, names: floors.map((f) => f.name) };
+  if (dryRunOnly) return dryRun(assumed, { floors: summary, notes: notes.length ? notes : undefined });
+  const shifted = floors.map((f, i) => engine('draw_plan', () => buildPlan({ ...shiftSpec(f.spec, offsets[i], true), language: lang })));
+  const entities = [];
+  // titles on one line under the lowest plan
+  const bounds = shifted.map((p) => entityBounds(p.entities));
+  const yTitle = Math.min(...bounds.map((b) => b.min[1]));
+  for (const [i, p] of shifted.entries()) {
+    entities.push(...p.entities);
+    const b = bounds[i];
+    const cx = (b.min[0] + b.max[0]) / 2;
+    entities.push(...viewTitle(lang === 'en' ? `${floors[i].name} PLAN` : `MẶT BẰNG ${floors[i].name}`, cx, yTitle - 14 * scale, scale, ROLE.text, lang));
+  }
+  const req = withStyles({
+    walls: shifted.flatMap((p) => p.walls), cuts: shifted.flatMap((p) => p.cuts), columns: shifted.flatMap((p) => p.columns),
+    rooms: shifted.flatMap((p) => p.rooms), room_options: shifted[0].room_options, entities, language: args.language,
+    styles: styleParams({ scale }),
+  });
+  const r = await call('draw_plan', req);
+  // the rooms come back in the order sent: floor by floor
+  let k = 0;
+  const out = floors.map((f, i) => {
+    const n = shifted[i].rooms.length;
+    const rooms = (r.rooms || []).slice(k, k + n);
+    k += n;
+    return { name: f.name, level: f.level, height: f.height, offset: offsets[i], rooms };
+  });
+  return text({
+    floors: out, count: r.count, bounds: r.bounds, unlabelled_spaces: r.unlabelled_spaces,
+    notes: notes.length ? notes : undefined, assumed: assumedOrNone(assumed),
+  });
+}
 
 server.registerTool('define_block', {
   description:
@@ -771,7 +892,11 @@ server.registerTool('create_layout', {
     orientation: z.enum(['landscape', 'portrait']).default('landscape'),
     window: opt(Window).describe('Model area to show; default: drawing extents'),
     scale: opt(z.number().positive()).describe('100 = 1:100; default: largest standard scale that fits'),
-    title_block: opt(Obj).describe('{company, project, client, title, number, revision, sheet, date, drawn_by, checked_by}'),
+    title_block: opt(Obj).describe(
+      '{style: strip (vertical strip on the right, default on landscape A3-A0) | bottom, company, company_address, project, location, item, ' +
+      'client, client_address, title, number (default: a field of the layout name), revision, contract, phase, sheet, date, chief, lead, ' +
+      'drawn_by, checked_by, scale (default: a field of the viewport scale), note (the general note along the bottom)}',
+    ),
     language: opt(Lang),
     replace: z.boolean().default(false),
     activate: z.boolean().default(false).describe('Leave the new layout open in AutoCAD (default: back to Model)'),
@@ -793,7 +918,7 @@ server.registerTool('create_layout', {
   // largest standard scale when none is given); the larger area on a tie.
   const dims = (a) => [a[1][0] - a[0][0], a[1][1] - a[0][1]];
   const fits = (a, sc) => ww / (sc * unitsPerMm) <= dims(a)[0] + 1e-6 && wh / (sc * unitsPerMm) <= dims(a)[1] + 1e-6;
-  const { areas } = titleBlock({ paper, orientation, info: {}, language: lang ?? language });
+  const { areas } = titleBlock({ paper, orientation, info: {}, language: lang ?? language, style: title_block?.style });
   const pick = scale
     ? { a: areas.find((a) => fits(a, scale)) ?? areas[0], s: scale }
     : areas.map((a) => ({ a, s: fitScale([ww, wh], dims(a), unitsPerMm) })).sort((p, q) => p.s - q.s)[0];
@@ -803,8 +928,11 @@ server.registerTool('create_layout', {
     `the window (${Math.round(ww)} x ${Math.round(wh)} ${units || 'units'}) does not fit on ${paper} ${orientation} at 1:${s}: ` +
     'the viewport crops it. Use a larger paper, a smaller scale (larger number) or a smaller window.',
   ];
-  const info = { scale: `1:${s}`, date: new Date().toISOString().slice(0, 10), ...(title_block || {}) };
-  const sheet = titleBlock({ paper, orientation, info, language: lang ?? language });
+  // scale and number as fields (the viewport's scale, the layout name) unless given; the date of issue as text
+  const d = new Date();
+  const date = (lang ?? language) === 'en' ? d.toISOString().slice(0, 10) : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  const info = { scale: FIELD.viewportScale, number: FIELD.layoutName, date, ...(title_block || {}) };
+  const sheet = titleBlock({ paper, orientation, info, language: lang ?? language, style: title_block?.style });
   const factor = 1 / (s * unitsPerMm);
   const vw = Math.min(aw, ww * factor);
   const vh = Math.min(ah, wh * factor);
@@ -898,7 +1026,8 @@ async function freeSpot(at, scale) {
   const info = await sendNow('drawing_info', {});
   if (at) return { at, info };
   if (!info.extents) return { at: [0, 0], info };
-  return { at: [info.extents.max[0] + 30 * scale, info.extents.min[1] + 80 * scale], info };
+  // far enough that a sheet window around the new view does not catch its neighbour
+  return { at: [info.extents.max[0] + 40 * scale, info.extents.min[1] + 80 * scale], info };
 }
 
 async function drawView(ents, scale, info, lang) {
@@ -1050,8 +1179,8 @@ server.registerTool('draw_structure_detail', {
 
 function scheduleTable(sched, at, sc, lang) {
   return {
-    type: 'table', at, title: lang === 'en' ? 'BAR SCHEDULE' : 'BẢNG THỐNG KÊ CỐT THÉP', rows: sched.table,
-    height: 2.5 * sc, row_height: 7 * sc, col_widths: [24, 16, 12, 24, 20, 12, 22, 20, 22].map((w) => w * sc),
+    type: 'table', at, title: lang === 'en' ? 'BAR SCHEDULE' : 'BẢNG THỐNG KÊ CỐT THÉP', rows: sched.drawn ?? sched.table,
+    decimal_separator: lang === 'en' ? undefined : ',', height: 2.5 * sc, row_height: 7 * sc, col_widths: [24, 16, 12, 24, 20, 12, 22, 20, 22].map((w) => w * sc),
     layer: 'S-ANNO-TEXT', style: TEXT_STYLE,
   };
 }
@@ -1090,16 +1219,42 @@ server.registerTool('rebar_schedule', {
 // ---------------------------------------------------------------- interior design
 // What the interior tools of this session placed and chose, so the next ones agree: the furniture of
 // draw_furniture_plan (elevations, ceiling pendants, schedule), the finishes given per room, the lights of the RCP.
-const interior = { items: [], given: {}, lights: [] };
+// One such state per floor of a building ('' for a one-storey plan).
+const interiorStates = new Map();
+function interiorOf(key) {
+  if (!interiorStates.has(key)) interiorStates.set(key, { items: [], given: {}, lights: [] });
+  return interiorStates.get(key);
+}
+
+/**
+ * The plan the interior tools work on: the whole plan, or one floor of a building (floor: name or number from 1),
+ * with where that floor's plan was drawn.
+ */
+function floorFor(args, tool) {
+  const spec = planFor(args, tool);
+  if (!Array.isArray(spec.floors) || !spec.floors.length) return { spec, offset: [0, 0], key: '', height: null, label: '' };
+  const floors = engine(tool, () => floorsOf(spec));
+  if (args.floor === undefined) {
+    throw new Error(`${tool}: the building has floors (${floors.map((f) => f.name).join(', ')}): give floor (its name or number).`);
+  }
+  const k = typeof args.floor === 'number' || /^\d+$/.test(String(args.floor)) ? Number(args.floor) - 1 : floors.findIndex((f) => f.name === String(args.floor));
+  if (!floors[k]) throw new Error(`${tool}: no floor ${args.floor} (floors: ${floors.map((f) => f.name).join(', ')})`);
+  const offset = !args.plan && lastFloors?.offsets?.[k] ? lastFloors.offsets[k] : [0, 0];
+  return { spec: floors[k].spec, offset, key: floors[k].name, height: floors[k].height, label: ` ${floors[k].name}` };
+}
 
 /** Room outlines of the plan in the drawing (the A-AREA boundaries draw_plan made), by the room names of the plan. */
-async function roomOutlines(spec, tool) {
+async function roomOutlines(spec, tool, offset = [0, 0], handles = null) {
   const q = await sendNow('query_entities', { layers: [ROLE.area], types: ['polyline'], detail: true, limit: 2000 });
-  const polys = (q.entities || []).filter((e) => e.closed && Array.isArray(e.points) && e.points.length >= 3).map((e) => cleanPoly(e.points));
+  const polys = (q.entities || []).filter((e) => e.closed && Array.isArray(e.points) && e.points.length >= 3).map((e) => ({ poly: cleanPoly(e.points), handle: e.handle }));
   const out = {};
   for (const r of spec.rooms || []) {
-    const c = polys.filter((poly) => inside(r.at, poly)).sort((a, b) => polyArea(a) - polyArea(b))[0];
-    if (c) out[String(r.name)] = c;
+    const p = [r.at[0] + offset[0], r.at[1] + offset[1]];
+    const c = polys.filter((x) => inside(p, x.poly)).sort((a, b) => polyArea(a.poly) - polyArea(b.poly))[0];
+    if (!c) continue;
+    out[String(r.name)] = c.poly.map((q2) => [q2[0] - offset[0], q2[1] - offset[1]]);
+    // the boundary, for quantities kept as fields of it
+    if (handles) handles[String(r.name)] = c.handle;
   }
   if (!Object.keys(out).length) {
     throw new Error(`${tool}: no room outlines on ${ROLE.area}: draw the plan with draw_plan first (rooms with a point inside each, room_options.boundary true).`);
@@ -1108,14 +1263,28 @@ async function roomOutlines(spec, tool) {
 }
 
 /** Finishes of every room: what this call gives, else what an earlier call gave, over the defaults by kind of room. */
-function finishesFor(rooms, given, assumed) {
+function finishesFor(st, rooms, given, assumed, floorHeight = null) {
   for (const g of given || []) {
     if (!g.room) throw new Error('rooms[]: each entry needs room (the room name) and floor / skirting / wall / ceiling');
-    interior.given[g.room] = { ...(interior.given[g.room] || {}), ...g };
+    st.given[g.room] = { ...(st.given[g.room] || {}), ...g };
   }
   const out = {};
-  for (const name of Object.keys(rooms)) out[name] = resolveFinish(name, interior.given[name] || {}, assumed);
+  for (const name of Object.keys(rooms)) out[name] = resolveFinish(name, st.given[name] || {}, assumed, floorHeight);
   return out;
+}
+
+const FloorArg = opt(z.union([Str, z.number().int().positive()])).describe('Floor of a building (name or number from 1)');
+
+const NotesArg = z.union([z.boolean(), z.array(Str)]).default(true)
+  .describe('General notes of the sheet (GHI CHÚ): true = the standard ones for this kind of plan, a list = these, false = none');
+
+/** The sheet's general notes under its legend (or right of the plan at the top). */
+function sheetNotes(args, kind, base, sc, lang, below, extra) {
+  if (args.notes === false) return;
+  const lines = Array.isArray(args.notes) ? args.notes : generalNotes(kind, lang);
+  if (!lines.length) return;
+  const at = [base.bounds.max[0] + 15 * sc, below != null ? below - 6 * sc : base.bounds.max[1]];
+  extra.push(...notesBlock(lines, at, sc, lang));
 }
 
 /** A copy of the plan (walls, openings, columns, grids, dimensions, room names) at an interior scale, moved by offset. */
@@ -1149,8 +1318,7 @@ async function drawPlanCopy(base, extra, scale, lang) {
 }
 
 function sheetTitle(base, text, scale, out) {
-  out.push({ type: 'text', text, at: [base.centerX, base.bounds.min[1] - 14 * scale], height: 5 * scale, align: 'center', layer: ROLE.text, style: TEXT_STYLE });
-  out.push({ type: 'text', text: `TỶ LỆ 1:${scale}`, at: [base.centerX, base.bounds.min[1] - 21 * scale], height: 3 * scale, align: 'center', layer: ROLE.text, style: TEXT_STYLE });
+  out.push(...viewTitle(text, base.centerX, base.bounds.min[1] - 14 * scale, scale, ROLE.text));
 }
 
 const FinishRooms = opt(Specs).describe('[{room: "PHÒNG NGỦ 1", floor: {code, description, pattern: tile|plank|none|<hatch>, size: [600, 600], ' +
@@ -1159,7 +1327,8 @@ const FinishRooms = opt(Specs).describe('[{room: "PHÒNG NGỦ 1", floor: {code,
   '- only what differs from the defaults; remembered for the other interior tools');
 const INTERIOR_DEFAULTS =
   'Defaults by room name (reported in assumed): dry rooms FL-01 porcelain 600x600 centred, SK-01 skirting 100, WL-01 white paint, ' +
-  'CL-01 suspended gypsum +3.000 with a 600 wide, 150 deep drop band and LED cove; kitchens the same plus WL-03 backsplash tiles ' +
+  'CL-01 suspended gypsum +3.000 (floors of 3.3 m: +2.800) with a 600 wide, 150 deep drop band and LED cove (flat in rooms ' +
+  'narrower than 2.4 m); stairs FL-04 granite treads, no ceiling (stairwell); kitchens the same plus WL-03 backsplash tiles ' +
   'between the base and wall cabinets; WC/bathrooms FL-02 anti-slip 300x300, WL-02 wall tiles 300x600 to the ceiling, CL-02 ' +
   'moisture-resistant gypsum +3.000 flat; yards/balconies FL-03 outdoor tiles, no ceiling.';
 
@@ -1178,22 +1347,24 @@ server.registerTool('draw_furniture_plan', {
     items: Specs, copy: z.boolean().default(true), offset: opt(Point), scale: z.number().positive().default(50),
     tags: z.boolean().default(true),
     elevation_keys: opt(jsonish(z.array(z.union([Str, Obj])))).describe('Rooms that get an elevation key: names, or {room, at}'),
-    title: opt(Str), plan: opt(Obj), language: opt(Lang),
+    notes: NotesArg,
+    title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg,
     dry_run: z.boolean().default(false).describe('Resolve the items and list the sizes/codes/positions it would assume, without drawing'),
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
-  const spec = planFor(args, 'draw_furniture_plan');
-  const rooms = await roomOutlines(spec, 'draw_furniture_plan');
+  const { spec, offset: at0, key, label: floorLabel } = floorFor(args, 'draw_furniture_plan');
+  const st = interiorOf(key);
+  const rooms = await roomOutlines(spec, 'draw_furniture_plan', at0);
   const r = engine('draw_furniture_plan', () => resolveItems(args.items, rooms));
   const summary = r.items.map((it) => ({ code: it.code, type: it.type, room: it.room, wall: it.wall, size: `${it.w}x${it.d}x${it.h}` }));
   if (args.dry_run) return dryRun(r.assumed, { items: summary, warnings: r.warnings.length ? r.warnings : undefined });
-  interior.items = r.items;
+  st.items = r.items;
   const lang = args.language ?? language;
   if (!args.copy) {
     const sc = spec.scale ?? 100;
     const info = await sendNow('drawing_info', {});
-    const res = await drawView(furniturePlan(r.items, { scale: sc, tags: args.tags }), sc, info, lang);
+    const res = await drawView(furniturePlan(r.items, { offset: at0, scale: sc, tags: args.tags }), sc, info, lang);
     return text({ items: summary, assumed: assumedOrNone(r.assumed), warnings: r.warnings.length ? r.warnings : undefined, count: res.count, bounds: res.bounds });
   }
   const sc = args.scale;
@@ -1232,8 +1403,12 @@ server.registerTool('draw_furniture_plan', {
   }
   const base = await planCopy('draw_furniture_plan', spec, args, sc, { labels });
   const extra = furniturePlan(r.items, { offset: base.offset, scale: sc, tags: args.tags });
-  for (const p of keys) elevationKey([p[0] + base.offset[0], p[1] + base.offset[1]], sc, extra);
-  sheetTitle(base, args.title ?? (lang === 'en' ? 'FURNITURE LAYOUT PLAN' : 'MẶT BẰNG BỐ TRÍ NỘI THẤT'), sc, extra);
+  for (const [i, p] of keys.entries()) {
+    const k = args.elevation_keys[i];
+    elevationKey([p[0] + base.offset[0], p[1] + base.offset[1]], sc, extra, undefined, typeof k === 'string' ? k : k.room);
+  }
+  sheetNotes(args, 'furniture', base, sc, lang, null, extra);
+  sheetTitle(base, args.title ?? `${lang === 'en' ? 'FURNITURE LAYOUT PLAN' : 'MẶT BẰNG BỐ TRÍ NỘI THẤT'}${floorLabel}`, sc, extra);
   const res = await drawPlanCopy(base, extra, sc, lang);
   const warnings = [...r.warnings, ...notes];
   return text({
@@ -1249,15 +1424,15 @@ server.registerTool('draw_floor_finish_plan', {
     'tag under each name and the legend (finish, swatch at the real size, area m² and rooms). ' + INTERIOR_DEFAULTS,
   inputSchema: {
     rooms: FinishRooms, offset: opt(Point), scale: z.number().positive().default(50), legend: z.boolean().default(true),
-    title: opt(Str), plan: opt(Obj), language: opt(Lang),
+    title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg,
     dry_run: z.boolean().default(false).describe('List the finishes it would assume per room, without drawing'),
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
-  const spec = planFor(args, 'draw_floor_finish_plan');
-  const rooms = await roomOutlines(spec, 'draw_floor_finish_plan');
+  const { spec, offset: at0, key, height, label: floorLabel } = floorFor(args, 'draw_floor_finish_plan');
+  const rooms = await roomOutlines(spec, 'draw_floor_finish_plan', at0);
   const assumed = [];
-  const finishes = finishesFor(rooms, args.rooms, assumed);
+  const finishes = finishesFor(interiorOf(key), rooms, args.rooms, assumed, height);
   const floors = Object.fromEntries(Object.entries(finishes).map(([k, f]) => [k, f.floor ? `${f.floor.code} ${f.floor.description}` : 'none']));
   if (args.dry_run) return dryRun(assumed, { floors });
   const sc = args.scale;
@@ -1265,13 +1440,50 @@ server.registerTool('draw_floor_finish_plan', {
   const base = await planCopy('draw_floor_finish_plan', spec, args, sc);
   const labels = Object.fromEntries((spec.rooms || []).map((r) => [String(r.name), r.at]));
   const ff = engine('draw_floor_finish_plan', () => floorFinishPlan({
-    rooms, finishes, labels, offset: base.offset, scale: sc, lang,
+    rooms, finishes, labels, offset: base.offset, scale: sc, lang, spec, items: interiorOf(key).items,
     legendAt: args.legend ? [base.bounds.max[0] + 15 * sc, base.bounds.max[1]] : undefined,
   }));
+  assumed.push(...ff.assumed);
   const extra = [...ff.entities];
-  sheetTitle(base, args.title ?? (lang === 'en' ? 'FLOOR FINISH PLAN' : 'MẶT BẰNG LÁT SÀN'), sc, extra);
+  sheetNotes(args, 'floor', base, sc, lang, ff.legendBottom, extra);
+  sheetTitle(base, args.title ?? `${lang === 'en' ? 'FLOOR FINISH PLAN' : 'MẶT BẰNG HOÀN THIỆN SÀN'}${floorLabel}`, sc, extra);
   const res = await drawPlanCopy(base, extra, sc, lang);
   return text({ offset: base.offset, floors: ff.legend, assumed: assumedOrNone(assumed), count: res.count, bounds: res.bounds });
+}));
+
+server.registerTool('draw_wall_finish_plan', {
+  description:
+    'Wall finish plan (mặt bằng hoàn thiện tường): a copy of the plan at 1:50; along the inside face of every wall of a room a band ' +
+    'of its finish (one line for paint, two lines with the tile joints for tiles), broken at the doors and windows, the kitchen ' +
+    'splashback behind the base cabinets of draw_furniture_plan, a code tag per room with the tiling height, the legend with the ' +
+    'area of each wall finish (openings and splashback deducted) and the general notes. ' + INTERIOR_DEFAULTS,
+  inputSchema: {
+    rooms: FinishRooms, offset: opt(Point), scale: z.number().positive().default(50), legend: z.boolean().default(true),
+    title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg,
+    dry_run: z.boolean().default(false).describe('List the wall finishes it would assume per room, without drawing'),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const { spec, offset: at0, key, height, label: floorLabel } = floorFor(args, 'draw_wall_finish_plan');
+  const rooms = await roomOutlines(spec, 'draw_wall_finish_plan', at0);
+  const assumed = [];
+  const st = interiorOf(key);
+  const finishes = finishesFor(st, rooms, args.rooms, assumed, height);
+  const walls = Object.fromEntries(Object.entries(finishes).map(([k, f]) => [k, f.wall ? `${f.wall.code} ${f.wall.description}` : 'none']));
+  if (args.dry_run) return dryRun(assumed, { walls });
+  const sc = args.scale;
+  const lang = args.language ?? language;
+  const base = await planCopy('draw_wall_finish_plan', spec, args, sc, { levels: false });
+  const labels = Object.fromEntries((spec.rooms || []).map((r) => [String(r.name), r.at]));
+  const wf = engine('draw_wall_finish_plan', () => wallFinishPlan({
+    spec, rooms, finishes, items: st.items, labels, offset: base.offset, scale: sc, lang,
+    legendAt: args.legend ? [base.bounds.max[0] + 15 * sc, base.bounds.max[1]] : undefined,
+  }));
+  const extra = [...wf.entities];
+  sheetNotes(args, 'wall', base, sc, lang, wf.legendBottom, extra);
+  sheetTitle(base, args.title ?? `${lang === 'en' ? 'WALL FINISH PLAN' : 'MẶT BẰNG HOÀN THIỆN TƯỜNG'}${floorLabel}`, sc, extra);
+  const res = await drawPlanCopy(base, extra, sc, lang);
+  return text({ offset: base.offset, walls: wf.legend, assumed: assumedOrNone(assumed), count: res.count, bounds: res.bounds });
 }));
 
 server.registerTool('draw_ceiling_plan', {
@@ -1282,27 +1494,36 @@ server.registerTool('draw_ceiling_plan', {
     'field, the room name; then the light legend with counts (remembered for material_schedule). ' + INTERIOR_DEFAULTS,
   inputSchema: {
     rooms: FinishRooms, offset: opt(Point), scale: z.number().positive().default(50), spacing: z.number().positive().default(1200),
-    legend: z.boolean().default(true), title: opt(Str), plan: opt(Obj), language: opt(Lang),
+    legend: z.boolean().default(true), title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg,
+    mode: z.enum(['both', 'finish', 'lighting']).default('both')
+      .describe('finish = ceiling finish plan (materials, levels, step widths; no lights), lighting = lighting layout (lights and legend; no level tags), both = one reflected ceiling plan'),
     dry_run: z.boolean().default(false).describe('List the ceilings it would assume per room, without drawing'),
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
-  const spec = planFor(args, 'draw_ceiling_plan');
-  const rooms = await roomOutlines(spec, 'draw_ceiling_plan');
+  const { spec, offset: at0, key, height, label: floorLabel } = floorFor(args, 'draw_ceiling_plan');
+  const st = interiorOf(key);
+  const rooms = await roomOutlines(spec, 'draw_ceiling_plan', at0);
   const assumed = [];
-  const finishes = finishesFor(rooms, args.rooms, assumed);
+  const finishes = finishesFor(st, rooms, args.rooms, assumed, height);
   const ceilings = Object.fromEntries(Object.entries(finishes).map(([k, f]) => [k, f.ceiling ? `${f.ceiling.code} +${f.ceiling.level}${f.ceiling.drop ? ` drop ${f.ceiling.drop.width}/${f.ceiling.drop.depth}` : ''}` : 'none']));
   if (args.dry_run) return dryRun(assumed, { ceilings });
   const sc = args.scale;
   const lang = args.language ?? language;
   const base = await planCopy('draw_ceiling_plan', spec, args, sc, { doors: false, roomLabels: false, levels: false });
   const cp = engine('draw_ceiling_plan', () => ceilingPlan({
-    rooms, finishes, items: interior.items, offset: base.offset, scale: sc, spacing: args.spacing, lang,
+    rooms, finishes, items: st.items, offset: base.offset, scale: sc, spacing: args.spacing, lang, mode: args.mode,
     legendAt: args.legend ? [base.bounds.max[0] + 15 * sc, base.bounds.max[1]] : undefined,
   }));
-  interior.lights = cp.lights;
+  if (cp.lights) st.lights = cp.lights;
   const extra = [...cp.entities];
-  sheetTitle(base, args.title ?? (lang === 'en' ? 'REFLECTED CEILING PLAN' : 'MẶT BẰNG TRẦN ĐÈN'), sc, extra);
+  sheetNotes(args, args.mode === 'lighting' ? 'lighting' : 'ceiling', base, sc, lang, cp.legendBottom, extra);
+  const TITLES = {
+    both: lang === 'en' ? 'REFLECTED CEILING PLAN' : 'MẶT BẰNG TRẦN ĐÈN',
+    finish: lang === 'en' ? 'CEILING FINISH PLAN' : 'MẶT BẰNG HOÀN THIỆN TRẦN',
+    lighting: lang === 'en' ? 'LIGHTING LAYOUT PLAN' : 'MẶT BẰNG BỐ TRÍ ĐÈN',
+  };
+  sheetTitle(base, args.title ?? `${TITLES[args.mode]}${floorLabel}`, sc, extra);
   const res = await drawPlanCopy(base, extra, sc, lang);
   return text({
     offset: base.offset, ceilings, lights: cp.lights, assumed: assumedOrNone(assumed), warnings: cp.warnings.length ? cp.warnings : undefined,
@@ -1321,19 +1542,20 @@ server.registerTool('draw_interior_elevation', {
     room: Str, walls: jsonish(z.array(z.union([Str, z.number()]))).default(['A', 'B', 'C', 'D']), at: opt(Point),
     scale: z.number().positive().default(30), rooms: FinishRooms,
     items: opt(Specs).describe('Furniture as in draw_furniture_plan; default: the items of the last draw_furniture_plan'),
-    plan: opt(Obj), language: opt(Lang),
+    plan: opt(Obj), language: opt(Lang), floor: FloorArg,
     dry_run: z.boolean().default(false).describe('List the finishes and items it would show per wall, without drawing'),
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
-  const spec = planFor(args, 'draw_interior_elevation');
-  const rooms = await roomOutlines(spec, 'draw_interior_elevation');
+  const { spec, offset: at0, key, height } = floorFor(args, 'draw_interior_elevation');
+  const st = interiorOf(key);
+  const rooms = await roomOutlines(spec, 'draw_interior_elevation', at0);
   const poly = rooms[args.room];
   if (!poly) throw new Error(`draw_interior_elevation: room "${args.room}" not found (rooms: ${Object.keys(rooms).join(', ')})`);
   const assumed = [];
-  const finishes = finishesFor(rooms, args.rooms, assumed);
+  const finishes = finishesFor(st, rooms, args.rooms, assumed, height);
   const own = assumed.filter((a) => a.item.startsWith(`${args.room}.`));
-  let items = interior.items;
+  let items = st.items;
   if (args.items) {
     const r = engine('draw_interior_elevation', () => resolveItems(args.items, rooms));
     items = r.items;
@@ -1389,7 +1611,9 @@ server.registerTool('draw_joinery_detail', {
 }, ({ dry_run, ...args }) => exclusive(async () => {
   const p = { ...args };
   if (args.item) {
-    const it = interior.items.find((x) => x.code === args.item && ['kitchen_base', 'wardrobe'].includes(x.type));
+    const owner = [...interiorStates.values()].find((s2) => s2.items.some((x) => x.code === args.item && ['kitchen_base', 'wardrobe'].includes(x.type)));
+    const pool = owner?.items ?? [];
+    const it = pool.find((x) => x.code === args.item && ['kitchen_base', 'wardrobe'].includes(x.type));
     if (!it) throw new Error(`draw_joinery_detail: no kitchen_base or wardrobe with code ${args.item} in the last draw_furniture_plan`);
     p.kind = it.type === 'wardrobe' ? 'wardrobe' : 'kitchen';
     p.width = p.width ?? it.w;
@@ -1404,12 +1628,12 @@ server.registerTool('draw_joinery_detail', {
       // wall cabinets and hood on the same wall, measured from the left end of the base run
       const along = (x) => (x.room === it.room && Math.abs(x.ey[0] - it.ey[0]) + Math.abs(x.ey[1] - it.ey[1]) < 1e-6
         ? (x.o[0] - it.o[0]) * it.ex[0] + (x.o[1] - it.o[1]) * it.ex[1] : null);
-      const ups = interior.items.filter((x) => x.type === 'kitchen_wall' && along(x) !== null);
+      const ups = pool.filter((x) => x.type === 'kitchen_wall' && along(x) !== null);
       if (ups.length && p.wall === undefined) {
         p.wall = { d: ups[0].d, h: ups[0].h, z0: ups[0].opts.z0 };
         p.wall_runs = p.wall_runs ?? ups.map((x) => ({ x: along(x), w: x.w, modules: x.opts.modules }));
       }
-      const hood = interior.items.find((x) => x.type === 'hood' && along(x) !== null);
+      const hood = pool.find((x) => x.type === 'hood' && along(x) !== null);
       if (hood && p.hood === undefined) p.hood = { x: along(hood), w: hood.w, d: hood.d, h: hood.h, z0: hood.opts.z0 };
     }
     p.name = p.name ?? `${it.type === 'kitchen_base' ? 'TỦ BẾP' : it.def.vi.toUpperCase()} ${it.code}`;
@@ -1434,22 +1658,38 @@ server.registerTool('material_schedule', {
   inputSchema: {
     rooms: FinishRooms, draw: z.boolean().default(true), at: opt(Point), scale: z.number().positive().default(50),
     csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('comma'), plan: opt(Obj), language: opt(Lang),
+    floor: FloorArg.describe('One floor of a building; default: every floor (rooms listed as "<floor>: <room>")'),
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
-  const spec = planFor(args, 'material_schedule');
-  const rooms = await roomOutlines(spec, 'material_schedule');
-  const assumed = [];
-  const finishes = finishesFor(rooms, args.rooms, assumed);
   const lang = args.language ?? language;
-  const ms = engine('material_schedule', () => materialSchedule({ spec, rooms, finishes, items: interior.items, lights: interior.lights, lang }));
+  const assumed = [];
+  const whole = planFor(args, 'material_schedule');
+  const multi = Array.isArray(whole.floors) && whole.floors.length && args.floor === undefined;
+  const targets = multi ? floorsOf(whole).map((f, i) => floorFor({ ...args, floor: i + 1 }, 'material_schedule')) : [floorFor(args, 'material_schedule')];
+  const acc = new Map();
+  let ms;
+  for (const t of targets) {
+    const st = interiorOf(t.key);
+    let rooms, handles;
+    try {
+      handles = {};
+      rooms = await roomOutlines(t.spec, 'material_schedule', t.offset, handles);
+    } catch (e) {
+      if (multi) continue; // a floor without rooms (e.g. a roof)
+      throw e;
+    }
+    const finishes = finishesFor(st, rooms, multi ? undefined : args.rooms, assumed, t.height);
+    ms = engine('material_schedule', () => materialSchedule({ spec: t.spec, rooms, finishes, items: st.items, lights: st.lights, lang, floor: multi ? t.key : null, acc, handles }));
+  }
+  if (!ms) throw new Error('material_schedule: no room outlines found: draw the plan with draw_plan first.');
   const out = { rows: ms.rows, assumed: assumedOrNone(assumed) };
   if (args.draw) {
     const sc = args.scale;
     const { at: pos, info } = await freeSpot(args.at, sc);
     const table = {
-      type: 'table', at: pos, title: lang === 'en' ? 'FINISH AND MATERIAL SCHEDULE' : 'BẢNG THỐNG KÊ VẬT LIỆU HOÀN THIỆN', rows: ms.table,
-      height: 2.5 * sc, row_height: 8 * sc, col_widths: [16, 30, 75, 55, 12, 22].map((w) => w * sc), layer: ROLE.text, style: TEXT_STYLE,
+      type: 'table', at: pos, title: lang === 'en' ? 'FINISH AND MATERIAL SCHEDULE' : 'BẢNG THỐNG KÊ VẬT LIỆU HOÀN THIỆN', rows: ms.drawn, decimal_separator: lang === 'en' ? undefined : ',',
+      height: 2.5 * sc, row_height: 8 * sc, col_widths: [16, 16, 30, 75, 55, 12, 22].map((w) => w * sc), layer: ROLE.text, style: TEXT_STYLE,
     };
     const res = await drawView([table], sc, info, lang);
     out.table = res.results?.[0]?.handle ?? res.entities?.[0]?.handle;

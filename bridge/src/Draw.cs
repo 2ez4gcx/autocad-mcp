@@ -20,6 +20,8 @@ namespace AcadMcp
         public readonly List<string> CreatedLayers = new List<string>();
         public Extents3d? Bounds;
         public int Count;
+        /// <summary>Attributes whose field names {viewport}: made by create_layout once the viewport exists.</summary>
+        public readonly List<KeyValuePair<ObjectId, string>> PendingFields = new List<KeyValuePair<ObjectId, string>>();
 
         public Drawer(Database db, Transaction tr, BlockTableRecord space, P layerStyles)
         {
@@ -52,6 +54,35 @@ namespace AcadMcp
                 }
             }
             return results;
+        }
+
+        // ---------------------------------------------------------------- fields
+
+        /// <summary>A field code (starts with %&lt;\): text whose value AutoCAD keeps up to date.</summary>
+        public static bool IsFieldCode(string s) => s != null && s.Contains("%<\\");
+
+        /// <summary>{h:HANDLE} in a field code becomes the object id of that entity (%&lt;\_ObjId n&gt;%).</summary>
+        public static string ResolveField(Database db, string code)
+        {
+            return System.Text.RegularExpressions.Regex.Replace(code, @"\{h:([0-9A-Fa-f]+)\}", m =>
+            {
+                ObjectId id;
+                if (!db.TryGetObjectId(new Handle(Convert.ToInt64(m.Groups[1].Value, 16)), out id) || id.IsErased)
+                    throw new McpError("field: no object with handle " + m.Groups[1].Value);
+                return ObjId(id);
+            });
+        }
+
+        public static string ObjId(ObjectId id) => "%<\\_ObjId " + id.OldIdPtr.ToInt64() + ">%";
+
+        /// <summary>Puts a field on the text of an object (mtext, attribute) that is in the drawing.</summary>
+        public ObjectId ApplyField(DBObject o, string code)
+        {
+            var f = new Field(ResolveField(_db, code));
+            f.Evaluate();
+            o.SetField(f);
+            _tr.AddNewlyCreatedDBObject(f, true);
+            return f.ObjectId;
         }
 
         // ---------------------------------------------------------------- common properties
@@ -520,6 +551,52 @@ namespace AcadMcp
             var pts = U.Pts(s, "points", 2);
             var ml = new MLeader();
             Add(ml, s);
+            if (s.Has("leader_style"))
+            {
+                // the multileader style of the view's scale (made by setup_styles with the dimension style of the same name)
+                var dict = (DBDictionary)_tr.GetObject(_db.MLeaderStyleDictionaryId, OpenMode.ForRead);
+                if (dict.Contains(s.Str("leader_style"))) ml.MLeaderStyle = dict.GetAt(s.Str("leader_style"));
+            }
+            if (s.Has("leader_linetype"))
+            {
+                // e.g. DASHED leaders of material tags
+                ml.LeaderLineTypeId = U.EnsureLinetype(_db, _tr, s.Str("leader_linetype"));
+            }
+            if (s.Has("block"))
+            {
+                // a tag block (code box, description) as the content: the leader ends at its insertion point
+                ObjectId bid = BlockId(s.Str("block"), null, false);
+                Point3d bp = pts[pts.Count - 1];
+                // block_scale is the size wanted in the drawing; the leader style's scale already multiplies the block
+                double bs = s.Num("block_scale", 1);
+                double styleScale = ml.Scale > 0 ? ml.Scale : 1;
+                ml.ContentType = ContentType.BlockContent;
+                ml.BlockContentId = bid;
+                ml.BlockConnectionType = BlockConnectionType.ConnectBase;
+                ml.BlockScale = new Scale3d(bs / styleScale);
+                ml.BlockPosition = bp;
+                ml.EnableLanding = false;
+                ml.EnableDogleg = false;
+                var btr = (BlockTableRecord)_tr.GetObject(bid, OpenMode.ForRead);
+                P attrs = s.Obj("attributes");
+                Matrix3d xf = Matrix3d.Displacement(bp - Point3d.Origin) * Matrix3d.Scaling(bs, Point3d.Origin);
+                foreach (ObjectId id in btr)
+                {
+                    var ad = _tr.GetObject(id, OpenMode.ForRead) as AttributeDefinition;
+                    if (ad == null || ad.Constant) continue;
+                    using (var ar = new AttributeReference())
+                    {
+                        ar.SetAttributeFromBlock(ad, xf);
+                        string key = attrs?.D.Keys.FirstOrDefault(k => k.Equals(ad.Tag, StringComparison.OrdinalIgnoreCase));
+                        ar.TextString = key != null ? attrs.Str(key) ?? "" : "";
+                        ml.SetBlockAttribute(id, ar);
+                    }
+                }
+                // vertices from the arrow to the one before the block; the block's base closes the line
+                int li = ml.AddLeaderLine(pts[pts.Count - 2]);
+                for (int i = pts.Count - 3; i >= 0; i--) ml.AddFirstVertex(li, pts[i]);
+                return One("leader", ml);
+            }
             ml.ContentType = ContentType.MTextContent;
             var m = MakeMText(s, s.ReqStr("text"), pts[pts.Count - 1]);
             m.Attachment = pts[pts.Count - 1].X >= pts[0].X ? AttachmentPoint.MiddleLeft : AttachmentPoint.MiddleRight;
@@ -528,9 +605,17 @@ namespace AcadMcp
             ml.MText = m;
             // The leader style's scale (DIMSCALE of setup_styles) multiplies text height and arrow size.
             if (s.Has("height")) ml.TextHeight = Pos(s, "height") / scale;
-            int idx = ml.AddLeaderLine(pts[0]);
-            for (int i = 1; i < pts.Count - 1; i++) ml.AddLastVertex(idx, pts[i]);
+            // The text first: a new leader line gets a vertex where it meets the landing. Then the line from the
+            // vertex before the landing, the given landing point, and the earlier vertices added towards the arrow.
             ml.TextLocation = pts[pts.Count - 1];
+            if (pts.Count == 2) ml.AddLeaderLine(pts[0]);
+            else
+            {
+                int n = pts.Count - 1; // vertices pts[0..n-1], the last one at the landing
+                int idx = n >= 2 ? ml.AddLeaderLine(pts[n - 2]) : ml.AddLeaderLine(pts[0]);
+                ml.SetLastVertex(idx, pts[n - 1]);
+                for (int i = n - 3; i >= 0; i--) ml.AddFirstVertex(idx, pts[i]);
+            }
             return One("leader", ml);
         }
 
@@ -577,13 +662,23 @@ namespace AcadMcp
                     if (ad == null || ad.Constant) continue;
                     var ar = new AttributeReference();
                     ar.SetAttributeFromBlock(ad, br.BlockTransform);
+                    string val = null;
                     if (attrs != null)
                     {
                         string key = attrs.D.Keys.FirstOrDefault(k => k.Equals(ad.Tag, StringComparison.OrdinalIgnoreCase));
-                        if (key != null) ar.TextString = attrs.Str(key) ?? "";
+                        if (key != null) val = attrs.Str(key) ?? "";
                     }
+                    // a field (the viewport scale, the layout name, an object's property) is made once the attribute is
+                    // in the drawing; assigned as text, AutoCAD would make it at once, before {viewport} is known
+                    bool field = IsFieldCode(val);
+                    if (val != null) ar.TextString = field ? "" : val;
                     br.AttributeCollection.AppendAttribute(ar);
                     _tr.AddNewlyCreatedDBObject(ar, true);
+                    if (field)
+                    {
+                        if (val.Contains("{viewport}")) PendingFields.Add(new KeyValuePair<ObjectId, string>(ar.ObjectId, val));
+                        else ApplyField(ar, val);
+                    }
                     if (ad.Justify != AttachmentPoint.BaseLeft) ar.AdjustAlignment(_db);
                 }
             }
@@ -637,7 +732,26 @@ namespace AcadMcp
                 for (int c = 0; c < cols; c++)
                 {
                     Cell cell = t.Cells[r + r0, c];
+                    string fieldCode = c < row.Count ? (row[c] is Dictionary<string, object> fd && fd.ContainsKey("field") ? Convert.ToString(fd["field"]) : row[c] as string) : null;
+                    if (IsFieldCode(fieldCode))
+                    {
+                        // a quantity that follows the drawing: object properties, sums (AcExpr) of them, formulas of cells
+                        cell.TextString = ResolveField(_db, fieldCode);
+                        cell.TextHeight = th;
+                        cell.Alignment = CellAlignment.MiddleRight;
+                        continue;
+                    }
+                    if (c < row.Count && row[c] is Dictionary<string, object> bd && bd.ContainsKey("block"))
+                    {
+                        // a symbol in the cell (a light, a door): the block itself, scaled to fit
+                        cell.BlockTableRecordId = BlockId(Convert.ToString(bd["block"]), null, false);
+                        cell.Contents[0].IsAutoScale = true;
+                        cell.Alignment = CellAlignment.MiddleCenter;
+                        continue;
+                    }
                     cell.TextString = c < row.Count && row[c] != null ? Convert.ToString(row[c], System.Globalization.CultureInfo.InvariantCulture) : "";
+                    // decimal commas (Vietnamese, European) for the numbers
+                    if (c < row.Count && row[c] is double && s.Has("decimal_separator")) cell.TextString = cell.TextString.Replace(".", s.Str("decimal_separator"));
                     cell.TextHeight = th;
                     cell.Alignment = r == 0 && s.Bool("header", true) ? CellAlignment.MiddleCenter
                         : (c < row.Count && row[c] is double ? CellAlignment.MiddleRight : CellAlignment.MiddleLeft);
