@@ -10,14 +10,14 @@ Current version: **1.2.0**.
 
 ## Features
 
-52 tools. Lengths are in drawing units (mm in a metric drawing), areas in m², angles in degrees counter-clockwise from +X.
+53 tools. Lengths are in drawing units (mm in a metric drawing), areas in m², angles in degrees counter-clockwise from +X.
 
 | Group | Tools |
 |---|---|
 | Read & quantities | `ping`, `drawing_info`, `list_layers`, `list_blocks`, `query_entities`, `selection_info`, `quantity_takeoff`, `check_drawing` |
 | Standards | `setup_layers`, `setup_styles` |
 | Drawing & editing | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
-| Elevations, sections & structure | `draw_elevation`, `draw_section`, `draw_roof_plan`, `draw_door_schedule`, `draw_stair_detail`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule`, `structural_calc`, `draw_quantity_schedule` |
+| Elevations, sections & structure | `draw_elevation`, `draw_section`, `draw_roof_plan`, `draw_door_schedule`, `draw_stair_detail`, `draw_finish_quantities`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule`, `structural_calc`, `draw_quantity_schedule` |
 | Interior design | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
 | Images & 3D sources | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
 | Sheets & files | `create_layout`, `draw_cover_sheet`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
@@ -59,10 +59,13 @@ Highlights:
   - slab panels shared out to their beams (two-way trapezoid / triangle, one-way), continuous beams with the live load on all / odd / even spans, end supports qL²/24;
   - bending and shear by TCVN 5574:2018 (αm, ξ ≤ ξR, As, bars; stirrups at the supports and midspan); the designed bars go to `draw_beam_schedule`;
   - column loads floor by floor down to the footings (a column standing on a slab hands its load to the beam under it), column capacity, footing area for the soil pressure;
-  - a sheet of tables (materials, slab loads, build-up, beams, columns and footings, assumptions) with the sign-off: calculated, checked, structural lead (name, licence No., signature, date); CSV for Excel.
+  - a sheet of tables (materials, slab loads, build-up, beams, columns and footings, assumptions) with the sign-off: calculated, checked, structural lead (name, licence No., signature, date); CSV for Excel;
+  - `xlsx_path`: a live Excel workbook: the inputs in yellow cells (materials, layer thicknesses and unit weights, load factors, live loads, soil pressure, column and footing sizes, q, bars), everything else as formulas (g, p, M, αm, ξ, As, checks, stirrup spacing, column capacity, footing area), so it calculates again when a value changes.
 - **Bar schedule and bill of quantities** (`draw_quantity_schedule`):
   - the bar schedule of the whole set: footings, columns, ground beams and beams as designed, slabs and stairs by the detailing rules; laps and anchorage, weights as table formulas, totals per diameter, flowing over pages;
-  - the bill of quantities with how each item is made up: lean concrete, concrete and formwork of footings, column stubs, ground beams, columns per storey, beams, slabs, stairs; steel by grade; brick walls by thickness (m², m³) less the openings; plaster inside, outside and of the soffits; CSV for Excel.
+  - the bill of quantities with how each item is made up: lean concrete, concrete and formwork of footings, column stubs, ground beams, columns per storey, beams, slabs, stairs; steel by grade; brick walls by thickness (m², m³) less the openings; plaster inside, outside and of the soffits; CSV for Excel;
+  - `xlsx_path`: the whole structural workbook (the calculation, the bar schedule with its weights as formulas, the quantities as formulas of how they are made up).
+- **Architectural finish quantities** (`draw_finish_quantities`): floor tiles by finish, wall tiles, skirting; skim coat and paint inside, outside (the faces with no room on their side, plinth, parapets) and of the ceilings; gypsum ceilings; waterproofing of toilets, balconies and the roof terrace; screed to falls and the tower roof; stair granite and railings, balcony railings; doors and windows by type. The rooms and finishes are those of the interior set. A table with the quantity of every floor, CSV, and an Excel workbook with a column per floor and the total as their sum.
 - **Structural set** (`draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`):
   - `draw_structure_plan floor=foundation` draws the foundation plan: pad footings M1 under the columns (hidden), ground beams GM under the ground floor walls, the footing size and bottom level;
   - `draw_structure_plan` draws the framing plan of each slab (floor 2, 3 ... and the roof):

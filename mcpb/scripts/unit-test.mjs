@@ -14,6 +14,8 @@ import { roofPlan } from '../src/roof.mjs';
 import { stairDetail } from '../src/stair.mjs';
 import { analyseBeam, calcCsv, calcSheet, chooseBars, CONCRETE, flexure, STEEL, stirrups, structuralCalc, supportMoments } from '../src/calc.mjs';
 import { boqCsv, boqSheets } from '../src/boq.mjs';
+import { finishQuantities } from '../src/archboq.mjs';
+import { finishWorkbook, howFormula, kcWorkbook } from '../src/workbooks.mjs';
 import { ceilingPlan, cleanPoly, cutBoxes, dejog, floorFinishPlan, furniturePlan, generalNotes, interiorElevation, joineryDetail, materialSchedule, notesBlock, offsetPoly, patternLines, polyArea, resolveFinish, resolveItems, roomEdge, wallFinishPlan } from '../src/interior.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -628,7 +630,7 @@ test('structural set: framing plan of the floor 2 slab, beam schedule, general n
   assert.equal(r.columns[0].count, 4);
   assert.ok(r.entities.filter((e) => e.layer === 'S-BEAM').length === 8, 'two faces per beam');
   assert.ok(r.entities.some((e) => e.type === 'text' && e.text === 'D2.1 (200x700)'));
-  assert.ok(r.entities.some((e) => e.type === 'text' && e.text.startsWith('S2 - SÀN HẠ 50')), 'the WC slab lowered');
+  assert.ok(r.entities.some((e) => e.type === 'text' && /^S2 - SÀN (BTCT DÀY 120, )?HẠ 50/.test(e.text)), 'the WC slab lowered');
   assert.equal(r.entities.filter((e) => e.name === 'MCP_TRUC').length, 8);
   assert.ok(r.entities.some((e) => e.type === 'text' && e.text === 'MẶT BẰNG KẾT CẤU SÀN TẦNG 2 (+3.600)'));
   assert.ok(r.assumed.some((a) => a.item === 'beam.h') && r.assumed.some((a) => a.item === 'column.size'));
@@ -653,6 +655,34 @@ test('structural set: framing plan of the floor 2 slab, beam schedule, general n
   const cv = coverSheet({ set: 'Kết cấu', info: { project: 'NHÀ PHỐ', client: 'CĐT', phase: 'TKTC', date: '11/2026' } });
   assert.ok(cv.entities.some((e) => e.text === 'HỒ SƠ BẢN VẼ KẾT CẤU') && cv.entities.some((e) => e.text === 'CÔNG TRÌNH:') && !cv.entities.some((e) => e.text === 'TỔNG THẦU:'));
   assert.deepEqual(dl.entities[0].rows[1].slice(0, 3), [1, 'KC-01', 'GHI CHÚ CHUNG']);
+});
+
+test('framing plan labels: clear of each other and of the stair opening; only the grids the beams reach', () => {
+  const fl = floorsOf(TOWN);
+  // the terrace round the stair tower: its vertex average falls in the stairwell
+  const rooms = {
+    'CẦU THANG': [[200, 3000], [2550, 3000], [2550, 6700], [200, 6700]],
+    'SÂN THƯỢNG': [[200, 200], [4800, 200], [4800, 9800], [200, 9800], [200, 6800], [2650, 6800], [2650, 2900], [200, 2900]],
+  };
+  const r = framingPlan({ spec: fl[1].spec, level: 6900, slab: 120, name: 'TUM', prefix: 'DT.', rooms });
+  // every room lowered: one label with the thickness, clear of the stair opening
+  const only = r.entities.filter((e) => e.type === 'text' && /^S[12] -/.test(e.text));
+  assert.ok(only.length === 1 && only[0].text === 'S2 - SÀN BTCT DÀY 120, HẠ 50', only.map((e) => e.text).join(' | '));
+  assert.ok(!(only[0].at[0] > 200 && only[0].at[0] < 2550 && only[0].at[1] > 3000 && only[0].at[1] < 6700), 'over the stair opening');
+  // a room at the slab level beside it: S1 there, S2 on the terrace, apart
+  const rooms2 = { ...rooms, 'SÂN THƯỢNG': [[200, 200], [4800, 200], [4800, 2900], [200, 2900]], 'PHÒNG': [[2650, 2900], [4800, 2900], [4800, 9800], [200, 9800], [200, 6800], [2650, 6800]] };
+  const r2 = framingPlan({ spec: fl[1].spec, level: 6900, slab: 120, name: 'TUM', prefix: 'DT.', rooms: rooms2 });
+  const texts = r2.entities.filter((e) => e.type === 'text');
+  const s1 = texts.find((e) => e.text.startsWith('S1 -')), s2 = texts.find((e) => e.text.startsWith('S2 -'));
+  assert.ok(s1 && s2, 'both labels');
+  const box = (e) => { const w = [...e.text].length * 0.72 * e.height; return [e.at[0] - w / 2, e.at[1] - 0.7 * e.height, e.at[0] + w / 2, e.at[1] + 0.7 * e.height]; };
+  const [a, b] = [box(s1), box(s2)];
+  assert.ok(!(a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]), `S1 ${s1.at} and S2 ${s2.at} overlap`);
+  for (const e of [s1, s2]) assert.ok(!(e.at[0] > 200 && e.at[0] < 2550 && e.at[1] > 3000 && e.at[1] < 6700), `${e.text} over the stair opening`);
+  // a roof over the tower only: its grid lines, not those of the whole building
+  const tum = framingPlan({ spec: fl[2].spec, level: 9820, slab: 120, name: 'MÁI', prefix: 'DM.' });
+  const bubbles = tum.entities.filter((e) => e.name === 'MCP_TRUC').map((e) => e.attributes.SO);
+  assert.ok(!bubbles.includes('B') || bubbles.length <= 8, bubbles.join(','));
 });
 
 test('roof plan: the tower roof, the terrace inside its parapets, drains with falls, levels and notes', () => {
@@ -761,6 +791,36 @@ test('bar schedule and bill of quantities of the structural set', () => {
   assert.ok(csv.includes('BẢNG THỐNG KÊ CỐT THÉP') && csv.includes('Bê tông móng M1'));
 });
 
+test('architectural finish quantities: tiles, paint inside and outside, waterproofing, stair granite, railings, doors', () => {
+  const F = floorsOf(TOWN);
+  const rooms = [
+    { 'PHÒNG KHÁCH': [[200, 200], [4800, 200], [4800, 9800], [200, 9800]] },
+    { 'PHÒNG NGỦ': [[1600, 200], [4800, 200], [4800, 9800], [1600, 9800]], WC: [[200, 200], [1500, 200], [1500, 1500], [200, 1500]] },
+    { 'CẦU THANG': [[200, 3000], [2550, 3000], [2550, 6700], [200, 6700]], 'SÂN THƯỢNG': [[200, 200], [4800, 200], [4800, 9800], [200, 9800], [200, 6800], [2650, 6800], [2650, 2900], [200, 2900]] },
+  ];
+  const floors = F.map((f, i) => ({
+    name: f.name, spec: f.spec, height: f.height, rooms: rooms[i],
+    finishes: Object.fromEntries(Object.keys(rooms[i]).map((n) => [n, resolveFinish(n, {}, [], f.height)])),
+  }));
+  const Q = finishQuantities({ floors, spec: TOWN });
+  const q = (re) => Q.rows.find((r) => !r.head && re.test(r.item));
+  assert.ok(q(/^Lát nền: Gạch porcelain 600x600/).q > 0 && q(/^Gạch ốp tường 300x600/).q > 0, 'tiles');
+  assert.ok(q(/^Bả matit tường trong/).q > 0 && q(/^Sơn tường trong/).q > 0 && q(/^Bả matit, sơn tường ngoài/).q > 0, 'paint');
+  assert.ok(q(/^Trần thạch cao khung chìm/).q > 0 && q(/^Bả matit, sơn trần thạch cao/).q > 0, 'ceilings');
+  assert.ok(q(/^Chống thấm sàn vệ sinh/).q > 0 && q(/^Chống thấm sân thượng/).q > 0 && q(/^Láng vữa tạo dốc, chống thấm mái tum/).q > 0, 'waterproofing');
+  assert.ok(q(/^Ốp đá granite mặt bậc/).q > 0 && q(/^Lan can, tay vịn cầu thang/).q > 0 && q(/^Lan can ban công/).q > 0, 'stairs and railings');
+  const s1 = Q.rows.find((r) => /^S1 - /.test(r.item ?? ''));
+  assert.ok(s1 && s1.q === 2 && s1.unit === 'bộ', JSON.stringify(s1));
+  // the outer wall of the ground floor: its outside face painted, its inside face counted with the room
+  assert.ok(q(/^Bả matit, sơn tường ngoài/).by['TẦNG 1'] > 2 * (4.8 + 9.8) * 3, JSON.stringify(q(/^Bả matit, sơn tường ngoài/).by));
+  const wb = finishWorkbook(Q, F.map((f) => f.name));
+  assert.ok(wb.subarray(0, 2).toString() === 'PK' && wb.length > 2000);
+  const kc = kcWorkbook(structuralCalc({ spec: TOWN }), null);
+  assert.ok(kc.subarray(0, 2).toString() === 'PK');
+  assert.equal(howFormula('12 x 1,40 x 1,40 x 0,1'), '12*1.40*1.40*0.1');
+  assert.equal(howFormula('theo bảng thống kê cốt thép'), null);
+});
+
 // ---- smoke test: the bundled server starts, lists its tools and reports a clear error without AutoCAD
 async function smoke() {
   const entry = path.join(ROOT, 'dist', 'bundle', 'server', 'index.mjs');
@@ -798,7 +858,7 @@ async function smoke() {
     const list = await rpc('tools/list', {});
     assert.ok(list.result, list.error?.message);
     const names = list.result.tools.map((t) => t.name);
-    assert.equal(names.length, 52, names.join(','));
+    assert.equal(names.length, 53, names.join(','));
     for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff']) assert.ok(names.includes(t));
     const ping = await rpc('tools/call', { name: 'ping', arguments: {} });
     assert.equal(ping.result.isError, true);

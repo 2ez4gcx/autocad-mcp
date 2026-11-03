@@ -1,0 +1,41 @@
+﻿BẢNG KHỐI LƯỢNG HOÀN THIỆN KIẾN TRÚC
+STT;HẠNG MỤC CÔNG VIỆC;ĐƠN VỊ;KHỐI LƯỢNG;DIỄN GIẢI THEO TẦNG
+;I. LÁT NỀN, ỐP TƯỜNG, LEN;;;
+1;Lát nền: Gạch porcelain 600x600;m²;188,75;"TẦNG 1: 61,76; TẦNG 2: 65,69; TẦNG 3: 61,30"
+2;Lát nền: Gạch chống trơn 300x300;m²;13,17;"TẦNG 1: 4,39; TẦNG 2: 4,39; TẦNG 3: 4,39"
+3;Lát nền: Gạch chống trơn ngoài trời 400x400;m²;79,74;"TẦNG 1: 4,39; TẦNG 3: 4,39; TUM: 70,96"
+4;Len chân tường gạch cao 100;md;216;"TẦNG 1: 49,80; TẦNG 2: 58,80; TẦNG 3: 58,80; TUM: 48,60"
+5;Len đá granite cao 100 theo bậc;md;44,95;"TẦNG 1: 11,30; TẦNG 2: 11,30; TẦNG 3: 11,30; TUM: 11,05"
+6;Gạch ốp tường 300x600 ốp đến trần;m²;65,94;"TẦNG 1: 23,10; TẦNG 2: 21,42; TẦNG 3: 21,42"
+;II. BẢ MATIT, SƠN;;;
+7;Bả matit, sơn trần thạch cao;m²;201,92;"TẦNG 1: 66,15; TẦNG 2: 70,08; TẦNG 3: 65,69"
+8;Bả matit tường trong;m²;560,43;"TẦNG 1: 163,31; TẦNG 2: 192,21; TẦNG 3: 173,67; TUM: 31,24"
+9;Sơn tường trong 1 nước lót, 2 nước phủ: Sơn nước hoàn thiện màu trắng;m²;560,43;"TẦNG 1: 163,31; TẦNG 2: 192,21; TẦNG 3: 173,67; TUM: 31,24"
+10;Bả matit, sơn tường ngoài 1 nước lót, 2 nước phủ;m²;798,82;"TẦNG 1: 239,22; TẦNG 2: 167,16; TẦNG 3: 191,16; TUM: 201,28"
+11;Bả matit, sơn trần bê tông (đáy sàn, đáy chiếu nghỉ);m²;43,14;"TẦNG 1: 13,08; TẦNG 2: 8,70; TẦNG 3: 13,08; TUM: 8,28"
+;III. TRẦN;;;
+12;Trần thạch cao khung chìm, sơn trắng;m²;188,75;"TẦNG 1: 61,76; TẦNG 2: 65,69; TẦNG 3: 61,30"
+13;Trần thạch cao chống ẩm khung chìm, sơn trắng;m²;13,17;"TẦNG 1: 4,39; TẦNG 2: 4,39; TẦNG 3: 4,39"
+;IV. CHỐNG THẤM, MÁI;;;
+14;Chống thấm sàn vệ sinh, quét lên tường 300;m²;20,72;"TẦNG 1: 6,91; TẦNG 2: 6,91; TẦNG 3: 6,91"
+15;Chống thấm sàn ban công, sân phơi, quét lên tường 300;m²;13,82;"TẦNG 1: 6,91; TẦNG 3: 6,91"
+16;Chống thấm sân thượng, quét lên tường 300;m²;85,78;TUM: 85,78
+17;Láng vữa XM M75 tạo dốc i=2% sân thượng;m²;70,96;TUM: 70,96
+18;Láng vữa tạo dốc, chống thấm mái tum;m²;9,5;TUM: 9,50
+;V. CẦU THANG, LAN CAN;;;
+19;Ốp đá granite mặt bậc, chiếu nghỉ;m²;24,38;"TẦNG 1: 8,15; TẦNG 2: 8,12; TẦNG 3: 8,12"
+20;Ốp đá granite cổ bậc;m²;11,48;"TẦNG 1: 4,05; TẦNG 2: 3,71; TẦNG 3: 3,71"
+21;Lan can, tay vịn cầu thang;md;20,8;"TẦNG 1: 6,17; TẦNG 2: 5,98; TẦNG 3: 5,98; TUM: 2,68"
+22;Lan can ban công cao 1100;md;14,8;"TẦNG 2: 7,40; TẦNG 3: 7,40"
+;VI. CỬA ĐI, CỬA SỔ;;;
+23;D1 - Cửa đi 2 cánh mở quay 2000x2400;bộ;1;"1 x 2,00 x 2,40 = 4,80 m²; Cửa nhôm hệ, kính cường lực 8 mm, phụ kiện đồng bộ"
+24;D2 - Cửa đi 1 cánh mở quay 800x2400;bộ;4;"4 x 0,80 x 2,40 = 7,68 m²; Cửa gỗ công nghiệp, khung bao gỗ, sơn PU, phụ kiện đồng bộ"
+25;D3 - Cửa đi 1 cánh mở quay 700x2400;bộ;3;"3 x 0,70 x 2,40 = 5,04 m²; Cửa gỗ công nghiệp, khung bao gỗ, sơn PU, phụ kiện đồng bộ"
+26;D4 - Cửa đi 1 cánh mở quay 800x2400;bộ;3;"3 x 0,80 x 2,40 = 5,76 m²; Cửa gỗ công nghiệp, khung bao gỗ, sơn PU, phụ kiện đồng bộ"
+27;D5 - Cửa đi lùa 2 cánh 1600x2400;bộ;2;"2 x 1,60 x 2,40 = 7,68 m²; Cửa lùa nhôm hệ, kính cường lực 8 mm"
+28;D6 - Cửa đi 1 cánh mở quay 800x2400;bộ;1;"1 x 0,80 x 2,40 = 1,92 m²; Cửa gỗ công nghiệp, khung bao gỗ, sơn PU, phụ kiện đồng bộ"
+29;S1 - Cửa sổ mở quay 1200x1500;bộ;3;"3 x 1,20 x 1,50 = 5,40 m²; Cửa sổ nhôm hệ, kính cường lực 6,38 mm, có song bảo vệ"
+30;S2 - Cửa sổ mở quay 1200x1500;bộ;2;"2 x 1,20 x 1,50 = 3,60 m²; Cửa sổ nhôm hệ, kính cường lực 6,38 mm, có song bảo vệ"
+31;S3 - Cửa sổ mở quay 600x700;bộ;3;"3 x 0,60 x 0,70 = 1,26 m²; Cửa sổ nhôm hệ, kính cường lực 6,38 mm, có song bảo vệ"
+32;Tổng diện tích cửa đi;m²;32,88;
+33;Tổng diện tích cửa sổ;m²;10,26;

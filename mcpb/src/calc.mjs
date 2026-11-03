@@ -26,7 +26,7 @@ export const STEEL = {
 const ES = 200000;
 
 /** Live loads (kPa, TCVN 2737:2023 for dwellings) by room name; the first match wins. */
-const LIVE = [
+export const LIVE = [
   { key: 'stair', re: /(CẦU THANG|STAIR)/i, p: 3, vi: 'Cầu thang', en: 'Stairs' },
   { key: 'hall', re: /(SẢNH|HÀNH LANG|HALL|CORRIDOR|LOBBY)/i, p: 3, vi: 'Sảnh, hành lang', en: 'Halls, corridors' },
   { key: 'balcony', re: /(BAN CÔNG|LÔ GIA|LOGIA|SÂN PHƠI|BALCONY|LOGGIA)/i, p: 2, vi: 'Ban công, sân phơi', en: 'Balconies' },
@@ -35,11 +35,11 @@ const LIVE = [
   { key: 'store', re: /(KHO|STORE)/i, p: 2, vi: 'Kho nhỏ trong nhà ở', en: 'Small stores' },
   { key: 'room', re: /.*/, p: 1.5, vi: 'Phòng ở, phòng khách, bếp, phòng thờ', en: 'Rooms, living, kitchen' },
 ];
-const ROOF_LIVE = { key: 'roof', p: 0.75, vi: 'Mái BTCT không sử dụng', en: 'RC roof, not used' };
-const gammaLive = (p) => (p < 2 ? 1.3 : 1.2);
+export const ROOF_LIVE = { key: 'roof', p: 0.75, vi: 'Mái BTCT không sử dụng', en: 'RC roof, not used' };
+export const gammaLive = (p) => (p < 2 ? 1.3 : 1.2);
 
 /** Build-ups (name, thickness m, unit weight kN/m³ or load kPa when thickness is null, γf). SLAB = the RC slab. */
-const BUILDUP = {
+export const BUILDUP = {
   floor: [['Gạch lát dày 10', 'Floor tiles 10', 0.01, 20, 1.1], ['Vữa lót XM M75 dày 30', 'Mortar bed M75 30', 0.03, 18, 1.3], 'SLAB',
     ['Vữa trát trần dày 15', 'Soffit plaster 15', 0.015, 18, 1.3], ['Trần, đường ống, thiết bị', 'Ceiling and services', null, 0.3, 1.2]],
   wet: [['Chống thấm, vữa tạo dốc dày 50', 'Waterproofing, screed to falls 50', 0.05, 20, 1.3]],
@@ -51,7 +51,7 @@ const BUILDUP = {
   stair: [['Bản thang, bậc xây, hoàn thiện (quy đổi trên mặt bằng)', 'Waist slab, steps and finishes (on plan)', null, 6, 1.15]],
 };
 
-function layerLoads(kind, slab, lang, wet = false) {
+export function layerLoads(kind, slab, lang, wet = false) {
   const rows = [];
   const list = [...BUILDUP[kind], ...(wet ? BUILDUP.wet : [])];
   for (const L of list) {

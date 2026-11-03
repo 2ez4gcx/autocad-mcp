@@ -29,6 +29,8 @@ import { roofPlan } from './roof.mjs';
 import { stairDetail } from './stair.mjs';
 import { calcCsv, calcSheet, CONCRETE, STEEL, structuralCalc } from './calc.mjs';
 import { boqCsv, boqSheets } from './boq.mjs';
+import { finishCsv, finishQuantities, finishSheet } from './archboq.mjs';
+import { finishWorkbook, kcWorkbook } from './workbooks.mjs';
 import {
   ceilingPlan, centroid, cleanPoly, elevationKey, entBox, entityBounds, floorFinishPlan, freePoint, FURNITURE_DOC, furniturePlan, generalNotes, inside, notesBlock, shiftEntity, wallFinishPlan,
   interiorElevation, joineryDetail, labelSize, materialSchedule, polyArea, resolveFinish, resolveItems, shiftSpec,
@@ -1412,6 +1414,8 @@ const roomSig = (spec) => (spec.rooms || []).map((r) => `${r.name}@${r.at}`).joi
 const structBeams = new Map();
 // the last structural_calc of the session (its plan as JSON): the quantities use its designed bars
 let lastCalc = null;
+// the last draw_finish_quantities of the session (for the workbook)
+let lastFinish = null;
 
 const NotesArg = z.union([z.boolean(), z.array(Str)]).default(true)
   .describe('General notes of the sheet (GHI CHÚ): true = the standard ones for this kind of plan, a list = these, false = none');
@@ -1590,6 +1594,7 @@ server.registerTool('structural_calc', {
     soil_pressure: z.number().positive().default(100).describe('Bearing pressure R at the footing bottom, kPa (from the site investigation)'),
     footing: opt(Obj).describe('{B, L} of the pad footings drawn, mm'), column: opt(Obj).describe('{size: [b, h], bars: {n, d}}'),
     draw: z.boolean().default(true), csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('semicolon'),
+    xlsx_path: opt(Str).describe('Excel workbook with live formulas: the inputs (materials, loads, soil, sections, bars, q) in yellow cells, the design calculated from them'),
     scale: z.number().positive().default(50), at: opt(Point), plan: opt(Obj), language: opt(Lang), dry_run: z.boolean().default(false),
   },
   annotations: EDIT,
@@ -1623,6 +1628,12 @@ server.registerTool('structural_calc', {
     await fs.writeFile(file, calcCsv(R, lang, args.csv_format === 'comma' ? ',' : ';'), 'utf8');
     out.csv = file;
   }
+  if (args.xlsx_path) {
+    const file = path.resolve(args.xlsx_path.endsWith('.xlsx') ? args.xlsx_path : `${args.xlsx_path}.xlsx`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, kcWorkbook(R, null, lang));
+    out.xlsx = file;
+  }
   if (args.draw) {
     const sc = args.scale;
     const { at, info } = await freeSpot(args.at, sc);
@@ -1648,6 +1659,7 @@ server.registerTool('draw_quantity_schedule', {
   inputSchema: {
     scale: z.number().positive().default(25), page_height: z.number().positive().default(330), per_page: z.number().int().positive().default(2),
     csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('semicolon'), plan: opt(Obj), language: opt(Lang),
+    xlsx_path: opt(Str).describe('Excel workbook with live formulas: the calculation (parameters, loads, beams, columns and footings), the bar schedule and the bill of quantities'),
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
@@ -1673,6 +1685,12 @@ server.registerTool('draw_quantity_schedule', {
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, boqCsv(B.groups, B.quantities, lang, args.csv_format === 'comma' ? ',' : ';'), 'utf8');
     out.csv = file;
+  }
+  if (args.xlsx_path) {
+    const file = path.resolve(args.xlsx_path.endsWith('.xlsx') ? args.xlsx_path : `${args.xlsx_path}.xlsx`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, kcWorkbook(R, B, lang));
+    out.xlsx = file;
   }
   return text(out);
 }));
@@ -2134,6 +2152,62 @@ server.registerTool('draw_joinery_detail', {
   const r = engine('draw_joinery_detail', () => joineryDetail({ ...p, at }));
   const res = await drawView(r.entities, sc, info, p.language);
   return text({ kind: p.kind, at, scale: `1:${sc}`, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
+}));
+
+server.registerTool('draw_finish_quantities', {
+  description:
+    'Architectural finish quantities (bảng khối lượng hoàn thiện kiến trúc) of the building of draw_plan, floor by floor, for ' +
+    'the architectural set: floor tiles by finish, wall tiles (toilets, kitchen backsplash), skirting; skim coat and paint of ' +
+    'the inner walls, the outer walls (faces with no room on their side, the plinth, parapets) and the ceilings (gypsum, ' +
+    'concrete soffits); gypsum ceilings; waterproofing of toilets, balconies and the roof terrace (300 up the walls), screed ' +
+    'to falls, the tower roof; stair granite (treads, landings, risers), stair and balcony railings; doors and windows by ' +
+    'type (sets and m²). The rooms and finishes are those of the interior tools (material_schedule, the same defaults by ' +
+    'room name, the finishes given there in this session). Drawn as a table with the quantity of every floor (diễn giải); ' +
+    'csv_path writes it for Excel. Masonry and plaster are in the structural bill (draw_quantity_schedule).',
+  inputSchema: {
+    scale: z.number().positive().default(25), csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('semicolon'),
+    at: opt(Point), plan: opt(Obj), language: opt(Lang), draw: z.boolean().default(true),
+    xlsx_path: opt(Str).describe('Excel workbook: the quantity of every floor, the total as their sum'),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const lang = args.language ?? language;
+  const whole = planFor(args, 'draw_finish_quantities');
+  const F = engine('draw_finish_quantities', () => floorsOf(whole));
+  const assumed = [];
+  const floors = [];
+  for (let i = 0; i < F.length; i++) {
+    const t = F.length > 1 || whole.floors ? floorFor({ ...args, floor: i + 1 }, 'draw_finish_quantities') : floorFor(args, 'draw_finish_quantities');
+    const st = interiorOf(t.key);
+    const rooms = await roomOutlines(t.spec, 'draw_finish_quantities', t.offset).catch(() => ({}));
+    const finishes = finishesFor(st, rooms, undefined, assumed, t.height);
+    floors.push({ name: t.key || F[i].name || '', spec: t.spec, height: F[i].height ?? t.height ?? 3000, rooms, finishes, items: st.items });
+  }
+  if (!floors.some((f) => Object.keys(f.rooms).length)) throw new Error('draw_finish_quantities: no room outlines found: draw the plan with draw_plan (or rooms_only) first.');
+  const Q = engine('draw_finish_quantities', () => finishQuantities({ floors, spec: whole, lang }));
+  const out = { rows: Q.rows.filter((r) => !r.head).map((r) => `${r.stt}. ${r.item}: ${r.q} ${r.unit}`), assumed: assumedOrNone(assumed) };
+  if (args.draw) {
+    const sc = args.scale;
+    const { at, info } = await freeSpot(args.at, sc);
+    const sheet = finishSheet(Q, { scale: sc, lang });
+    const res = await drawView(placeAt(sheet.entities, at), sc, info, args.language);
+    out.count = res.count;
+    out.bounds = res.bounds;
+  }
+  if (args.csv_path) {
+    const file = path.resolve(args.csv_path.endsWith('.csv') ? args.csv_path : `${args.csv_path}.csv`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, finishCsv(Q, lang, args.csv_format === 'comma' ? ',' : ';'), 'utf8');
+    out.csv = file;
+  }
+  if (args.xlsx_path) {
+    const file = path.resolve(args.xlsx_path.endsWith('.xlsx') ? args.xlsx_path : `${args.xlsx_path}.xlsx`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, finishWorkbook(Q, floors.map((x) => x.name), lang));
+    out.xlsx = file;
+  }
+  lastFinish = { key: JSON.stringify(whole), Q };
+  return text(out);
 }));
 
 server.registerTool('material_schedule', {

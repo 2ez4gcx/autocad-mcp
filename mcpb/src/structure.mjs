@@ -5,6 +5,7 @@
 import { buildWalls, gridList, num, PlanError, pt } from './plan.mjs';
 import { dimStyleName, FIELD, TEXT_STYLE, viewTitle } from './standards.mjs';
 import { sym } from './symbols.mjs';
+import { freePoint, inside } from './interior.mjs';
 
 export const SL = {
   conc: 'S-CONC', concHatch: 'S-CONC-PATT', bar: 'S-REBR', tie: 'S-REBR-STIR', text: 'S-ANNO-TEXT', dims: 'S-ANNO-DIMS',
@@ -573,46 +574,31 @@ export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = '
     }
     footings = cols.length ? [{ name: 'M1', size: `${fB}x${fL}`, count: cols.length, depth: foundation.depth }] : [];
   }
-  if (cols.length) {
-    const c0 = cols.reduce((m, p) => (p[0] + p[1] < m[0] + m[1] ? p : m));
-    out.push({ type: 'text', text: `C1 (${csize[0]}x${csize[1]})`, at: P(c0[0] - csize[0] / 2 - 1 * sc, c0[1] - csize[1] / 2 - 3 * sc), height: r2(2 * sc), align: 'right', layer: SL.text, style: TEXT_STYLE });
-  }
-  // the slab: its thickness in the largest room, lowered wet rooms and balconies (hatched), stair openings crossed
   if (slab === undefined) assumed.push({ item: 'slab', value: 120 });
   const entries = Object.entries(rooms);
   const area = (poly) => Math.abs(poly.reduce((s2, p, i) => s2 + cross2(p, poly[(i + 1) % poly.length]), 0) / 2);
   const centre = (poly) => [poly.reduce((s2, p) => s2 + p[0], 0) / poly.length, poly.reduce((s2, p) => s2 + p[1], 0) / poly.length];
-  const main = entries.filter(([n]) => !STAIR_ROOM.test(n)).sort((a, b) => area(b[1]) - area(a[1]))[0];
-  if (main && !foundation) out.push({ type: 'text', text: `S1 - ${lang === 'en' ? 'RC SLAB' : 'SÀN BTCT DÀY'} ${slab}`, at: P(...centre(main[1])), height: r2(2.5 * sc), align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
-  if (main && foundation) {
-    // what the foundation plan shows, right of the plan beyond the grid bubbles
-    const bx = Math.max(...segs.flatMap((g) => [g.A[0], g.B[0]])), by = Math.max(...segs.flatMap((g) => [g.A[1], g.B[1]]));
-    const c = [bx + 18 * sc + 9 * sc + 8 * sc, by];
-    const lines = lang === 'en'
-      ? [`M1 PAD FOOTING ${footings[0]?.size ?? ''}`, `BOTTOM ${fmtLv(-(foundation.depth ?? 1500))}`, 'GROUND BEAMS GM UNDER THE WALLS']
-      : [`MÓNG ĐƠN M1 ${footings[0]?.size ?? ''}`, `ĐÁY MÓNG ${fmtLv(-(foundation.depth ?? 1500))}`, 'GIẰNG MÓNG GM DƯỚI TƯỜNG'];
-    lines.forEach((l, i) => out.push({ type: 'text', text: `${i + 1}. ${l}`, at: P(c[0], c[1] - i * 4.5 * sc), height: r2(2.5 * sc), align: 'left', layer: SL.text, style: TEXT_STYLE }));
-  }
+  const lowRoom = (n) => WET_ROOM.test(n) || OUT_ROOM.test(n);
   let lowered = 0;
   // the foundation plan has no slab openings or lowered slabs: the ground floor slab is drawn by the architect
+  const stairBoxes = [];
   for (const [n, poly] of foundation ? [] : entries) {
-    const c = centre(poly);
     if (STAIR_ROOM.test(n)) {
       const xs = poly.map((p) => p[0]), ys = poly.map((p) => p[1]);
       const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
       out.push({ type: 'line', from: P(x0, y0), to: P(x1, y1), layer: SL.conc }, { type: 'line', from: P(x0, y1), to: P(x1, y0), layer: SL.conc });
-      out.push({ type: 'text', text: lang === 'en' ? 'STAIR OPENING' : 'Ô THANG', at: P(c[0], c[1] + 2.5 * sc), height: r2(2.2 * sc), align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
-    } else if (WET_ROOM.test(n) || OUT_ROOM.test(n)) {
+      stairBoxes.push([x0, y0, x1, y1]);
+    } else if (lowRoom(n)) {
       out.push({ type: 'hatch', boundary: poly.map((p) => P(...p)), pattern: 'ANSI37', scale: r2(0.5 * sc), layer: SL.concHatch });
-      out.push({ type: 'text', text: `S2 - ${lang === 'en' ? 'SLAB -50' : 'SÀN HẠ 50'}`, at: P(...c), height: r2(2 * sc), align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
       lowered++;
     }
   }
   if (lowered) assumed.push({ item: 'lowered_slab', value: 50, note: 'wet rooms and balconies, mm below the floor slab' });
-  // grids: lines past the beams, bubbles at both ends, spacing and overall dimensions
+  // grids the beams reach: lines past the beams, bubbles at both ends, spacing and overall dimensions
   const xs = segs.flatMap((g) => [g.A[0], g.B[0]]), ys = segs.flatMap((g) => [g.A[1], g.B[1]]);
   const X0 = Math.min(...xs), X1 = Math.max(...xs), Y0 = Math.min(...ys), Y1 = Math.max(...ys);
-  const gx = gridList(spec.grids?.x, 'x'), gy = gridList(spec.grids?.y, 'y');
+  const gx = gridList(spec.grids?.x, 'x').filter((g) => g.at >= X0 - 300 && g.at <= X1 + 300);
+  const gy = gridList(spec.grids?.y, 'y').filter((g) => g.at >= Y0 - 300 && g.at <= Y1 + 300);
   const ext = 18 * sc, rB = 4.5 * sc;
   for (const g of gx) {
     out.push({ type: 'line', from: P(g.at, Y0 - ext), to: P(g.at, Y1 + ext), layer: SL.grid, scale_linetype: true });
@@ -624,6 +610,74 @@ export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = '
   }
   if (gx.length >= 2) out.push({ type: 'dim_chain', points: gx.map((g) => P(g.at, Y0)), direction: 'horizontal', at: P(gx[0].at, Y0 - ext + 6 * sc), total: gx.length > 2, style: dimStyleName(sc), layer: SL.dims });
   if (gy.length >= 2) out.push({ type: 'dim_chain', points: gy.map((g) => P(X0, g.at)), direction: 'vertical', at: P(X0 - ext + 6 * sc, gy[0].at), total: gy.length > 2, style: dimStyleName(sc), layer: SL.dims });
+  // the labels last, each where it is clear of what is drawn (beam names, bubbles) and of the labels before it
+  const boxOf = (e) => {
+    if (e.box) return e.box;
+    if (e.type !== 'text') return null;
+    const w = [...e.text].length * 0.72 * e.height, h = e.height * 1.4;
+    const [bw, bh] = Math.abs(((e.rotation ?? 0) % 180) - 90) < 1 ? [h, w] : [w, h];
+    const x0 = e.align === 'left' ? e.at[0] : e.align === 'right' ? e.at[0] - bw : e.at[0] - bw / 2;
+    return [x0, e.at[1] - bh / 2, x0 + bw, e.at[1] + bh / 2];
+  };
+  const taken = out.map(boxOf).filter(Boolean);
+  const text = (t, at, h, align = 'middle_center') => {
+    const e = { type: 'text', text: t, at: P(...at), height: r2(h), align, layer: SL.text, style: TEXT_STYLE };
+    out.push(e);
+    taken.push(boxOf(e));
+  };
+  // the most open point of a room (farthest from its edges, off the given boxes): where its label reads best
+  const pole = (poly, avoid) => {
+    const bx = poly.map((p) => p[0]), by = poly.map((p) => p[1]);
+    const segDist = (q, a, b) => {
+      const d = [b[0] - a[0], b[1] - a[1]], L2 = d[0] * d[0] + d[1] * d[1] || 1;
+      const k = Math.max(0, Math.min(1, ((q[0] - a[0]) * d[0] + (q[1] - a[1]) * d[1]) / L2));
+      return Math.hypot(q[0] - a[0] - k * d[0], q[1] - a[1] - k * d[1]);
+    };
+    let best = null, bestD = -1;
+    for (let x = Math.min(...bx) + 100; x < Math.max(...bx); x += 200) {
+      for (let y = Math.min(...by) + 100; y < Math.max(...by); y += 200) {
+        if (!inside([x, y], poly) || avoid.some((b) => x > b[0] && x < b[2] && y > b[1] && y < b[3])) continue;
+        const d = Math.min(...poly.map((a, i) => segDist([x, y], a, poly[(i + 1) % poly.length])));
+        if (d > bestD) { bestD = d; best = [x, y]; }
+      }
+    }
+    return best ?? centre(poly);
+  };
+  const inRoom = (t, poly, h, avoid = []) => {
+    const w = [...t].length * 0.72 * h + h, hh = 1.8 * h;
+    const p = freePoint(poly, [...taken, ...avoid], [w, hh], pole(poly, avoid), [], 100) ?? pole(poly, avoid);
+    text(t, p, h);
+  };
+  for (const b of stairBoxes) text(lang === 'en' ? 'STAIR OPENING' : 'Ô THANG', [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2 + 2.5 * sc], 2.2 * sc);
+  // the slab thickness in the largest room at the slab level; when every room is lowered, with the S2 label
+  const rank = entries.filter(([n]) => !STAIR_ROOM.test(n)).sort((a, b) => area(b[1]) - area(a[1]));
+  const main = rank.find(([n]) => !lowRoom(n)) ?? rank[0];
+  const allLow = !!main && lowRoom(main[0]);
+  const s2 = allLow ? (lang === 'en' ? `S2 - RC SLAB ${slab}, -50` : `S2 - SÀN BTCT DÀY ${slab}, HẠ 50`) : (lang === 'en' ? 'S2 - SLAB -50' : 'S2 - SÀN HẠ 50');
+  for (const [n, poly] of foundation ? [] : entries) if (!STAIR_ROOM.test(n) && lowRoom(n)) inRoom(s2, poly, 2 * sc, stairBoxes);
+  if (main && !foundation && !allLow) inRoom(`S1 - ${lang === 'en' ? 'RC SLAB' : 'SÀN BTCT DÀY'} ${slab}`, main[1], 2.5 * sc, stairBoxes);
+  if (main && foundation) {
+    // what the foundation plan shows, right of the plan beyond the grid bubbles
+    const c = [X1 + ext + 2 * rB + 8 * sc, Y1];
+    const lines = lang === 'en'
+      ? [`M1 PAD FOOTING ${footings[0]?.size ?? ''}`, `BOTTOM ${fmtLv(-(foundation.depth ?? 1500))}`, 'GROUND BEAMS GM UNDER THE WALLS']
+      : [`MÓNG ĐƠN M1 ${footings[0]?.size ?? ''}`, `ĐÁY MÓNG ${fmtLv(-(foundation.depth ?? 1500))}`, 'GIẰNG MÓNG GM DƯỚI TƯỜNG'];
+    lines.forEach((l, i) => text(`${i + 1}. ${l}`, [c[0], c[1] - i * 4.5 * sc], 2.5 * sc, 'left'));
+  }
+  // the column size once, at a corner of the lowest-left column where nothing is drawn
+  if (cols.length) {
+    const c0 = cols.reduce((m, p) => (p[0] + p[1] < m[0] + m[1] ? p : m));
+    const t = `C1 (${csize[0]}x${csize[1]})`, h = 2 * sc, w = [...t].length * 0.72 * h;
+    const dx = csize[0] / 2 + 1.2 * sc, dy = csize[1] / 2 + 1.6 * sc;
+    const tries = [[1, 1, 'left'], [1, -1, 'left'], [-1, 1, 'right'], [-1, -1, 'right']].map(([sx, sy, al]) => ({ at: [c0[0] + sx * dx, c0[1] + sy * dy], al }));
+    const free = (q) => {
+      const x0 = q.al === 'left' ? q.at[0] : q.at[0] - w;
+      const b = [x0, q.at[1] - 0.7 * h, x0 + w, q.at[1] + 0.7 * h];
+      return !taken.some((o) => b[0] < o[2] && o[0] < b[2] && b[1] < o[3] && o[1] < b[3]);
+    };
+    const q = tries.find(free) ?? tries[0];
+    text(t, q.at, h, q.al);
+  }
   const t = foundation
     ? (lang === 'en' ? 'FOUNDATION PLAN' : 'MẶT BẰNG MÓNG, GIẰNG MÓNG')
     : lang === 'en' ? `STRUCTURAL PLAN - SLAB ${name} (${fmtLv(level)})` : `MẶT BẰNG KẾT CẤU SÀN ${name} (${fmtLv(level)})`;

@@ -226,6 +226,10 @@
       "description": "Joinery shop drawing (chi tiết đồ gỗ) at 1:10"
     },
     {
+      "name": "draw_finish_quantities",
+      "description": "Architectural finish quantities (bảng khối lượng hoàn thiện kiến trúc) of the building of draw_plan, floor by floor, for the architectural set"
+    },
+    {
       "name": "material_schedule",
       "description": "Finish and material schedule (bảng thống kê vật liệu hoàn thiện)"
     },

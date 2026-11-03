@@ -10,14 +10,14 @@ Phiên bản: **1.2.0**.
 
 ## Tính năng
 
-52 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
+53 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
 
 | Nhóm | Tool |
 |---|---|
 | Đọc & khối lượng | `ping`, `drawing_info`, `list_layers`, `list_blocks`, `query_entities`, `selection_info`, `quantity_takeoff`, `check_drawing` |
 | Tiêu chuẩn | `setup_layers`, `setup_styles` |
 | Vẽ & sửa | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
-| Mặt đứng, mặt cắt & kết cấu | `draw_elevation`, `draw_section`, `draw_roof_plan`, `draw_door_schedule`, `draw_stair_detail`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule`, `structural_calc`, `draw_quantity_schedule` |
+| Mặt đứng, mặt cắt & kết cấu | `draw_elevation`, `draw_section`, `draw_roof_plan`, `draw_door_schedule`, `draw_stair_detail`, `draw_finish_quantities`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule`, `structural_calc`, `draw_quantity_schedule` |
 | Thiết kế nội thất | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
 | Ảnh & nguồn 3D | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
 | Khung tên & file | `create_layout`, `draw_cover_sheet`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
@@ -63,10 +63,13 @@ Phiên bản: **1.2.0**.
   - tải sàn truyền vào dầm (bản kê 4 cạnh hình thang / tam giác, bản dầm), dầm liên tục với hoạt tải đặt toàn bộ / nhịp lẻ / nhịp chẵn, mô men gối biên qL²/24;
   - tính cốt thép chịu uốn và cốt đai theo TCVN 5574:2018 (αm, ξ ≤ ξR, As, chọn thép; đai vùng gối và giữa nhịp); thép đã tính chuyển sang `draw_beam_schedule`;
   - tải trọng cột từng tầng xuống móng (cột đặt trên sàn truyền tải vào dầm đỡ), khả năng chịu lực cột, diện tích móng theo áp lực đất;
-  - tờ bảng tính (vật liệu, tải trọng sàn, cấu tạo sàn, dầm, cột và móng, giả thiết) kèm ô xác nhận: người tính, kiểm tra, chủ trì kết cấu (họ tên, số chứng chỉ, chữ ký, ngày); xuất CSV cho Excel.
+  - tờ bảng tính (vật liệu, tải trọng sàn, cấu tạo sàn, dầm, cột và móng, giả thiết) kèm ô xác nhận: người tính, kiểm tra, chủ trì kết cấu (họ tên, số chứng chỉ, chữ ký, ngày); xuất CSV cho Excel;
+  - `xlsx_path`: file Excel bảng tính sống: số liệu nhập ở ô màu vàng (vật liệu, chiều dày và trọng lượng riêng các lớp, hệ số vượt tải, hoạt tải, áp lực đất, kích thước cột và móng, q, thép chọn), còn lại là công thức (g, p, M, αm, ξ, As, kiểm tra, bước đai, khả năng chịu lực cột, diện tích móng): sửa số liệu là bảng tự tính lại.
 - **Bảng thống kê cốt thép và bảng tổng hợp khối lượng** (`draw_quantity_schedule`):
   - thống kê thép toàn bộ hồ sơ: móng, cột, giằng móng và dầm theo thép đã tính, sàn và cầu thang theo cấu tạo; tính nối chồng và neo, khối lượng bằng công thức trong bảng, tổng theo đường kính, tự chia trang;
-  - bảng tổng hợp khối lượng vật tư có diễn giải: bê tông lót, bê tông và ván khuôn móng, cổ cột, giằng móng, cột từng tầng, dầm, sàn, cầu thang; cốt thép theo nhóm; tường xây theo chiều dày (m², m³) đã trừ cửa; trát tường trong, ngoài, trát trần; xuất CSV cho Excel.
+  - bảng tổng hợp khối lượng vật tư có diễn giải: bê tông lót, bê tông và ván khuôn móng, cổ cột, giằng móng, cột từng tầng, dầm, sàn, cầu thang; cốt thép theo nhóm; tường xây theo chiều dày (m², m³) đã trừ cửa; trát tường trong, ngoài, trát trần; xuất CSV cho Excel;
+  - `xlsx_path`: toàn bộ file Excel kết cấu (bảng tính, thống kê thép có công thức khối lượng, khối lượng vật tư là công thức của phần diễn giải).
+- **Khối lượng hoàn thiện kiến trúc** (`draw_finish_quantities`): lát nền theo loại gạch, ốp tường, len chân tường; bả matit, sơn tường trong, tường ngoài (các mặt tường không có phòng phía bên đó, chân tường, tường mái) và trần; trần thạch cao; chống thấm sàn vệ sinh, ban công, sân thượng; láng vữa tạo dốc và mái tum; đá granite bậc thang, lan can tay vịn cầu thang, lan can ban công; cửa đi, cửa sổ theo loại. Phòng và vật liệu lấy theo bộ nội thất. Bảng có khối lượng từng tầng, xuất CSV và file Excel mỗi tầng một cột, cột tổng là công thức.
 - **Bộ kết cấu** (`draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`):
   - `draw_structure_plan floor=foundation` vẽ mặt bằng móng: móng đơn M1 dưới cột (nét khuất), giằng móng GM dưới tường tầng 1, kích thước và cao độ đáy móng;
   - `draw_structure_plan` vẽ mặt bằng kết cấu từng sàn (tầng 2, 3 … và mái):
