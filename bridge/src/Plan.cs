@@ -275,6 +275,53 @@ namespace AcadMcp
 
     public static class Plan
     {
+        /// <summary>Interior span [l, r] of a loop along the horizontal line through p (arcs sampled).</summary>
+        static bool SpanAt(Loop h, Point3d p, out double l, out double r)
+        {
+            var pts = h.Dense ?? h.Pts;
+            l = double.NegativeInfinity; r = double.PositiveInfinity;
+            for (int i = 0; i < pts.Count; i++)
+            {
+                Point2d a = pts[i], b = pts[(i + 1) % pts.Count];
+                if ((a.Y > p.Y) == (b.Y > p.Y)) continue;
+                double x = a.X + (p.Y - a.Y) / (b.Y - a.Y) * (b.X - a.X);
+                if (x <= p.X) l = Math.Max(l, x); else r = Math.Min(r, x);
+            }
+            return !double.IsInfinity(l) && !double.IsInfinity(r);
+        }
+
+        /// <summary>
+        /// Keeps a room label off the walls: a name wider than the room is wrapped at the space nearest its middle, then the
+        /// label is shifted sideways to stay inside; a warning when it still does not fit.
+        /// </summary>
+        static void FitLabel(MText m, Loop hole, string title, string tail, Dictionary<string, object> ro1)
+        {
+            Point3d at = m.Location;
+            if (Math.Abs(m.Rotation) > 1e-9 || !SpanAt(hole, at, out double l, out double r)) return;
+            double gap = m.TextHeight * 0.4;
+            double room = r - l - 2 * gap;
+            if (m.ActualWidth > room && title.Contains(" "))
+            {
+                int mid = title.Length / 2, best = -1;
+                for (int k = 0; k < title.Length; k++)
+                    if (title[k] == ' ' && (best < 0 || Math.Abs(k - mid) < Math.Abs(best - mid))) best = k;
+                string wrapped = title.Substring(0, best) + "\\P" + title.Substring(best + 1);
+                m.Contents = tail == null ? wrapped : wrapped + "\\P" + tail;
+            }
+            double w = m.ActualWidth;
+            if (w > room)
+            {
+                ro1["warning"] = "The label is wider than the room (" + U.R(w) + " > " + U.R(room) + "): shorten the name or lower room_options.text_height.";
+                return;
+            }
+            double x = Math.Max(l + gap + w / 2, Math.Min(r - gap - w / 2, at.X));
+            if (Math.Abs(x - at.X) > 1e-6)
+            {
+                m.Location = new Point3d(x, at.Y, at.Z);
+                ro1["label_moved"] = new List<object> { U.R(x), U.R(at.Y) };
+            }
+        }
+
         static List<List<Point3d>> Polys(P p, string key)
         {
             var l = p.List(key);
@@ -436,6 +483,7 @@ namespace AcadMcp
                             var lps = new P(lp, rs.Path);
                             var m = dr.MakeMText(lps, text, at);
                             dr.Add(m, lps, false);
+                            if (hole != null) FitLabel(m, hole, title, areaText == null ? null : areaText + " " + unit, ro1);
                             ro1["label_handle"] = m.Handle.ToString();
                         }
                         roomsOut.Add(ro1);

@@ -38,7 +38,7 @@ const LABELS = {
   en: { up: 'UP', down: 'DN', north: 'N' },
 };
 
-function num(v, name, { min = -Infinity, positive = false } = {}) {
+export function num(v, name, { min = -Infinity, positive = false } = {}) {
   const n = typeof v === 'string' ? Number(v) : v;
   if (typeof n !== 'number' || !Number.isFinite(n)) throw new PlanError(`${name} must be a number`);
   if (positive && n <= 0) throw new PlanError(`${name} must be > 0`);
@@ -46,7 +46,7 @@ function num(v, name, { min = -Infinity, positive = false } = {}) {
   return n;
 }
 
-function pt(v, name) {
+export function pt(v, name) {
   if (!Array.isArray(v) || v.length < 2) throw new PlanError(`${name} must be [x, y]`);
   return [num(v[0], `${name}[0]`), num(v[1], `${name}[1]`)];
 }
@@ -86,7 +86,7 @@ function intersect(p, u, q, v) {
 }
 
 /** Normalised walls with their segments: axis a->b, direction d, face offsets [o1, o2] along left(d). */
-function buildWalls(spec) {
+export function buildWalls(spec) {
   const walls = [];
   (spec.walls || []).forEach((w, wi) => {
     const name = `walls[${wi}]`;
@@ -112,7 +112,7 @@ function buildWalls(spec) {
   return walls;
 }
 
-function segRect(s, from = 0, to = s.L, extra = 0) {
+export function segRect(s, from = 0, to = s.L, extra = 0) {
   const n = left(s.d);
   const p0 = add(s.a, mul(s.d, from));
   const p1 = add(s.a, mul(s.d, to));
@@ -160,7 +160,7 @@ function joints(walls, tol = 1) {
   return polys;
 }
 
-function findSegment(walls, o, name) {
+export function findSegment(walls, o, name) {
   let w;
   if (typeof o.wall === 'number') w = walls[o.wall];
   else w = walls.find((x) => x.id === o.wall);
@@ -172,7 +172,7 @@ function findSegment(walls, o, name) {
 }
 
 /** Opening position along its segment: offset from the segment start, or "at" a point near the axis. */
-function openingSpan(s, o, name) {
+export function openingSpan(s, o, name) {
   const width = num(o.width ?? 900, `${name}.width`, { positive: true });
   let from;
   if (o.at !== undefined) {
@@ -250,7 +250,7 @@ function openingSymbols(s, o, span, scale, name, center) {
   return e;
 }
 
-function rectAround(c, w, h, rotDeg = 0) {
+export function rectAround(c, w, h, rotDeg = 0) {
   const r = (rotDeg * Math.PI) / 180;
   const u = [Math.cos(r), Math.sin(r)];
   const v = left(u);
@@ -259,7 +259,7 @@ function rectAround(c, w, h, rotDeg = 0) {
 
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // I and O skipped (read as 1 and 0)
 
-function gridList(list, axis) {
+export function gridList(list, axis) {
   return (list || []).map((g, i) => {
     if (typeof g === 'number') return { at: g, label: axis === 'x' ? String(i + 1) : LETTERS[i % LETTERS.length] + (i >= LETTERS.length ? String(Math.floor(i / LETTERS.length)) : '') };
     return { at: num(g.at, `grids.${axis}[${i}].at`), label: String(g.label ?? (axis === 'x' ? i + 1 : LETTERS[i % LETTERS.length])) };
@@ -267,6 +267,29 @@ function gridList(list, axis) {
 }
 
 /** Builds the draw_plan request. */
+/**
+ * Defaults the plan engine applies where the description is silent ([{item, value, note?}]): shown to the user before
+ * drawing (dry_run) or after it, to confirm or change.
+ */
+export function planAssumptions(spec) {
+  const out = [];
+  const add = (item, value, note) => out.push(note ? { item, value, note } : { item, value });
+  const ids = (list, test, name) => (list || []).map((x, i) => (test(x) ? x.id ?? x.tag ?? `${name}[${i}]` : null)).filter(Boolean);
+  const noT = spec.wall_thickness === undefined ? ids(spec.walls, (w) => w.thickness === undefined, 'walls') : [];
+  if (noT.length) add('walls.thickness', 200, noT.join(', '));
+  const noM = spec.wall_material === undefined ? ids(spec.walls, (w) => w.material === undefined, 'walls') : [];
+  if (noM.length) add('walls.material', 'brick', noM.join(', '));
+  const noW = ids(spec.openings, (o) => o.width === undefined, 'openings');
+  if (noW.length) add('openings.width', 900, noW.join(', '));
+  const noC = ids(spec.columns, (c) => c.size === undefined, 'columns');
+  if (noC.length) add('columns.size', '400x400', noC.join(', '));
+  if (spec.grid_columns && spec.grid_columns.size === undefined) add('grid_columns.size', '400x400');
+  for (const [i, st] of (spec.stairs || []).entries()) {
+    for (const [k, v] of [['width', 1200], ['treads', 10], ['going', 270]]) if (st[k] === undefined) add(`stairs[${i}].${k}`, v);
+  }
+  return out;
+}
+
 export function buildPlan(spec) {
   const scale = num(spec.scale ?? 100, 'scale', { positive: true });
   const lang = spec.language === 'en' ? 'en' : 'vi';
@@ -518,5 +541,6 @@ export function buildPlan(spec) {
     },
     entities,
     notes,
+    assumed: planAssumptions(spec),
   };
 }

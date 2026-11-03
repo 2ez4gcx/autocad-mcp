@@ -471,6 +471,7 @@ namespace AcadMcp
             }
             Add(d, s);
             d.DimensionStyle = st; // SetDatabaseDefaults switched it to the current style
+            d.RecomputeDimensionBlock(true); // so the extents (bounds) include the text
             return One("dimension", d);
         }
 
@@ -495,6 +496,7 @@ namespace AcadMcp
                 var d = new RotatedDimension(ang, uniq[i], uniq[i + 1], line, "", st);
                 Add(d, s);
                 d.DimensionStyle = st;
+                d.RecomputeDimensionBlock(true);
                 es.Add(d);
             }
             if (s.Bool("total", false) && uniq.Count > 2)
@@ -505,6 +507,7 @@ namespace AcadMcp
                 var d = new RotatedDimension(ang, uniq[0], uniq[uniq.Count - 1], line + n * side * gap, "", st);
                 Add(d, s);
                 d.DimensionStyle = st;
+                d.RecomputeDimensionBlock(true);
                 es.Add(d);
             }
             return Many("dim_chain", es);
@@ -640,6 +643,13 @@ namespace AcadMcp
                         : (c < row.Count && row[c] is double ? CellAlignment.MiddleRight : CellAlignment.MiddleLeft);
                 }
             }
+            // Cell margins in proportion to the text (the table style's margins are tiny at large scales). The table-wide
+            // margins are marked obsolete, but the per-cell Borders.*.Margin that replaces them leaves the layout
+            // unchanged in AutoCAD 2024.
+#pragma warning disable 618
+            t.HorizontalCellMargin = th * 0.4;
+            t.VerticalCellMargin = th * 0.25;
+#pragma warning restore 618
             t.GenerateLayout();
             Add(t, s, false);
             return One("table", t);

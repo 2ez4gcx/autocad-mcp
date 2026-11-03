@@ -25,6 +25,21 @@
 - Define a block "BED-1600" with attributes CODE and SIZE, then place it in both bedrooms. / Tạo block giường có thuộc tính rồi đặt vào 2 phòng ngủ.
 - Make an A3 sheet "KT-01" with the title block (project NHÀ Ở GIA ĐÌNH, drawing MẶT BẰNG TẦNG 1) and export a PDF to D:/Out/KT-01.pdf.
 
+## Elevations, sections and structure / Mặt đứng, mặt cắt và kết cấu
+
+- Draw the four elevations of the plan with a gable roof (pitch 30°, overhang 500) and the porch roof from the photo, then add the gable window and the finials seen in the photo. / Vẽ 4 mặt đứng từ mặt bằng, mái dốc 30°, vươn 500, thêm mái sảnh và các chi tiết trang trí như trong ảnh.
+- Draw sections A-A and B-B from the section marks of the plan. / Vẽ mặt cắt A-A và B-B theo ký hiệu mặt cắt trên mặt bằng.
+- Draw beam D1 on axis C (220x350, two spans of 2900): bottom 2Ø16, top 2Ø14, support bars 1Ø14 over a quarter of the span, stirrups Ø6a100/200. / Vẽ dầm D1 trục C 220x350, 2 nhịp 2900, thép dưới 2Ø16, trên 2Ø14, mũ gối 1Ø14 dài 1/4 nhịp, đai Ø6a100/200.
+- Draw footing M1 1200x1200x400 at -1.500 with mesh Ø12a150 and the column 220x220 with 4Ø16, then the bar schedule of the beam and the footing with a CSV. / Vẽ móng M1 1200x1200x400 đáy -1.500, lưới Ø12a150, cột 220x220 4Ø16, rồi bảng thống kê thép dầm và móng, xuất CSV.
+- Make the A3 sheets KT-01 to KT-04 and KC-01, KC-02 and export one PDF. / Dàn các tờ A3 KT-01 đến KT-04, KC-01, KC-02 và xuất một file PDF.
+
+## Interior design / Thiết kế nội thất
+
+- Furnish the house: double beds with nightstands and wardrobes in the bedrooms, sofa, TV cabinet and coffee table in the living room, a kitchen run with sink and hob, wall cabinets and hood, a dining set, and the WC fixtures. List what you assume first. / Bố trí nội thất cả nhà (giường đôi, tab, tủ áo, sofa, kệ tivi, bàn trà, tủ bếp có chậu và bếp, tủ trên, hút mùi, bàn ăn, thiết bị WC); liệt kê các giả định trước khi vẽ.
+- Draw the floor finish plan with wooden planks 150x900 in the bedrooms and 600x600 porcelain elsewhere, then the reflected ceiling plan. / Vẽ mặt bằng lát sàn (phòng ngủ sàn gỗ 150x900, còn lại gạch 600x600) và mặt bằng trần đèn.
+- Draw the interior elevations of the four walls of PHÒNG NGỦ 1 and of the kitchen wall, then the shop drawings of the kitchen JN-03 and the wardrobe JN-01. / Triển khai 4 vách phòng ngủ 1 và vách bếp, chi tiết tủ bếp JN-03 và tủ áo JN-01.
+- Make the finish and material schedule with a CSV for Excel. / Lập bảng thống kê vật liệu hoàn thiện, xuất CSV.
+
 ## Quantities and checks / Khối lượng và kiểm tra
 
 - Take off the quantities by layer and save a CSV for Excel. / Bóc khối lượng theo layer, xuất CSV.

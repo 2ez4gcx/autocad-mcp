@@ -10,6 +10,13 @@ const LAYER_TABLE = [
   ['S-COLS', 7, 'Continuous', 0.5, true, 'Columns (cut)', 'Cột (nét cắt)', 'column'],
   ['S-COLS-PATT', 8, 'Continuous', 0.09, true, 'Column hatch', 'Hatch cột', 'column_hatch'],
   ['S-BEAM', 8, 'HIDDEN', 0.18, true, 'Beams above (hidden)', 'Dầm phía trên (nét khuất)', 'beam'],
+  ['S-CONC', 7, 'Continuous', 0.35, true, 'Concrete outlines (structural details)', 'Đường bao bê tông (chi tiết kết cấu)', 'concrete'],
+  ['S-CONC-PATT', 8, 'Continuous', 0.09, true, 'Concrete hatch', 'Hatch bê tông', 'concrete_hatch'],
+  ['S-REBR', 1, 'Continuous', 0.5, true, 'Main reinforcement', 'Cốt thép chủ', 'rebar'],
+  ['S-REBR-STIR', 3, 'Continuous', 0.25, true, 'Stirrups and ties', 'Cốt đai', 'stirrup'],
+  ['S-ANNO-TEXT', 7, 'Continuous', 0.18, true, 'Structural notes and bar marks', 'Ghi chú, số hiệu thép', 'struct_text'],
+  ['S-ANNO-DIMS', 1, 'Continuous', 0.18, true, 'Structural dimensions', 'Kích thước kết cấu', 'struct_dims'],
+  ['S-ANNO-SYMB', 7, 'Continuous', 0.25, true, 'Structural symbols: section marks, levels', 'Ký hiệu kết cấu: mặt cắt, cao độ', 'struct_symbol'],
   ['A-WALL', 7, 'Continuous', 0.5, true, 'Walls (cut)', 'Tường (nét cắt)', 'wall'],
   ['A-WALL-PATT', 8, 'Continuous', 0.09, true, 'Wall material hatch', 'Hatch vật liệu tường', 'wall_hatch'],
   ['A-DOOR', 3, 'Continuous', 0.25, true, 'Doors', 'Cửa đi', 'door'],
@@ -20,16 +27,26 @@ const LAYER_TABLE = [
   ['A-FLOR-PATT', 8, 'Continuous', 0.09, true, 'Floor finish hatch', 'Hatch vật liệu sàn', 'floor_hatch'],
   ['A-FLOR-FIXT', 5, 'Continuous', 0.18, true, 'Sanitary fixtures', 'Thiết bị vệ sinh', 'fixture'],
   ['A-FURN', 8, 'Continuous', 0.18, true, 'Furniture', 'Nội thất', 'furniture'],
+  ['A-FLOR-CASE', 30, 'Continuous', 0.25, true, 'Built-in joinery (casework)', 'Đồ gỗ đóng tại chỗ', 'casework'],
+  ['A-CLNG', 7, 'Continuous', 0.25, true, 'Ceiling outlines and steps', 'Đường trần, giật cấp trần', 'ceiling'],
+  ['A-CLNG-PATT', 8, 'Continuous', 0.09, true, 'Ceiling hatch', 'Hatch trần', 'ceiling_hatch'],
+  ['E-LITE', 2, 'Continuous', 0.25, true, 'Light fixtures', 'Đèn', 'light'],
+  ['E-LITE-STRP', 2, 'DASHED', 0.25, true, 'LED strips and cove lights', 'Đèn LED dây, đèn hắt', 'light_strip'],
+  ['A-DETL', 7, 'Continuous', 0.25, true, 'Detail lines', 'Nét chi tiết', 'detail'],
+  ['A-DETL-OTLN', 7, 'Continuous', 0.5, true, 'Detail cut outlines', 'Nét cắt chi tiết', 'detail_cut'],
+  ['A-DETL-PATT', 8, 'Continuous', 0.09, true, 'Detail hatch', 'Hatch chi tiết', 'detail_hatch'],
   ['A-EQPM', 8, 'Continuous', 0.18, true, 'Equipment', 'Thiết bị', 'equipment'],
   ['A-ROOF', 2, 'Continuous', 0.35, true, 'Roof', 'Mái', 'roof'],
   ['A-ELEV', 7, 'Continuous', 0.25, true, 'Elevation lines', 'Nét mặt đứng', 'elevation'],
   ['A-ELEV-OTLN', 7, 'Continuous', 0.5, true, 'Elevation outlines and ground line', 'Đường bao mặt đứng, cốt nền', 'elevation_outline'],
+  ['A-ELEV-PATT', 8, 'Continuous', 0.09, true, 'Elevation hatches (roof, cladding)', 'Hatch mặt đứng (mái, ốp)', 'elevation_hatch'],
   ['A-SECT', 7, 'Continuous', 0.5, true, 'Section cut lines', 'Nét cắt mặt cắt', 'section'],
   ['A-SECT-PATT', 8, 'Continuous', 0.09, true, 'Section hatch', 'Hatch mặt cắt', 'section_hatch'],
   ['A-HIDD', 8, 'HIDDEN', 0.18, true, 'Hidden and overhead lines', 'Nét khuất', 'hidden'],
   ['A-AREA', 30, 'Continuous', 0.09, false, 'Room area boundaries (not plotted)', 'Ranh diện tích phòng (không in)', 'area'],
   ['A-ANNO-ROOM', 7, 'Continuous', 0.25, true, 'Room names and areas', 'Tên phòng, diện tích', 'room_tag'],
   ['A-ANNO-TEXT', 7, 'Continuous', 0.18, true, 'Notes and text', 'Ghi chú', 'text'],
+  ['A-ANNO-NOTE', 7, 'Continuous', 0.18, true, 'Material tags and keynotes', 'Ký hiệu vật liệu, ghi chú vật liệu', 'note'],
   ['A-ANNO-DIMS', 1, 'Continuous', 0.18, true, 'Dimensions', 'Kích thước', 'dims'],
   ['A-ANNO-SYMB', 7, 'Continuous', 0.25, true, 'Symbols: levels, section marks, north arrow', 'Ký hiệu: cao độ, mặt cắt, hướng bắc', 'symbol'],
   ['A-ANNO-TTLB', 7, 'Continuous', 0.35, true, 'Sheet frame and title block', 'Khung bản vẽ, khung tên', 'title'],
@@ -69,6 +86,14 @@ export function layerStyles(language = 'vi', roleMap = {}) {
 export const TEXT_STYLE = 'MCP-ARIAL';
 export const dimStyleName = (scale) => `MCP-1-${scale}`;
 
+/** Styles for a drawing at another scale (elevation, section, detail): created if missing, the current ones kept. */
+export function viewStyles(scale) {
+  return {
+    text_style: { name: TEXT_STYLE, font: 'Arial', width_factor: 1, set_current: false },
+    dim_style: { name: dimStyleName(scale), scale, text_height: 2.5, arrow: 'tick', set_current: false },
+  };
+}
+
 /** setup_styles parameters for a plot scale (1:scale), lengths in mm. */
 export function styleParams({ scale = 100, font = 'Arial', textHeight = 2.5, arrow = 'tick', units = 'mm', setCurrent = true } = {}) {
   return {
@@ -99,7 +124,7 @@ const TB_TEXT = {
 /**
  * Sheet frame + title block in paper space (mm), ISO 5457 / TCVN style: 20 mm binding margin on the left (10 mm on A4),
  * 10 mm elsewhere (5 mm on A4), title block 180 mm wide in the bottom-right corner.
- * Returns {entities, area: [[x0,y0],[x1,y1]] free drawing area for the viewport, size: [w,h]}.
+ * Returns {entities, area: [[x0,y0],[x1,y1]] larger free drawing area for the viewport, areas: both (larger first), size: [w,h]}.
  */
 export function titleBlock({ paper = 'A3', orientation = 'landscape', info = {}, language = 'vi' } = {}) {
   const base = PAPERS[String(paper).toUpperCase()];
@@ -162,9 +187,10 @@ export function titleBlock({ paper = 'A3', orientation = 'landscape', info = {},
   // Free drawing area: inside the frame, above the title block on the right-hand part.
   const area = [[left + 5, top + 5], [W - m - 5, H - m - 5]];
   const areaFull = [[left + 5, m + 5], [x0 - 5, H - m - 5]];
-  // Prefer the larger of: full height left of the title block, or full width above it.
+  // Both free areas, the larger first: full height left of the title block, or full width above it.
   const sz = (a) => (a[1][0] - a[0][0]) * (a[1][1] - a[0][1]);
-  return { entities: e, area: sz(areaFull) > sz(area) ? areaFull : area, size: [W, H] };
+  const areas = sz(areaFull) > sz(area) ? [areaFull, area] : [area, areaFull];
+  return { entities: e, area: areas[0], areas, size: [W, H] };
 }
 
 /** Largest standard scale denominator that fits a model window (mm) into a paper area (mm). */
