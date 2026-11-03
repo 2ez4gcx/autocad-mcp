@@ -1097,6 +1097,7 @@ server.registerTool('draw_section', {
     from: opt(Point), to: opt(Point), look: z.enum(['left', 'right']).default('left'), label: opt(Str),
     at: opt(Point), heights: opt(Obj), roofs: opt(Specs), scale: opt(z.number().positive()), title: opt(Str),
     plan: opt(Obj), language: opt(Lang),
+    beam_depth: opt(z.number().min(0)).describe('Depth of the beams drawn under the slabs on the cut walls (default heights.beam or 300; 0 = none)'),
     dry_run: z.boolean().default(false).describe('List the heights/roof/foundation defaults it would assume, without drawing'),
   },
   annotations: EDIT,
@@ -1114,8 +1115,19 @@ server.registerTool('draw_section', {
     const r = engine('draw_section', () => buildSection(spec, { from, to, look, label, at: [0, 0], scale: sc }));
     return dryRun(r.assumed, { section: label ?? 'A', rooms: r.rooms, cut_walls: r.cut_walls, levels: r.levels });
   }
-  const { at, info } = await freeSpot(args.at, sc);
-  const r = engine('draw_section', () => buildSection(spec, { from, to, look, label, at, scale: sc, title: args.title }));
+  let { at, info } = await freeSpot(args.at, sc);
+  const ceilings = sectionCeilings(spec);
+  const build = (p) => engine('draw_section', () => buildSection(spec, { from, to, look, label, at: p, scale: sc, title: args.title, ceilings, beam_depth: args.beam_depth }));
+  let r = build(at);
+  if (!args.at) {
+    // the levels and dimensions on the left reach out of the cut: move the section right so they clear the last view
+    const b = entityBounds(r.entities);
+    const over = b ? at[0] - b.min[0] + 16 * sc : 0;
+    if (over > 0) {
+      at = [at[0] + over, at[1]];
+      r = build(at);
+    }
+  }
   const res = await drawView(r.entities, sc, info, args.language);
   return text({
     section: label ?? 'A', at, rooms: r.rooms, cut_walls: r.cut_walls, levels: r.levels, assumed: assumedOrNone(r.assumed),
@@ -1274,6 +1286,25 @@ function finishesFor(st, rooms, given, assumed, floorHeight = null) {
 }
 
 const FloorArg = opt(z.union([Str, z.number().int().positive()])).describe('Floor of a building (name or number from 1)');
+
+/**
+ * Ceiling and floor finish of every room for the sections, by floor index: what the interior tools were given, else the
+ * defaults by kind of room (resolveFinish).
+ */
+function sectionCeilings(spec) {
+  const floors = Array.isArray(spec.floors) && spec.floors.length ? floorsOf(spec) : [{ name: '', spec, height: null }];
+  const out = {};
+  floors.forEach((f, i) => {
+    const st = interiorOf(Array.isArray(spec.floors) && spec.floors.length ? f.name : '');
+    out[i] = {};
+    for (const rm of f.spec.rooms || []) {
+      const name = String(rm.name);
+      const fin = resolveFinish(name, st.given[name] || {}, [], f.height);
+      if (fin.ceiling) out[i][name] = { level: fin.ceiling.level, drop: fin.ceiling.drop, code: fin.ceiling.code, floor_code: fin.floor?.code };
+    }
+  });
+  return out;
+}
 
 const NotesArg = z.union([z.boolean(), z.array(Str)]).default(true)
   .describe('General notes of the sheet (GHI CHÚ): true = the standard ones for this kind of plan, a list = these, false = none');

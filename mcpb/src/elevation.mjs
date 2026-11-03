@@ -6,7 +6,7 @@
 //     (line segments are clipped against the convex silhouettes of every nearer element)
 import { buildWalls, findSegment, gridList, num, openingSpan, PlanError, pt, rectAround, segRect, uStairGeom } from './plan.mjs';
 import { dimStyleName, ROLE, TEXT_STYLE, viewTitle } from './standards.mjs';
-import { sym } from './symbols.mjs';
+import { sym, tagSym } from './symbols.mjs';
 
 const add = (a, b) => [a[0] + b[0], a[1] + b[1]];
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
@@ -28,6 +28,7 @@ export const SIDES = { bottom: [0, 1], top: [0, -1], left: [1, 0], right: [-1, 0
 const L = {
   outline: ROLE.elevation_outline, line: ROLE.elevation, cut: ROLE.section, cutHatch: ROLE.section_hatch,
   dims: ROLE.dims, symbol: ROLE.symbol, text: ROLE.text, grid: ROLE.grid, gridTag: ROLE.grid_tag, glass: ROLE.window,
+  ceiling: ROLE.ceiling, note: ROLE.note,
 };
 
 // ---------------------------------------------------------------- building model
@@ -485,8 +486,8 @@ function spaced(levels, minGap) {
   return kept;
 }
 
-function levelMark(x, y, value, scale, out) {
-  out.push(sym('MCP_COTE', P([x, y]), { scale, attrs: { COTE: value }, layer: L.symbol }));
+function levelMark(x, y, value, scale, out, side = 'right') {
+  out.push(sym(side === 'left' ? 'MCP_COTE_TRAI' : 'MCP_COTE', P([x, y]), { scale, attrs: { COTE: value }, layer: L.symbol }));
 }
 
 export const fmtLevel = (mm) => (Math.abs(mm) < 0.5 ? '±0.000' : `${mm > 0 ? '+' : '-'}${(Math.abs(mm) / 1000).toFixed(3)}`);
@@ -784,6 +785,10 @@ export function buildSection(spec, opts = {}) {
   const cutEls = [];
   const fills = [];
   const notes = [];
+  // concrete cut solid (poché), as sections at 1:100 read best; beams of beam_depth under the slabs on the cut walls
+  const conc = (boundary) => ({ type: 'hatch', boundary, ...(opts.poche === false ? { pattern: 'AR-CONC', scale: 0.05 * scale } : { pattern: 'SOLID' }), layer: L.cutHatch });
+  const beamD = num(opts.beam_depth ?? spec.heights?.beam ?? 300, 'beam_depth', { min: 0 });
+  const assumedBeam = opts.beam_depth === undefined && spec.heights?.beam === undefined;
 
   // Walls crossing the cut, floor by floor.
   const perFloor = B.map((f) => {
@@ -810,16 +815,23 @@ export function buildSection(spec, opts = {}) {
       const topCut = next && w.height === undefined ? top - next.slab : top;
       const op = M.openings.find((o) => o.s === s && along >= o.span.from - 0.5 && along <= o.span.to + 0.5);
       const base = f.index === 0 ? -F.depth + F.height : 0;
-      const ranges = op ? [[base, op.type === 'window' ? op.sill : M.H.floor], [op.head, topCut]] : [[base, topCut]];
+      // a full-height wall carries a beam under the slab (or roof) above it
+      const beamBot = w.height === undefined && beamD > 0 ? Math.max(topCut - beamD, op ? op.head : -Infinity, base) : topCut;
+      const ranges = op ? [[base, op.type === 'window' ? op.sill : M.H.floor], [op.head, beamBot]] : [[base, beamBot]];
       for (const [y0, y1] of ranges) {
         if (y1 - y0 < 1) continue;
         const poly2 = rectPoly(ua, z + y0, ub, z + y1);
         cutEls.push({ depth: wc, sil: poly2, segs: segsOfPoly(poly2, L.cut) });
         fills.push({ type: 'hatch', boundary: poly2, pattern: 'ANSI31', scale: 0.6 * scale, layer: L.cutHatch });
       }
+      if (topCut - beamBot > 1) {
+        const beam = rectPoly(ua, z + beamBot, ub, z + topCut);
+        cutEls.push({ depth: wc, sil: beam, segs: segsOfPoly(beam, L.cut) });
+        fills.push(conc(beam));
+      }
       if (op) {
-        const lt = Math.min(200, topCut - op.head);
-        if (lt > 50) fills.push({ type: 'hatch', boundary: rectPoly(ua, z + op.head, ub, z + op.head + lt), pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+        const lt = Math.min(200, beamBot - op.head);
+        if (lt > 50) fills.push(conc(rectPoly(ua, z + op.head, ub, z + op.head + lt)));
         if (op.type === 'window') {
           const um = (ua + ub) / 2;
           for (const du of [-15, 15]) fills.push({ type: 'line', from: [um + du, z + op.sill], to: [um + du, z + op.head], layer: L.glass });
@@ -852,7 +864,7 @@ export function buildSection(spec, opts = {}) {
     if (u1 - u0 < 10) continue;
     const slab = rectPoly(u0, H.floor - H.slab, u1, H.floor);
     cutEls.push({ depth: wc, sil: slab, segs: segsOfPoly(slab, L.cut) });
-    fills.push({ type: 'hatch', boundary: slab, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+    fills.push(conc(slab));
     if (H.floor - H.slab > H.ground + 10) {
       fills.push({ type: 'hatch', boundary: rectPoly(u0, H.ground, u1, H.floor - H.slab), pattern: 'AR-SAND', scale: 0.03 * scale, layer: L.cutHatch });
     }
@@ -886,7 +898,7 @@ export function buildSection(spec, opts = {}) {
     for (const [u0, u1] of uncovered(lo, hi, holes)) {
       const slab = rectPoly(u0, f.level - f.slab, u1, f.level);
       cutEls.push({ depth: wc, sil: slab, segs: segsOfPoly(slab, L.cut) });
-      fills.push({ type: 'hatch', boundary: slab, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+      fills.push(conc(slab));
     }
     uSpanLo = Math.min(uSpanLo, lo);
     uSpanHi = Math.max(uSpanHi, hi);
@@ -914,7 +926,7 @@ export function buildSection(spec, opts = {}) {
     if (R.type === 'flat') {
       const slab = rectPoly(u0, R.base, u1, R.base + R.thickness);
       cutEls.push({ depth: wc, sil: slab, segs: segsOfPoly(slab, L.cut) });
-      fills.push({ type: 'hatch', boundary: slab, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+      fills.push(conc(slab));
       if (R.parapet > 0 && own.length) for (const cw of [own[0], own[own.length - 1]]) {
         const par = rectPoly(cw.ua, R.base + R.thickness, cw.ub, R.base + R.thickness + R.parapet);
         cutEls.push({ depth: wc, sil: par, segs: segsOfPoly(par, L.cut) });
@@ -955,7 +967,7 @@ export function buildSection(spec, opts = {}) {
     const slab = rectPoly(p0, H.floor - H.slab, p1, H.floor);
     if (wc >= Math.min(...ws) && wc <= Math.max(...ws)) {
       cutEls.push({ depth: wc, sil: slab, segs: segsOfPoly(slab, L.cut) });
-      fills.push({ type: 'hatch', boundary: slab, pattern: 'AR-CONC', scale: 0.05 * scale, layer: L.cutHatch });
+      fills.push(conc(slab));
       if (H.floor - H.slab > H.ground + 10) {
         fills.push({ type: 'hatch', boundary: rectPoly(p0, H.ground, p1, H.floor - H.slab), pattern: 'AR-SAND', scale: 0.03 * scale, layer: L.cutHatch });
       }
@@ -1002,7 +1014,7 @@ export function buildSection(spec, opts = {}) {
   // Ground outside the building.
   for (const [g0, g1] of [[X(edges.lo) - 15 * scale, X(edges.lo)], [X(edges.hi), X(edges.hi) + 15 * scale]]) {
     ents.push({ type: 'line', from: P([g0, Y(H.ground)]), to: P([g1, Y(H.ground)]), layer: L.outline });
-    ents.push({ type: 'hatch', boundary: [P([g0, Y(H.ground)]), P([g1, Y(H.ground)]), P([g1, Y(H.ground) - 2 * scale]), P([g0, Y(H.ground) - 2 * scale])], pattern: 'EARTH', scale: 0.15 * scale, layer: L.cutHatch });
+    ents.push({ type: 'hatch', boundary: [P([g0, Y(H.ground)]), P([g1, Y(H.ground)]), P([g1, Y(H.ground) - 3 * scale]), P([g0, Y(H.ground) - 3 * scale])], pattern: 'EARTH', scale: 0.15 * scale, layer: L.cutHatch });
   }
 
   // Room names between the cut walls of each floor, above the door and window heads when there is room for them.
@@ -1020,7 +1032,33 @@ export function buildSection(spec, opts = {}) {
       const room = roomAt(M, pPlan);
       if (!room || room.label === false) continue;
       roomsOut.push(B.length > 1 ? `${f.name}: ${room.name}` : room.name);
-      ents.push({ type: 'text', text: String(room.name), at: P([X(um), Y(z + yRoom)]), height: 2.5 * scale, align: 'middle_center', layer: L.text, style: TEXT_STYLE });
+      // the room's ceiling (from its finishes): drop bands at the walls, hangers up to the slab; finish codes
+      const cl = opts.ceilings?.[f.index]?.[room.name];
+      let yName = yRoom;
+      if (cl?.level) {
+        const drop = cl.drop && u1 - u0 > 2 * cl.drop.width + 600 ? cl.drop : null;
+        const low = cl.level - (drop?.depth ?? 0);
+        const pts = drop
+          ? [[u0, low], [u0 + drop.width, low], [u0 + drop.width, cl.level], [u1 - drop.width, cl.level], [u1 - drop.width, low], [u1, low]]
+          : [[u0, cl.level], [u1, cl.level]];
+        ents.push({ type: 'polyline', points: pts.map((q) => P([X(q[0]), Y(z + q[1])])), layer: L.ceiling });
+        const under = M.H.top - (B[f.index + 1]?.slab ?? 120);
+        if (under - cl.level > 50) {
+          const n = Math.max(1, Math.round((u1 - u0) / 1200));
+          for (let k = 0; k < n; k++) {
+            const uk = u0 + ((k + 0.5) * (u1 - u0)) / n;
+            const yk = drop && (uk < u0 + drop.width || uk > u1 - drop.width) ? low : cl.level;
+            ents.push({ type: 'line', from: P([X(uk), Y(z + yk)]), to: P([X(uk), Y(z + under)]), layer: L.ceiling });
+          }
+        }
+        // the name well under the ceiling and its tag, clear of both
+        yName = Math.min(yRoom, low - 9 * scale);
+        if (u1 - u0 > 24 * scale) {
+          if (cl.code) ents.push(tagSym(cl.code, [X(u0) + 9 * scale, Y(z + low) - 3.2 * scale], scale, L.note));
+          if (cl.floor_code) ents.push(tagSym(cl.floor_code, [X(u0) + 9 * scale, Y(z) + 3.2 * scale], scale, L.note));
+        }
+      }
+      ents.push({ type: 'text', text: String(room.name), at: P([X(um), Y(z + yName)]), height: 2.5 * scale, align: 'middle_center', layer: L.text, style: TEXT_STYLE });
     }
   }
 
@@ -1033,10 +1071,17 @@ export function buildSection(spec, opts = {}) {
     heights = [-F.depth, H.ground, ...B.map((f) => f.level), Math.max(...perFloor.flatMap((p) => p.cutWalls.map((c) => c.top))), roofTop];
   }
   const uniq = [...new Set(heights.map((x) => Math.round(x)))].sort((p, q) => p - q);
-  const xr = Math.max(X(uMax) + 16 * scale, X(uHi) + 10 * scale);
-  for (const lv of spaced(uniq.filter((x) => x >= H.ground - 1), 3.2 * scale)) levelMark(xr, Y(lv), fmtLevel(lv), scale, ents);
+  // levels on both sides: a thin line out from the building to each mark, so it reads which floor it gives
+  const xDimL = Math.min(X(uMin) - 18 * scale, X(uLo) - 10 * scale);
+  const xr = X(uHi) + 8 * scale, xl = xDimL - 14 * scale;
+  for (const lv of spaced(uniq.filter((x) => x >= H.ground - 1), 3.2 * scale)) {
+    ents.push({ type: 'line', from: P([X(uHi) + 1.5 * scale, Y(lv)]), to: P([xr, Y(lv)]), layer: L.symbol });
+    levelMark(xr, Y(lv), fmtLevel(lv), scale, ents);
+    ents.push({ type: 'line', from: P([X(uLo) - 1.5 * scale, Y(lv)]), to: P([xl, Y(lv)]), layer: L.symbol });
+    levelMark(xl, Y(lv), fmtLevel(lv), scale, ents, 'left');
+  }
   ents.push({
-    type: 'dim_chain', points: uniq.map((lv) => P([X(uLo), Y(lv)])), direction: 'vertical', at: P([Math.min(X(uMin) - 18 * scale, X(uLo) - 10 * scale), Y(uniq[0])]),
+    type: 'dim_chain', points: uniq.map((lv) => P([X(uLo), Y(lv)])), direction: 'vertical', at: P([xDimL, Y(uniq[0])]),
     style: dimStyleName(scale), layer: L.dims, total: uniq.length > 2,
   });
   const yGrid = Y(-F.depth - F.lean) - 8 * scale;
@@ -1045,6 +1090,10 @@ export function buildSection(spec, opts = {}) {
   titleBlock(opts.title ?? `MẶT CẮT ${label}-${label}`, (X(uLo) + X(uHi)) / 2, yGrid - 9 * 4.5 * scale - 8 * scale, scale, ents);
   return {
     entities: ents, rooms: roomsOut, levels: uniq, cut_walls: perFloor.reduce((s2, p) => s2 + p.cutWalls.length, 0),
-    assumed: [...buildingAssumed(spec, B), ...foundationAssumptions(spec)], notes: notes.length ? notes : undefined,
+    assumed: [
+      ...buildingAssumed(spec, B), ...foundationAssumptions(spec),
+      ...(assumedBeam && beamD > 0 ? [{ item: 'heights.beam', value: beamD, note: 'beams under the slabs on the cut walls (poché)' }] : []),
+    ],
+    notes: notes.length ? notes : undefined,
   };
 }

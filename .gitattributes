@@ -1,0 +1,8 @@
+# binary files: never touched by line-ending conversion
+*.dwg binary
+*.dxf binary
+*.pdf binary
+*.png binary
+*.mcpb binary
+*.zip binary
+*.dll binary

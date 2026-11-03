@@ -580,6 +580,12 @@ namespace AcadMcp
             bool inPlace = path.Equals(doc.Name, StringComparison.OrdinalIgnoreCase);
             if (File.Exists(path) && !p.Bool("overwrite", inPlace))
                 throw new McpError("File exists: " + path + " (pass overwrite=true to replace it)");
+            // writing over a drawing that another open document holds waits for AutoCAD forever: refuse it at once
+            foreach (Document other in AcApp.DocumentManager)
+            {
+                if (other != doc && other.Name.Equals(path, StringComparison.OrdinalIgnoreCase))
+                    throw new McpError("'" + path + "' is open in AutoCAD as another drawing: close it there (or save to another file) first.");
+            }
             DwgVersion version = Version(p.Str("version"));
             // A copy (export) leaves the open drawing as it is; otherwise this is Save / Save As (the drawing takes the new name).
             // An older version or DXF is an export copy unless copy=false.

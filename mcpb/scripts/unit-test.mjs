@@ -289,6 +289,23 @@ test('section across the box: cut walls with the window gap, footing, room name,
   assert.ok(r.levels.includes(-1500) && r.levels.includes(2400));
 });
 
+test('section presentation: concrete solid, beams on the cut walls, ceilings with hangers and tags, levels both sides', () => {
+  const ceilings = { 0: { 'PHÒNG': { level: 2800, drop: { width: 600, depth: 150 }, code: 'CL-01', floor_code: 'FL-01' } } };
+  const spec = { ...BOX, rooms: [{ name: 'PHÒNG', at: [3000, 2000] }] };
+  const r = buildSection(spec, { from: [3000, -1000], to: [3000, 5000], ceilings });
+  noNaN(r.entities);
+  assert.ok(r.entities.filter((e) => e.type === 'hatch' && e.pattern === 'SOLID').length >= 2, 'slab and beams poché');
+  const ceil = r.entities.find((e) => e.type === 'polyline' && e.layer === 'A-CLNG');
+  assert.ok(ceil && ceil.points.length === 6, 'ceiling with its drop band at both walls');
+  assert.ok(r.entities.filter((e) => e.type === 'line' && e.layer === 'A-CLNG').length >= 1, 'hangers');
+  assert.ok(r.entities.some((e) => e.attributes?.MA === 'CL-01') && r.entities.some((e) => e.attributes?.MA === 'FL-01'));
+  const marks = r.entities.filter((e) => /^MCP_COTE/.test(e.name ?? ''));
+  assert.ok(marks.some((e) => e.name === 'MCP_COTE_TRAI') && marks.some((e) => e.name === 'MCP_COTE'), 'levels on both sides');
+  const plain = buildSection(spec, { from: [3000, -1000], to: [3000, 5000], poche: false, beam_depth: 0 });
+  const solid = (x) => x.entities.filter((e) => e.type === 'hatch' && e.pattern === 'SOLID').length;
+  assert.ok(plain.entities.some((e) => e.pattern === 'AR-CONC') && solid(plain) < solid(r), 'poche=false keeps the concrete pattern, beam_depth=0 no beams');
+});
+
 test('sections need a cut through the walls', () => {
   assert.throws(() => buildSection(BOX, { from: [-5000, -1000], to: [-5000, 5000] }), /crosses no wall/);
 });
@@ -323,8 +340,8 @@ test('assumptions: every default the engines apply is reported, nothing that was
   const el = buildElevation(BOX, { side: 'bottom', at: [0, 0] });
   assert.deepEqual(items(el.assumed), ['heights.floor', 'heights.slab', 'heights.walls_to_roof', 'roofs[0].thickness']);
   const sec = buildSection(BOX, { from: [3000, -1000], to: [3000, 5000] });
-  assert.ok(items(sec.assumed).includes('heights.foundation.depth'));
-  const given = buildSection({ ...BOX, heights: { ...BOX.heights, ground: -300, floor: 0, top: 3300, slab: 100, walls_to_roof: 'end', foundation: { depth: 1200, width: 800, height: 300, lean: 100 } } }, { from: [3000, -1000], to: [3000, 5000] });
+  assert.ok(items(sec.assumed).includes('heights.foundation.depth') && items(sec.assumed).includes('heights.beam'));
+  const given = buildSection({ ...BOX, heights: { ...BOX.heights, ground: -300, floor: 0, top: 3300, slab: 100, beam: 300, walls_to_roof: 'end', foundation: { depth: 1200, width: 800, height: 300, lean: 100 } } }, { from: [3000, -1000], to: [3000, 5000] });
   assert.deepEqual(items(given.assumed).filter((k) => k.startsWith('heights')), []);
   const beam = beamDetail({ spans: [4000], b: 200, h: 400, bottom: { d: 16, n: 2 }, top: { d: 12 }, extra_top: null, stirrup: { d: 6, end: 100, mid: 200 } });
   assert.deepEqual(items(beam.assumed), ['support', 'cover', 'top.n', 'stirrup.zone']);

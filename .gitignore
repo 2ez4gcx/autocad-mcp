@@ -8,3 +8,6 @@ examples/*.bak
 *.dwl
 *.dwl2
 plot.log
+# reference drawings of other projects (never published)
+/New folder/
+*.tmp
