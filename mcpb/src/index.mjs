@@ -1,5 +1,5 @@
 /**
- * AutoCAD MCP server (Node.js), packaged as a Claude Desktop Extension (.mcpb).
+ * Construction AutoCAD MCP server (Node.js), packaged as a Claude Desktop Extension (.mcpb).
  *
  * Claude <-(stdio/MCP)-> this file <-(TCP 127.0.0.1:9877, one-line JSON)-> "ACAD MCP Bridge" .NET add-in in AutoCAD.
  *
@@ -48,7 +48,7 @@ const NO_UNDO_CMDS = new Set(['undo', 'save_drawing', 'open_drawing', 'new_drawi
 function afterSendHint(cmd) {
   if (READ_ONLY_CMDS.has(cmd)) {
     return ' This command does not modify the drawing and can be retried; for large drawings increase the timeout first ' +
-      '(Claude Desktop: Settings > Extensions > AutoCAD MCP > Configure; other clients: AUTOCAD_MCP_TIMEOUT).';
+      '(Claude Desktop: Settings > Extensions > Construction AutoCAD MCP > Configure; other clients: AUTOCAD_MCP_TIMEOUT).';
   }
   if (NO_UNDO_CMDS.has(cmd)) {
     return ` Command '${cmd}' MAY HAVE ALREADY RUN (AutoCAD keeps working on it). Do NOT retry right away and do NOT use undo: ` +
@@ -94,7 +94,7 @@ let nextId = 1;
 class AcadError extends Error {}
 
 function log(msg) {
-  process.stderr.write(`[autocad-mcp] ${msg}\n`);
+  process.stderr.write(`[construction-autocad-mcp] ${msg}\n`);
 }
 
 // The bridge serves one client at a time: commands are queued so each timeout starts when its turn comes.

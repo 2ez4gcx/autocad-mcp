@@ -1,0 +1,63 @@
+name: mcp-registry-status
+
+# Changes the status of versions already in the MCP Registry: active, deprecated or deleted. Run it by hand
+# (Actions > mcp-registry-status > Run workflow). The defaults deprecate io.github.2ez4gcx/autocad-mcp, the name of
+# this server up to 1.2.0; it is published as io.github.2ez4gcx/construction-autocad-mcp from 1.2.1 on.
+on:
+  workflow_dispatch:
+    inputs:
+      server:
+        description: Server name in the registry
+        required: true
+        default: io.github.2ez4gcx/autocad-mcp
+      status:
+        description: New status
+        required: true
+        type: choice
+        options: [deprecated, active, deleted]
+        default: deprecated
+      version:
+        description: One version (empty = every version)
+        required: false
+        default: ''
+      message:
+        description: Message shown with the status
+        required: false
+        default: Renamed to Construction AutoCAD MCP, io.github.2ez4gcx/construction-autocad-mcp.
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC login: the registry grants the io.github.<owner>/* namespace
+    env:
+      PUBLISHER_VERSION: 1.8.1
+      PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+    steps:
+      - name: Install mcp-publisher (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/mcp-publisher.tar.gz" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${PUBLISHER_SHA256}  $RUNNER_TEMP/mcp-publisher.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/mcp-publisher.tar.gz" -C "$RUNNER_TEMP" mcp-publisher
+
+      - run: '"$RUNNER_TEMP/mcp-publisher" login github-oidc'
+
+      - name: Update the status
+        env:
+          SERVER: ${{ inputs.server }}
+          STATUS: ${{ inputs.status }}
+          VERSION: ${{ inputs.version }}
+          MESSAGE: ${{ inputs.message }}
+        run: |
+          set -euo pipefail
+          if [ -n "$VERSION" ]; then
+            "$RUNNER_TEMP/mcp-publisher" status --status "$STATUS" --message "$MESSAGE" "$SERVER" "$VERSION"
+          else
+            "$RUNNER_TEMP/mcp-publisher" status --status "$STATUS" --message "$MESSAGE" --all-versions --yes "$SERVER"
+          fi

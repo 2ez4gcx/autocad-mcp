@@ -1,8 +1,8 @@
 {
-  "name": "autocad-mcp",
-  "version": "1.2.0",
+  "name": "construction-autocad-mcp",
+  "version": "1.2.1",
   "private": true,
-  "description": "AutoCAD MCP server (Node.js) packaged as a Claude Desktop Extension (.mcpb)",
+  "description": "Construction AutoCAD MCP server (Node.js) packaged as a Claude Desktop Extension (.mcpb)",
   "license": "MIT",
   "type": "module",
   "scripts": {

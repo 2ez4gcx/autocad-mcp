@@ -119,7 +119,7 @@ for (const input of Object.keys(built.metafile.inputs)) {
   const lic = fs.readdirSync(dir).find((f) => /^(licen[cs]e|copying)(\.|$)/i.test(f));
   pkgs.set(m[1], { version: meta.version, license: meta.license, text: lic ? fs.readFileSync(path.join(dir, lic), 'utf8').trim() : '(no LICENSE file in the package)' });
 }
-const notices = ['Third-party libraries bundled in server/index.mjs of AutoCAD MCP ' + version, ''];
+const notices = ['Third-party libraries bundled in server/index.mjs of Construction AutoCAD MCP ' + version, ''];
 for (const [name, p] of [...pkgs].sort()) notices.push('='.repeat(72), `${name} ${p.version} - ${p.license}`, '-'.repeat(72), p.text, '');
 const NOTICES = notices.join('\n');
 

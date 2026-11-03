@@ -86,7 +86,7 @@ namespace AcadMcp
 
     public static class Bridge
     {
-        public static readonly string VERSION = "1.2.0";
+        public static readonly string VERSION = "1.2.1";
         const int MaxRequestBytes = 64 * 1024 * 1024;
 
         static Control _ui;
@@ -415,7 +415,7 @@ namespace AcadMcp
             {
                 try { Bridge.Start(); } catch (Exception e) { Say("Cannot start: " + e.Message); }
             }
-            Say(Bridge.Status() + "  Set the same port in Claude (Settings > Extensions > AutoCAD MCP > Configure).");
+            Say(Bridge.Status() + "  Set the same port in Claude (Settings > Extensions > Construction AutoCAD MCP > Configure).");
         }
 
         [CommandMethod("MCPLOG", CommandFlags.Modal)]

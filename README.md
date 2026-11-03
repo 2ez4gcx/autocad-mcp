@@ -1,14 +1,14 @@
-# AutoCAD MCP
+# Construction AutoCAD MCP
 
 **English** | [Tiếng Việt](README.vi.md)
 
-![AutoCAD MCP: ask in plain language and the AI draws in your AutoCAD drawing](docs/images/hero.png)
+![Construction AutoCAD MCP: ask in plain language and the AI draws in your AutoCAD drawing](docs/images/hero.png)
 
-AutoCAD MCP lets Claude work directly in the drawing you have open in AutoCAD. Its main job is drafting: from a scanned or photographed plan, a sketch, a render or a 3D model, Claude draws a complete, layered 2D drawing (walls with clean junctions and material hatches, doors and windows cut into the walls, columns, grids with bubbles, stairs, rooms with measured areas, dimension chains, symbols, a sheet with a title block and a PDF). From the same plan it derives the elevations and sections, draws reinforced-concrete details (beams, columns, footings) with their bar schedule, and the interior design set: furniture layout, floor finish and ceiling plans, interior elevations of each wall, joinery shop drawings and the finish schedule. It also reads drawings, takes off quantities by layer and block, and checks drawings for common problems.
+Construction AutoCAD MCP lets Claude work directly in the drawing you have open in AutoCAD. Its main job is drafting: from a scanned or photographed plan, a sketch, a render or a 3D model, Claude draws a complete, layered 2D drawing (walls with clean junctions and material hatches, doors and windows cut into the walls, columns, grids with bubbles, stairs, rooms with measured areas, dimension chains, symbols, a sheet with a title block and a PDF). From the same plan it derives the elevations and sections, draws reinforced-concrete details (beams, columns, footings) with their bar schedule, and the interior design set: furniture layout, floor finish and ceiling plans, interior elevations of each wall, joinery shop drawings and the finish schedule. It also reads drawings, takes off quantities by layer and block, and checks drawings for common problems.
 
 It works like [SketchUp MCP](https://github.com/2ez4gcx/sketchup-mcp): a Claude Desktop extension (`.mcpb`) that runs on the Node.js built into Claude Desktop, plus a small add-in that runs inside AutoCAD (the **ACAD MCP Bridge**, a .NET add-in). No Python or Node.js install is needed.
 
-Current version: **1.2.0** - [download it from Releases](https://github.com/2ez4gcx/autocad-mcp/releases/latest). Also listed in the official [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.2ez4gcx/autocad-mcp) as `io.github.2ez4gcx/autocad-mcp`.
+Current version: **1.2.1** - [download it from Releases](https://github.com/2ez4gcx/construction-autocad-mcp/releases/latest). Also listed in the official [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.2ez4gcx/construction-autocad-mcp) as `io.github.2ez4gcx/construction-autocad-mcp`.
 
 ## Features
 
@@ -140,7 +140,7 @@ Highlights:
 Claude Desktop
     |  MCP over stdio
     v
-autocad-mcp-1.2.0.mcpb        Node.js MCP server, runs on the Node built into Claude Desktop
+construction-autocad-mcp-1.2.1.mcpb        Node.js MCP server, runs on the Node built into Claude Desktop
     |  one JSON request per command, TCP 127.0.0.1:9877 (localhost only)
     v
 ACAD MCP Bridge               .NET add-in inside AutoCAD (autoloader bundle), runs commands on AutoCAD's main thread
@@ -159,11 +159,11 @@ The bridge runs inside AutoCAD (not over COM from outside): every command runs o
 
 ## Install
 
-1. **Install the extension in Claude Desktop**: download `autocad-mcp-1.2.0.mcpb` and `AcadMcpBridge-1.2.0.bundle.zip` from the [latest release](https://github.com/2ez4gcx/autocad-mcp/releases/latest), then in *Settings > Extensions* drag and drop the `.mcpb` into the window (or *Advanced settings > Install Extension...*), click *Install*. The build is not code-signed, so Claude Desktop may warn about it.
-2. **Install the bridge in AutoCAD**: in a new chat ask Claude *"Install the ACAD MCP Bridge in AutoCAD"* (tool `install_autocad_bridge`). It copies `AcadMcpBridge.bundle` into `%APPDATA%\Autodesk\ApplicationPlugins`, which AutoCAD loads at startup. Manual install: unzip `AcadMcpBridge-1.2.0.bundle.zip` into that folder.
+1. **Install the extension in Claude Desktop**: download `construction-autocad-mcp-1.2.1.mcpb` and `AcadMcpBridge-1.2.1.bundle.zip` from the [latest release](https://github.com/2ez4gcx/construction-autocad-mcp/releases/latest), then in *Settings > Extensions* drag and drop the `.mcpb` into the window (or *Advanced settings > Install Extension...*), click *Install*. The build is not code-signed, so Claude Desktop may warn about it.
+2. **Install the bridge in AutoCAD**: in a new chat ask Claude *"Install the ACAD MCP Bridge in AutoCAD"* (tool `install_autocad_bridge`). It copies `AcadMcpBridge.bundle` into `%APPDATA%\Autodesk\ApplicationPlugins`, which AutoCAD loads at startup. Manual install: unzip `AcadMcpBridge-1.2.1.bundle.zip` into that folder.
 3. **Restart AutoCAD.** The add-in is not digitally signed: when AutoCAD asks about `AcadMcpBridge-1.2.0.dll`, choose **Always Load**. Each new bridge build is a new file, so AutoCAD asks again after an update. (To never be asked, you can add the bundle folder to *Options > Files > Trusted Locations*, if your IT policy allows it.) Type `MCPSTATUS` in AutoCAD: it should say `ACAD MCP Bridge v1.2.0: RUNNING on 127.0.0.1:9877`. Then ask Claude *"Ping AutoCAD"*.
 
-Options in *Settings > Extensions > AutoCAD MCP > Configure*: the bridge port (default 9877; if you change it, also type `MCPPORT` in AutoCAD) and the timeout per command (default 120 s).
+Options in *Settings > Extensions > Construction AutoCAD MCP > Configure*: the bridge port (default 9877; if you change it, also type `MCPPORT` in AutoCAD) and the timeout per command (default 120 s).
 
 To update: install the new `.mcpb`, ask Claude to install the bridge again, restart AutoCAD.
 
@@ -189,7 +189,7 @@ More prompts: [`mcpb/release-docs/SAMPLE_PROMPTS.md`](mcpb/release-docs/SAMPLE_P
 The server is a standard MCP server over stdio. Extract the `.mcpb` (it is a zip) and register `node <folder>/server/index.mjs`, for example in Claude Code:
 
 ```bat
-claude mcp add autocad --scope user -e AUTOCAD_MCP_TIMEOUT=120 -- node C:/Tools/autocad-mcp/server/index.mjs
+claude mcp add autocad --scope user -e AUTOCAD_MCP_TIMEOUT=120 -- node C:/Tools/construction-autocad-mcp/server/index.mjs
 ```
 
 Environment variables: `AUTOCAD_MCP_PORT` (default 9877), `AUTOCAD_MCP_TIMEOUT` (seconds, default 120).
@@ -212,7 +212,7 @@ The bridge listens on 127.0.0.1 only, without authentication, like other local M
 ```bat
 cd mcpb
 npm ci
-npm run build    :: compiles the bridge, bundles the server, packs dist/autocad-mcp-<version>.mcpb
+npm run build    :: compiles the bridge, bundles the server, packs dist/construction-autocad-mcp-<version>.mcpb
 npm test         :: plan engine unit tests + server smoke test
 ```
 
