@@ -91,8 +91,13 @@ namespace AcadMcp
                 }
                 var dr = new Drawer(db, tr, paperSpace, p.Obj("layer_styles"));
                 res["entities"] = dr.DrawAll(p.List("entities"), "entities").Count;
-                P v = p.Obj("viewport");
-                if (v != null)
+                // one viewport, or several (views at their own scales); the title block fields show the first one
+                var views = new List<P>();
+                if (p.Obj("viewport") != null) views.Add(p.Obj("viewport"));
+                var more = p.List("viewports");
+                if (more != null) for (int i = 0; i < more.Count; i++) views.Add(new P(more[i], "viewports[" + i + "]"));
+                var handles = new List<object>();
+                foreach (P v in views)
                 {
                     var vp = new Viewport();
                     dr.Add(vp, new P(new Dictionary<string, object> { { "layer", v.Str("layer") ?? "A-ANNO-VPRT" } }, "viewport"));
@@ -106,6 +111,8 @@ namespace AcadMcp
                     vp.CustomScale = v.ReqNum("scale_factor");
                     vp.On = true;
                     vp.Locked = v.Bool("locked", true);
+                    handles.Add(vp.Handle.ToString());
+                    if (handles.Count > 1) continue;
                     res["viewport_handle"] = vp.Handle.ToString();
                     // title block attributes that show the viewport (its scale)
                     foreach (var pf in dr.PendingFields)
@@ -116,6 +123,7 @@ namespace AcadMcp
                     }
                     res["fields"] = dr.PendingFields.Count;
                 }
+                if (handles.Count > 1) res["viewport_handles"] = handles;
                 if (dr.CreatedLayers.Count > 0) res["created_layers"] = dr.CreatedLayers;
                 tr.Commit();
             }

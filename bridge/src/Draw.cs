@@ -154,6 +154,7 @@ namespace AcadMcp
                 case "ellipse": return EllipseE(s);
                 case "spline": return SplineE(s);
                 case "point": return PointE(s);
+                case "wipeout": return WipeoutE(s);
                 case "text": return TextE(s);
                 case "mtext": return MTextE(s);
                 case "hatch": return HatchE(s);
@@ -164,7 +165,7 @@ namespace AcadMcp
                 case "table": return TableE(s);
                 default:
                     throw new McpError("unknown type '" + type + "' (line, polyline, rectangle, circle, arc, ellipse, spline, point, " +
-                        "text, mtext, hatch, dimension, dim_chain, leader, block, table)");
+                        "text, mtext, hatch, dimension, dim_chain, leader, block, table, wipeout)");
             }
         }
 
@@ -288,6 +289,28 @@ namespace AcadMcp
             Add(p, s);
             return One("point", p);
         }
+
+        /// <summary>A wipeout (mask) over a closed outline: what was drawn before it under the outline is hidden. In a block,
+        /// the furniture nearer the viewer hides what stands behind it. Its frame is neither shown nor plotted.</summary>
+        Dictionary<string, object> WipeoutE(P s)
+        {
+            var pts = U.Pts(s, "points", 3);
+            var col = new Point2dCollection();
+            foreach (var q in pts) col.Add(new Point2d(q.X, q.Y));
+            if (col[0].GetDistanceTo(col[col.Count - 1]) > 1e-9) col.Add(col[0]);
+            var w = new Wipeout();
+            w.SetDatabaseDefaults(_db);
+            w.SetFrom(col, Vector3d.ZAxis);
+            Add(w, s);
+            if (!_wipeoutFrameOff)
+            {
+                try { Autodesk.AutoCAD.ApplicationServices.Application.SetSystemVariable("WIPEOUTFRAME", 0); } catch (Exception) { }
+                _wipeoutFrameOff = true;
+            }
+            return One("wipeout", w);
+        }
+
+        bool _wipeoutFrameOff;
 
         // ---------------------------------------------------------------- text
 
@@ -680,9 +703,35 @@ namespace AcadMcp
                         else ApplyField(ar, val);
                     }
                     if (ad.Justify != AttachmentPoint.BaseLeft) ar.AdjustAlignment(_db);
+                    FitAttribute(ar, ad, s.Obj("fit"), Math.Abs(br.ScaleFactors.X));
                 }
             }
             return br;
+        }
+
+        /// <summary>
+        /// A value wider than its cell (fit: {TAG: width in block units}) is narrowed (width factor, down to 0.45), then
+        /// made smaller: a long project name or title stays inside the title block.
+        /// </summary>
+        void FitAttribute(AttributeReference ar, AttributeDefinition ad, P fit, double scale)
+        {
+            if (fit == null || string.IsNullOrEmpty(ar.TextString)) return;
+            string key = fit.D.Keys.FirstOrDefault(k => k.Equals(ad.Tag, StringComparison.OrdinalIgnoreCase));
+            if (key == null) return;
+            double max = fit.Num(key, 0) * scale;
+            if (max <= 0) return;
+            double width;
+            try { var ext = ar.GeometricExtents; width = ext.MaxPoint.X - ext.MinPoint.X; }
+            catch (Autodesk.AutoCAD.Runtime.Exception) { return; }
+            if (width <= max) return;
+            double f = ar.WidthFactor * max / width;
+            if (f >= 0.45) ar.WidthFactor = f;
+            else
+            {
+                ar.WidthFactor = 0.45;
+                ar.Height *= f / 0.45;
+            }
+            if (ad.Justify != AttachmentPoint.BaseLeft) ar.AdjustAlignment(_db);
         }
 
         Dictionary<string, object> Insert(P s)
@@ -718,6 +767,12 @@ namespace AcadMcp
                 t.Columns[c].Width = w;
             }
             int r0 = 0;
+            if (title == null && cols > 1)
+            {
+                // the table style merges its first (title) row: without a title that row is the header
+                try { t.UnmergeCells(CellRange.Create(t, 0, 0, 0, cols - 1)); } catch (Autodesk.AutoCAD.Runtime.Exception) { }
+                try { t.Rows[0].Style = "_HEADER"; } catch (Autodesk.AutoCAD.Runtime.Exception) { }
+            }
             if (title != null)
             {
                 t.MergeCells(CellRange.Create(t, 0, 0, 0, cols - 1));

@@ -400,7 +400,7 @@ export function uStairGeom(st, height, name = 'stair') {
 }
 
 /** Plan of a U stair: outline, treads, landing, well, walking lines with arrows, UP / DOWN labels, cut line. */
-function uStairPlan(g, mode, scale, L, lang, entities) {
+export function uStairPlan(g, mode, scale, L, lang, entities, labelGap = 3 * scale) {
   const at = (a, b) => P(g.at(a, b));
   const line = (a, b, c, d, layer = L.stair) => entities.push({ type: 'line', from: at(a, b), to: at(c, d), layer });
   const pl = (pts) => entities.push({ type: 'polyline', points: pts.map(([a, b]) => at(a, b)), layer: L.stair });
@@ -432,13 +432,13 @@ function uStairPlan(g, mode, scale, L, lang, entities) {
       pl([[a0 + going / 2, m1], [cutA - going * 0.6, m1]]);
       arrow(cutA - going * 0.6, m1, 1);
     }
-    textAt(LABELS[lang].up, a0 - 3 * scale, m1);
+    textAt(LABELS[lang].up, a0 - labelGap, m1);
   }
   if (mode === 'down' || mode === 'both') {
     pl([[start2 + going / 2, m2], [mL, m2], ...(mode === 'down' ? [[mL, m1], [a0 + going / 2, m1]] : [[mL, m1]])]);
     if (mode === 'down') arrow(a0 + going / 2, m1, -1);
     else pl([[mL - ah / 2, m1 + ah], [mL, m1], [mL + ah / 2, m1 + ah]]);
-    textAt(LABELS[lang].down, start2 - 3 * scale, m2);
+    textAt(LABELS[lang].down, a0 - labelGap, m2);
   }
 }
 
@@ -585,6 +585,62 @@ export function buildPlan(spec) {
         });
       });
       chainsOut[side] = first + out[side] + (chains.length - 1) * gap;
+    }
+  }
+
+  // ---- interior dimensions: through every room (not the stairwells), wall face to wall face across the building
+  // between the inner faces of its outer walls, one chain each way, clear of the room names; a line that would pass
+  // through an opening or a room name moves further from its room's name
+  if (spec.interior_dimensions && box && walls.length) {
+    const segs = walls.filter((w) => w.height === undefined && spec.walls?.[w.index]?.height === undefined).flatMap((w) => w.segs);
+    const stairBoxes = (spec.stairs || []).concat(spec.stairs_below || []).filter((st) => st.region).map((st) => bboxOf(st.region.map((q, k) => pt(q, `stairs.region[${k}]`))));
+    const done = new Set();
+    // the name and area of every room (name on its point, area under it), with a margin
+    const half = (rm) => (Math.max(6, [...String(rm.name ?? '')].length) * 0.9 + 1) * scale;
+    const labels = (spec.rooms || []).filter((rm) => rm.at).map((rm) => {
+      const a = pt(rm.at, 'rooms.at');
+      return [a[0] - half(rm), a[1] - 6 * scale, a[0] + half(rm), a[1] + 2.5 * scale];
+    });
+    // faces met by the line c (y = c for a horizontal chain, x = c for a vertical one), or null when it meets an
+    // opening or a room name
+    const facesOn = (horiz, c) => {
+      if (labels.some((b) => (horiz ? c > b[1] && c < b[3] : c > b[0] && c < b[2]))) return null;
+      const out = [];
+      for (const s of segs) {
+        const across = horiz ? Math.abs(s.d[0]) < 1e-6 : Math.abs(s.d[1]) < 1e-6;
+        if (!across) continue;
+        const k = horiz ? 1 : 0, j = horiz ? 0 : 1;
+        const lo = Math.min(s.a[k], s.b[k]), hi = Math.max(s.a[k], s.b[k]);
+        const half = s.t / 2 + 1;
+        if (c < lo - half || c > hi + half) continue;
+        const t = (c - s.a[k]) / s.d[k];
+        if ((bySeg.get(`${s.wall}:${s.index}`) || []).some((op) => t > op.from - 50 && t < op.to + 50)) return null;
+        const n = left(s.d);
+        for (const o of [s.o1, s.o2]) out.push(Math.round((s.a[j] + n[j] * o) * 10) / 10);
+      }
+      return [...new Set(out)].sort((p, q) => p - q);
+    };
+    for (const rm of spec.rooms || []) {
+      if (!rm.at) continue;
+      const at = pt(rm.at, 'rooms.at');
+      if (stairBoxes.some((b) => at[0] > b[0] && at[0] < b[2] && at[1] > b[1] && at[1] < b[3])) continue;
+      for (const horiz of [true, false]) {
+        // below the name and area, or beside them
+        const base = horiz ? at[1] - 9 * scale : at[0] - half(rm) - 2 * scale;
+        let faces = null, c = base;
+        for (const dc of [0, -4, -8, -12, -16, 4, 8, 12, 16]) {
+          c = base + dc * scale;
+          faces = facesOn(horiz, c);
+          if (faces) faces = faces.filter((f) => Math.abs(f - (horiz ? box.x0 : box.y0)) > 1 && Math.abs(f - (horiz ? box.x1 : box.y1)) > 1);
+          if (faces && faces.length >= 2) break;
+        }
+        if (!faces || faces.length < 2) continue;
+        const key = `${horiz}:${faces.join(',')}`;
+        if (done.has(key)) continue;
+        done.add(key);
+        const p = faces.map((f) => (horiz ? [f, c] : [c, f]));
+        entities.push({ type: 'dim_chain', points: p.map(P), direction: horiz ? 'horizontal' : 'vertical', at: P(horiz ? [faces[0], c] : [c, faces[0]]), style: dimStyle, layer: L.dims });
+      }
     }
   }
 

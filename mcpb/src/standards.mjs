@@ -133,7 +133,7 @@ export function titleBlock({ paper = 'A3', orientation = 'landscape', info = {},
   const [W, H] = orientation === 'portrait' ? [base[1], base[0]] : base;
   const small = String(paper).toUpperCase() === 'A4';
   // the vertical strip of Vietnamese construction sets on landscape A3 and larger, the bottom block otherwise
-  if ((style ?? (small || orientation === 'portrait' ? 'bottom' : 'strip')) === 'strip') return stripTitleBlock({ paper, orientation, info, language, W, H });
+  if ((style ?? 'strip') === 'strip') return stripTitleBlock({ paper, orientation, info, language, W, H });
   const left = small ? 10 : 20;
   const m = small ? 5 : 10;
   const layer = ROLE.title;
@@ -226,6 +226,35 @@ export function viewTitle(text, cx, y, scale, layer, lang = 'vi', h = 5, showSca
   ];
 }
 
+// ---------------------------------------------------------------- cover sheet
+
+/**
+ * The cover of a set (tờ bìa): the set's name large, then project, item, client, designer, contractor, location and
+ * date, framed; drawn at scale (paper mm x scale) to sit on its own sheet.
+ */
+export function coverSheet({ set = 'KIẾN TRÚC', info = {}, at = [0, 0], scale = 50, lang = 'vi' }) {
+  const sc = scale, r = (v) => Math.round(v * 100) / 100;
+  const L = lang === 'en'
+    ? [['PROJECT', info.project], ['ITEM', info.item], ['CLIENT', info.client], ['DESIGN CONSULTANT', info.company], ['CONTRACTOR', info.contractor], ['LOCATION', info.location]]
+    : [['CÔNG TRÌNH', info.project], ['HẠNG MỤC', info.item], ['CHỦ ĐẦU TƯ', info.client], ['ĐƠN VỊ THIẾT KẾ', info.company], ['TỔNG THẦU', info.contractor], ['ĐỊA ĐIỂM XÂY DỰNG', info.location]];
+  const rows = L.filter(([, v]) => v);
+  const W = 260, H = 70 + rows.length * 14 + 20;
+  const out = [];
+  const x0 = at[0], y1 = at[1], x1 = x0 + W * sc, y0 = y1 - H * sc;
+  out.push({ type: 'rectangle', from: [r(x0), r(y0)], to: [r(x1), r(y1)], layer: ROLE.title });
+  out.push({ type: 'rectangle', from: [r(x0 + 4 * sc), r(y0 + 4 * sc)], to: [r(x1 - 4 * sc), r(y1 - 4 * sc)], layer: ROLE.title });
+  const title = lang === 'en' ? `${String(set).toUpperCase()} DRAWINGS` : `HỒ SƠ BẢN VẼ ${String(set).toUpperCase()}`;
+  out.push({ type: 'text', text: title, at: [r((x0 + x1) / 2), r(y1 - 30 * sc)], height: r(10 * sc), align: 'center', layer: ROLE.text, style: TEXT_STYLE });
+  if (info.phase) out.push({ type: 'text', text: `${lang === 'en' ? 'PHASE' : 'GIAI ĐOẠN'}: ${info.phase}`, at: [r((x0 + x1) / 2), r(y1 - 44 * sc)], height: r(5 * sc), align: 'center', layer: ROLE.text, style: TEXT_STYLE });
+  rows.forEach(([k, v], i) => {
+    const y = y1 - (66 + i * 14) * sc;
+    out.push({ type: 'text', text: `${k}:`, at: [r(x0 + 30 * sc), r(y)], height: r(4.5 * sc), layer: ROLE.text, style: TEXT_STYLE });
+    out.push({ type: 'text', text: String(v), at: [r(x0 + 100 * sc), r(y)], height: r(4.5 * sc), layer: ROLE.text, style: TEXT_STYLE });
+  });
+  out.push({ type: 'text', text: `${lang === 'en' ? 'DATE' : 'NGÀY'}: ${info.date ?? ''}`, at: [r((x0 + x1) / 2), r(y0 + 12 * sc)], height: r(4 * sc), align: 'center', layer: ROLE.text, style: TEXT_STYLE });
+  return { entities: out };
+}
+
 // ---------------------------------------------------------------- drawing list
 
 /** The drawing list of one set (kiến trúc, kết cấu, nội thất): a table of its sheets. */
@@ -288,17 +317,20 @@ function twoLines(s, n) {
  * scale and date; a general note along the bottom. A block per paper and language; the values are attributes.
  */
 function stripTitleBlock({ paper, orientation, info, language, W, H }) {
-  const left = 20, m = 10, sw = String(paper).toUpperCase() === 'A3' ? 50 : 60, band = 7;
+  const P0 = String(paper).toUpperCase();
+  const left = P0 === 'A4' ? 15 : 20, m = P0 === 'A4' ? 7 : 10, sw = P0 === 'A4' ? 45 : P0 === 'A3' ? 50 : 60, band = 7;
   const layer = ROLE.title;
   const T = STRIP_TEXT[language] || STRIP_TEXT.vi;
-  const e = [], attributes = [], values = {};
+  const e = [], attributes = [], values = {}, fit = {};
   const x1 = W - m, x0 = x1 - sw, xm = (x0 + x1) / 2;
   const line = (a, b, c, d, lw) => e.push({ type: 'line', from: [a, b], to: [c, d], layer: '0', ...(lw ? { lineweight: lw } : {}) });
   const rect = (a, b, c, d, lw) => e.push({ type: 'rectangle', from: [a, b], to: [c, d], layer: '0', ...(lw ? { lineweight: lw } : {}) });
   const label = (x, y, s, h = 1.6, align = 'left') => e.push({ type: 'text', at: [x, y], text: s, height: h, layer: '0', style: TEXT_STYLE, align });
-  const value = (x, y, tag, prompt, s, h = 2.2, align = 'left') => {
+  // every value has the width of its cell: a longer one is narrowed by the bridge (fit) to stay inside
+  const value = (x, y, tag, prompt, s, h = 2.2, align = 'left', width = sw - 3) => {
     attributes.push({ tag, prompt, at: [x, y], height: h, align, style: TEXT_STYLE });
     values[tag] = s === undefined || s === null ? '' : String(s);
+    fit[tag] = width;
   };
   rect(0, 0, W, H, 0.09);
   rect(left, m, x1, H - m, 0.7);
@@ -349,7 +381,7 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
       const yt = t - 8 * i;
       if (i) line(x0, yt, x1, yt);
       label(x0 + 1.5, yt - 2.6, l, 1.3);
-      value(x0 + 1.5, yt - 6.6, tag, l, v, 2);
+      value(x0 + 1.5, yt - 6.6, tag, l, v, 2, 'left', sw * 0.6 - 3);
     });
   }
   {
@@ -363,9 +395,9 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
     const [b, t] = at[k], xs = x0 + sw * 0.55;
     line(xs, b, xs, t);
     label(x0 + 1.2, t - 2.4, la, 1.3);
-    value(x0 + 1.2, b + 1.2, tagA, la, va, 2);
+    value(x0 + 1.2, b + 1.2, tagA, la, va, 2, 'left', xs - x0 - 2.4);
     label(xs + 1.2, t - 2.4, lb, 1.3);
-    value((xs + x1) / 2, b + 1.2, tagB, lb, vb, hb, 'center');
+    value((xs + x1) / 2, b + 1.2, tagB, lb, vb, hb, 'center', x1 - xs - 2.4);
   };
   pair('contract', T.contract, 'SO_HD', info.contract, T.version, 'PHIEN_BAN', info.revision);
   pair('number', T.phase, 'GIAI_DOAN', info.phase, T.number, 'SO_BAN_VE', info.number, 3.2);
@@ -373,11 +405,12 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
   // the general note along the bottom of the drawing area
   line(left, m + band, x0, m + band, 0.35);
   label(left + 2, m + 2.3, T.general, 2.2);
-  value(left + 16, m + 2.3, 'GHI_CHU_CHUNG', T.general, info.note ?? T.generalText, 2);
+  value(left + 16, m + 2.3, 'GHI_CHU_CHUNG', T.general, info.note ?? T.generalText, 2, 'left', x0 - left - 19);
   const area = [[left + 5, m + band + 5], [x0 - 5, H - m - 5]];
-  const name = `MCP_KHUNG_TEN_DOC_${String(paper).toUpperCase()}${language === 'en' ? '_EN' : ''}`;
+  // one block per paper and orientation (the geometry differs), the same layout of cells on all of them
+  const name = `MCP_KHUNG_TEN_DOC_${P0}_${orientation === 'portrait' ? 'DUNG' : 'NGANG'}${language === 'en' ? '_EN' : ''}`;
   const insert = {
-    type: 'block', name, at: [0, 0], layer, attributes: values,
+    type: 'block', name, at: [0, 0], layer, attributes: values, fit,
     def: { name, description: `Khung tên dải dọc ${String(paper).toUpperCase()} ${orientation}`, entities: e, attributes },
   };
   return { entities: [insert], area, areas: [area], size: [W, H] };

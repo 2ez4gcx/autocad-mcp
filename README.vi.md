@@ -10,17 +10,17 @@ Phiên bản: **1.2.0**.
 
 ## Tính năng
 
-46 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
+52 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
 
 | Nhóm | Tool |
 |---|---|
 | Đọc & khối lượng | `ping`, `drawing_info`, `list_layers`, `list_blocks`, `query_entities`, `selection_info`, `quantity_takeoff`, `check_drawing` |
 | Tiêu chuẩn | `setup_layers`, `setup_styles` |
 | Vẽ & sửa | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
-| Mặt đứng, mặt cắt & kết cấu | `draw_elevation`, `draw_section`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule` |
+| Mặt đứng, mặt cắt & kết cấu | `draw_elevation`, `draw_section`, `draw_roof_plan`, `draw_door_schedule`, `draw_stair_detail`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule`, `structural_calc`, `draw_quantity_schedule` |
 | Thiết kế nội thất | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
 | Ảnh & nguồn 3D | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
-| Khung tên & file | `create_layout`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
+| Khung tên & file | `create_layout`, `draw_cover_sheet`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
 | Lập trình | `run_lisp` |
 | Cài đặt | `install_autocad_bridge` |
 
@@ -42,7 +42,33 @@ Phiên bản: **1.2.0**.
   - Mỗi bộ có danh mục bản vẽ riêng (`draw_drawing_list`, tờ KT-00 / KC-00 / NT-00), số tờ riêng và hạng mục riêng trên khung tên (KIẾN TRÚC, KẾT CẤU, NỘI THẤT).
   - Các công cụ kết cấu và nội thất làm việc được trong file không có mặt bằng kiến trúc: AutoCAD tính đường bao phòng từ mô tả mặt bằng mà không vẽ ra (`draw_plan rooms_only`).
   - Ví dụ: `examples/Nha-pho-5x18-KT.pdf`, `-KC.pdf`, `-NT.pdf`.
+- **Mặt bằng mái** (`draw_roof_plan`), cho mái bằng:
+  - tường mái và tum của tầng trên cùng, có trục và kích thước;
+  - mái tum (hatch), sân thượng;
+  - phễu thu kèm mũi tên dốc i=2%, ống thoát nước mưa;
+  - cao độ sân thượng, đỉnh tường mái và mái tum;
+  - ghi chú chống thấm, láng vữa tạo dốc và ống thoát nước.
+- **Tờ bìa** (`draw_cover_sheet`): "HỒ SƠ BẢN VẼ <bộ>", giai đoạn, công trình, hạng mục, chủ đầu tư, đơn vị thiết kế, tổng thầu, địa điểm, ngày; mỗi bộ mở đầu bằng tờ bìa và danh mục bản vẽ.
+- **Bảng thống kê cửa đi, cửa sổ** (`draw_door_schedule`):
+  - mỗi loại cửa (theo ký hiệu, loại và kích thước, trên mọi tầng) được vẽ mặt đứng với khung, cánh, chiều mở (nét đứt gặp nhau ở phía bản lề) và kính;
+  - kích thước rộng, cao, cao bậu, ký hiệu và số lượng;
+  - bảng: ký hiệu, loại, R x C, cao bậu, số lượng theo tầng, vật liệu.
+- **Chi tiết cầu thang** (`draw_stair_detail`), cho thang chữ U:
+  - mặt bằng thang từng loại tầng (tầng đầu, các tầng điển hình gộp lại, tầng đến) tỷ lệ 1/50, có tường xung quanh, đánh số bậc, kích thước vế thang / chiếu nghỉ / bề rộng (n x b), cao độ sàn và chiếu nghỉ, trục và ký hiệu mặt cắt;
+  - mặt cắt 1-1 dọc vế thang: vế bị cắt với bản thang BTCT và chiếu nghỉ, vế nhìn thấy phía sau, sàn và tường bị cắt, tay vịn và thanh đứng, kích thước bậc (n x h) từng vế, chiều cao tầng và cao độ;
+  - ghi chú cấu tạo bậc thang và chiếu nghỉ, kèm 2h + b;
+  - chi tiết bậc thang, tay vịn tỷ lệ 1/20 (đá granite, vữa, bậc xây gạch, bản thang, lớp trát, tay vịn, thanh đứng), vẽ riêng: đặt chung một tờ bằng `create_layout views`.
+- **Bảng tính kết cấu sơ bộ** (`structural_calc`), kỹ sư kết cấu có chứng chỉ hành nghề phải kiểm tra, tính lại và ký xác nhận:
+  - tải trọng theo TCVN 2737:2023: cấu tạo sàn, hoạt tải theo phòng (phòng ở 1,5, sảnh và cầu thang 3, ban công 2 kN/m² …), tường ngăn, tường trên dầm đã trừ lỗ cửa, trọng lượng bản thân;
+  - tải sàn truyền vào dầm (bản kê 4 cạnh hình thang / tam giác, bản dầm), dầm liên tục với hoạt tải đặt toàn bộ / nhịp lẻ / nhịp chẵn, mô men gối biên qL²/24;
+  - tính cốt thép chịu uốn và cốt đai theo TCVN 5574:2018 (αm, ξ ≤ ξR, As, chọn thép; đai vùng gối và giữa nhịp); thép đã tính chuyển sang `draw_beam_schedule`;
+  - tải trọng cột từng tầng xuống móng (cột đặt trên sàn truyền tải vào dầm đỡ), khả năng chịu lực cột, diện tích móng theo áp lực đất;
+  - tờ bảng tính (vật liệu, tải trọng sàn, cấu tạo sàn, dầm, cột và móng, giả thiết) kèm ô xác nhận: người tính, kiểm tra, chủ trì kết cấu (họ tên, số chứng chỉ, chữ ký, ngày); xuất CSV cho Excel.
+- **Bảng thống kê cốt thép và bảng tổng hợp khối lượng** (`draw_quantity_schedule`):
+  - thống kê thép toàn bộ hồ sơ: móng, cột, giằng móng và dầm theo thép đã tính, sàn và cầu thang theo cấu tạo; tính nối chồng và neo, khối lượng bằng công thức trong bảng, tổng theo đường kính, tự chia trang;
+  - bảng tổng hợp khối lượng vật tư có diễn giải: bê tông lót, bê tông và ván khuôn móng, cổ cột, giằng móng, cột từng tầng, dầm, sàn, cầu thang; cốt thép theo nhóm; tường xây theo chiều dày (m², m³) đã trừ cửa; trát tường trong, ngoài, trát trần; xuất CSV cho Excel.
 - **Bộ kết cấu** (`draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`):
+  - `draw_structure_plan floor=foundation` vẽ mặt bằng móng: móng đơn M1 dưới cột (nét khuất), giằng móng GM dưới tường tầng 1, kích thước và cao độ đáy móng;
   - `draw_structure_plan` vẽ mặt bằng kết cấu từng sàn (tầng 2, 3 … và mái):
     - dầm theo tường chịu lực của tầng dưới (tường dưới 150 mm xây trên sàn), tên theo sàn (D2.1 …, DM.1 cho mái), có b x h và số lượng;
     - cột tại nút tường;
@@ -76,7 +102,7 @@ Phiên bản: **1.2.0**.
     - `mode=finish`: mặt bằng hoàn thiện trần (vật liệu, cao độ, kích thước dải giật cấp, bảng chú thích trần kèm diện tích; không có đèn);
     - `mode=lighting`: mặt bằng bố trí đèn (đèn và bảng ký hiệu; không có thẻ cao độ);
   - mỗi mặt bằng nội thất có khối GHI CHÚ chung: đơn vị, kiểm tra kích thước thực tế, duyệt mẫu vật liệu. Thêm theo từng loại mặt bằng: mạch gạch và độ dốc sàn; lớp sơn, lớp ốp tường; tấm trần và lỗ thăm trần; định vị đèn. Có thể thay bằng ghi chú của bạn;
-  - `draw_interior_elevation`: triển khai từng vách của phòng nhìn từ trong: tường, sàn, trần bị cắt (cả dải giật cấp), cửa đi, cửa sổ của vách, đồ gỗ và nội thất sát vách (hình chiếu đứng) và ở góc phòng (hình chiếu cạnh), đồ phía trước che nét phía sau, ron gạch ốp, gạch ốp bếp, len chân tường, chuỗi kích thước và ghi chú vật liệu có đường dẫn;
+  - `draw_interior_elevation`: triển khai từng vách của phòng nhìn từ trong: tường, sàn, trần bị cắt (cả dải giật cấp), cửa đi, cửa sổ của vách, đồ gỗ và nội thất sát vách (hình chiếu đứng) và ở góc phòng (hình chiếu cạnh) là block (mỗi loại, kích thước, hướng nhìn một block `NT_MD_...` / `NT_MB_...`) có wipeout dưới đường bao để đồ phía trước che đồ phía sau, ron gạch ốp, gạch ốp bếp, len chân tường, chuỗi kích thước và ghi chú vật liệu có đường dẫn;
   - `draw_joinery_detail`: tủ bếp (tủ dưới có cánh, ngăn kéo, khoang chậu; tủ trên theo từng đoạn, máy hút mùi, gạch ốp) hoặc tủ áo: mặt đứng 1:10 với các mô-đun, chiều mở cánh, tay nắm, mặt cắt 1-1 qua thùng tủ với chiều dày ván và ghi chú vật liệu; lấy thẳng từ tủ đã đặt trên mặt bằng;
   - `material_schedule`: sàn và trần theo m², len theo m (trừ cửa đi), tường theo m² (trừ cửa và phần ốp bếp), nội thất, đồ gỗ, thiết bị vệ sinh, thiết bị, đèn theo số lượng, mỗi mã một dòng kèm phòng; bảng trong bản vẽ và CSV.
   Vật liệu mặc định theo loại phòng (phòng khô gạch porcelain 600x600, sơn nước, trần thạch cao giật cấp; WC gạch chống trơn, gạch ốp đến trần, trần chống ẩm; sân không trần) và mỗi kết quả đều liệt kê các giá trị đã tự giả định.
@@ -114,6 +140,7 @@ Phiên bản: **1.2.0**.
   Số thập phân dùng dấu phẩy.
 - **Khung tên** (`create_layout`, `export_pdf`): layout khổ A0-A4 với `DWG To PDF.pc3` và `monochrome.ctb`, khung bản vẽ theo lề ISO/TCVN (lề trái 20 mm).
   - Khổ A3-A0 nằm ngang dùng khung tên dải dọc như hồ sơ thi công ở Việt Nam, gồm: bảng sửa đổi, ghi chú, chủ đầu tư, dự án, hạng mục, tư vấn thiết kế, chủ nhiệm, chủ trì, thiết kế, kiểm tra, tên bản vẽ, số hợp đồng, phiên bản, giai đoạn, ký hiệu bản vẽ, tỷ lệ, ngày. Dọc chân tờ có dòng ghi chú chung.
+  - `views` đặt nhiều khung nhìn trên một tờ, mỗi khung một vùng model với tỷ lệ riêng (mặt bằng 1/100 kèm chi tiết 1/25, ba mặt bằng tầng cạnh nhau): xếp theo hàng, thẳng chân, canh giữa vùng vẽ; ô tỷ lệ của khung tên ghi "NHƯ HÌNH" khi các tỷ lệ khác nhau.
   - `title_block.style=bottom` cho khung tên 180 mm ở góc dưới, dùng cho khổ A4 và khổ đứng.
   - Cả hai đều là block có thuộc tính.
   - Khung nhìn khóa ở tỷ lệ chuẩn tự chọn cho vừa, đặt phía trên hoặc bên trái khung tên, chỗ nào chứa vừa hình vẽ (cảnh báo nếu tỷ lệ đã chọn làm cắt mất hình). `export_pdf` in các layout ra một file PDF nhiều trang (layout khác khổ giấy thì mỗi khổ một file, ví dụ `bo_A3.pdf`, `bo_A1.pdf`), hoặc in một vùng model space theo tỷ lệ.

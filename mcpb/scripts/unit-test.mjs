@@ -7,8 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { buildElevation, buildSection, floorsOf } from '../src/elevation.mjs';
 import { buildPlan, hull, planAssumptions, PlanError, uStairGeom } from '../src/plan.mjs';
 import { beamDetail, beamSchedule, footingDetail, framingPlan, kgPerM, rcSection, rebarSchedule, structureNotes } from '../src/structure.mjs';
-import { drawingList, fitScale, layerSpecs, layerStyles, ROLE, styleParams, titleBlock } from '../src/standards.mjs';
+import { coverSheet, drawingList, fitScale, layerSpecs, layerStyles, ROLE, styleParams, titleBlock } from '../src/standards.mjs';
 import { symbolDef } from '../src/symbols.mjs';
+import { doorSchedule } from '../src/doors.mjs';
+import { roofPlan } from '../src/roof.mjs';
+import { stairDetail } from '../src/stair.mjs';
+import { analyseBeam, calcCsv, calcSheet, chooseBars, CONCRETE, flexure, STEEL, stirrups, structuralCalc, supportMoments } from '../src/calc.mjs';
+import { boqCsv, boqSheets } from '../src/boq.mjs';
 import { ceilingPlan, cleanPoly, cutBoxes, dejog, floorFinishPlan, furniturePlan, generalNotes, interiorElevation, joineryDetail, materialSchedule, notesBlock, offsetPoly, patternLines, polyArea, resolveFinish, resolveItems, roomEdge, wallFinishPlan } from '../src/interior.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -214,11 +219,13 @@ test('standards: layers, styles, title block, scale fitting', () => {
   // one block insert: the values are its attributes, every one defined in the block
   assert.equal(tb.entities.length, 1);
   const ins = tb.entities[0];
-  assert.equal(ins.name, 'MCP_KHUNG_TEN_DOC_A3'); // the vertical strip by default on landscape A3
+  assert.equal(ins.name, 'MCP_KHUNG_TEN_DOC_A3_NGANG'); // the vertical strip on every sheet
+  assert.ok(ins.fit.TEN_BAN_VE > 40 && ins.fit.CONG_TRINH > 40 && ins.fit.SO_HD < 30, 'every value has the width of its cell');
   assert.ok(['CHU_DAU_TU', 'DU_AN', 'CONG_TRINH', 'SO_BAN_VE', 'GHI_CHU_CHUNG', 'TEN_BAN_VE_2'].filter((t) => t !== 'DU_AN').every((t) => t in ins.attributes));
   const bottom = titleBlock({ paper: 'A3', style: 'bottom', info: { title: 'X' } }).entities[0];
   assert.equal(bottom.name, 'MCP_KHUNG_TEN_A3_NGANG');
-  assert.equal(titleBlock({ paper: 'A4', orientation: 'portrait' }).entities[0].name, 'MCP_KHUNG_TEN_A4_DUNG');
+  assert.equal(titleBlock({ paper: 'A4', orientation: 'portrait' }).entities[0].name, 'MCP_KHUNG_TEN_DOC_A4_DUNG');
+  assert.equal(titleBlock({ paper: 'A2', orientation: 'portrait' }).entities[0].name, 'MCP_KHUNG_TEN_DOC_A2_DUNG');
   assert.equal(ins.attributes.TEN_BAN_VE, 'MẶT BẰNG TẦNG 1');
   assert.equal(ins.attributes.TY_LE, '1:100');
   assert.deepEqual(Object.keys(ins.attributes).sort(), ins.def.attributes.map((a) => a.tag).sort());
@@ -432,6 +439,15 @@ test('interior elevation: window and bed on wall A, wardrobe seen from the side,
   for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++) for (const s1 of segs[i]) for (const s2 of segs[j]) assert.ok(!crosses(s1, s2), `${leaders[i].text} x ${leaders[j].text}`);
   for (const l of leaders) assert.ok(near(l.points[0][0], l.points[1][0], 0.01), 'first run straight up or down');
   assert.ok(r.entities.some((e) => e.layer === 'A-FURN') && r.entities.some((e) => e.layer === 'A-FLOR-CASE'), 'bed and wardrobe on their own layers');
+  // the items are blocks (front MD, side MB), each with wipeouts under its outlines, its lines on layer 0
+  const bl = r.entities.filter((e) => e.type === 'block' && /^NT_M[DB]_/.test(e.name));
+  assert.ok(bl.some((b) => b.name.startsWith('NT_MD_FN-01_bed_') && b.layer === 'A-FURN') && bl.some((b) => b.name.startsWith('NT_MB_JN-01_wardrobe_') && b.layer === 'A-FLOR-CASE'), bl.map((b) => b.name).join(','));
+  for (const b of bl) {
+    const k = b.def.entities.findIndex((x) => x.type !== 'wipeout');
+    assert.ok(k > 0 && b.def.entities.slice(k).every((x) => x.type !== 'wipeout'), 'wipeouts first');
+    assert.ok(b.def.entities.filter((x) => x.type !== 'wipeout').every((x) => ['0', 'A-HIDD', 'A-GLAZ'].includes(x.layer)), 'lines by block');
+  }
+  assert.ok(!r.entities.some((e) => (e.type === 'line' || e.type === 'polyline') && (e.layer === 'A-FURN' || e.layer === 'A-FLOR-CASE')), 'no loose furniture lines');
   assert.ok(r.entities.filter((e) => e.type === 'dim_chain').length === 2);
   const c = resolveFinish('PHÒNG NGỦ');
   const wallC = interiorElevation({ spec: ROOM_SPEC, room: 'PHÒNG NGỦ', poly: ROOM, finish: c, items, wall: 'C', scale: 30 });
@@ -579,6 +595,20 @@ test('floors: levels from the heights, walls taken from the floor below, parapet
   assert.ok(!txt(F[2].spec).includes('LÊN') && txt(F[2].spec).includes('XUỐNG'));
 });
 
+test('interior dimensions: face to face through the room, clear of its name and of the window', () => {
+  const f = floorsOf(TOWN)[0].spec;
+  const chains = (spec) => buildPlan(spec).entities.filter((e) => e.type === 'dim_chain');
+  const extra = chains({ ...f, interior_dimensions: true }).filter((c) => !chains(f).some((d) => JSON.stringify(d) === JSON.stringify(c)));
+  assert.equal(extra.length, 2, JSON.stringify(extra));
+  // between the inner faces of the outer walls
+  assert.deepEqual(extra[0].points, [[200, 7100], [4800, 7100]]);
+  // left of the name (PHÒNG KHÁCH: 11 characters)
+  assert.deepEqual(extra[1].points, [[1210, 200], [1210, 9800]]);
+  // a line through an opening moves aside: the window S1 (2900-4100) at the bottom
+  const w = chains({ ...f, interior_dimensions: true, rooms: [{ name: 'P', at: [4000, 8000] }] }).filter((c) => c.direction === 'vertical' && c.points[0][1] === 200);
+  assert.ok(w.length === 1 && (w[0].points[0][0] < 2850 || w[0].points[0][0] > 4150), JSON.stringify(w));
+});
+
 test('stacked elevation: every floor level, parapet top, tum roof; balcony railing', () => {
   const e = buildElevation(TOWN, { side: 'bottom' });
   assert.ok(!JSON.stringify(e.entities).includes('null'));
@@ -613,9 +643,43 @@ test('structural set: framing plan of the floor 2 slab, beam schedule, general n
   const laps = sn.entities.find((e) => e.type === 'table' && e.title.startsWith('CHIỀU DÀI NEO'));
   assert.deepEqual(laps.rows[3], ['Ø14', 450, 300, 600, 450]);
   assert.ok(sn.assumed.some((a) => a.item === 'concrete.main'));
+  // the foundation plan: pad footings under the columns, ground beams under the ground floor walls
+  const fd = framingPlan({ spec: fl[0].spec, level: -450, name: 'MÓNG', prefix: 'GM.', beam: { h: 400 }, foundation: { depth: 1500 }, rooms: { WC: [[200, 200], [1500, 200], [1500, 1500], [200, 1500]] } });
+  assert.deepEqual(fd.footings, [{ name: 'M1', size: '1200x1200', count: 4, depth: 1500 }]);
+  assert.ok(fd.beams.every((b) => b.name.startsWith('GM.') && b.h === 400));
+  assert.ok(fd.entities.some((e) => e.type === 'text' && e.text === 'MẶT BẰNG MÓNG, GIẰNG MÓNG') && fd.assumed.some((a) => a.item === 'footing'));
   const dl = drawingList({ sheets: [{ number: 'KC-01', title: 'GHI CHÚ CHUNG', scale: '1:50', paper: 'A3' }], item: 'Kết cấu' });
   assert.equal(dl.entities[0].title, 'DANH MỤC BẢN VẼ - KẾT CẤU');
+  const cv = coverSheet({ set: 'Kết cấu', info: { project: 'NHÀ PHỐ', client: 'CĐT', phase: 'TKTC', date: '11/2026' } });
+  assert.ok(cv.entities.some((e) => e.text === 'HỒ SƠ BẢN VẼ KẾT CẤU') && cv.entities.some((e) => e.text === 'CÔNG TRÌNH:') && !cv.entities.some((e) => e.text === 'TỔNG THẦU:'));
   assert.deepEqual(dl.entities[0].rows[1].slice(0, 3), [1, 'KC-01', 'GHI CHÚ CHUNG']);
+});
+
+test('roof plan: the tower roof, the terrace inside its parapets, drains with falls, levels and notes', () => {
+  const fl = floorsOf(TOWN);
+  const top = fl[fl.length - 1];
+  const r = roofPlan({ top, terrace: top.level, roof: top.level + top.height + 120, parapet: 1000 });
+  noNaN(r.entities);
+  // a drain pair in front of the stair tower and behind it, one on the tower roof
+  assert.equal(r.drains, 5);
+  assert.equal(r.entities.filter((e) => e.name === 'MCP_PHEU_THU').length, 5);
+  assert.ok(r.entities.filter((e) => /^MCP_DOC/.test(e.name ?? '')).length >= 2, 'falls to the drains');
+  assert.ok(r.entities.some((e) => e.text === 'SÂN THƯỢNG') && r.entities.some((e) => e.text === 'MÁI BTCT TUM'));
+  assert.ok(r.entities.some((e) => e.name === 'MCP_COTE' && e.attributes.COTE === `+${(top.level / 1000).toFixed(3)}`), 'terrace level');
+  assert.ok(r.notes.length === 3 && r.assumed.some((a) => a.item === 'fall'));
+});
+
+test('door and window schedule: one type per tag and size, counted by floor, elevations with dims, table', () => {
+  const r = doorSchedule({ spec: TOWN, scale: 50 });
+  noNaN(r.entities);
+  const s1 = r.rows.find((x) => x.tag === 'S1');
+  assert.ok(s1 && s1.type === 'window' && s1.count === 2 && s1.size === '1200x1500' && s1.sill === 900, JSON.stringify(r.rows));
+  const table = r.entities.find((e) => e.type === 'table');
+  assert.ok(table.rows.some((row) => row[0] === 'S1' && row[4] === 2 && String(row[5]).includes('TẦNG 1: 1')));
+  assert.ok(r.entities.some((e) => e.name?.startsWith('MCP_THE_LG_') && e.attributes.MA === 'S1'), 'tag');
+  assert.ok(r.entities.some((e) => e.type === 'line' && e.layer === 'A-HIDD' && !e.linetype), 'opening direction dashed (by layer)');
+  assert.ok(r.entities.filter((e) => e.type === 'dim_chain').length >= 2 * r.rows.length);
+  assert.ok(r.assumed.some((a) => a.item === 'materials.S1'));
 });
 
 test('section through the stair: slabs at each floor, flight cut (hatched steps), floors of rooms', () => {
@@ -626,6 +690,75 @@ test('section through the stair: slabs at each floor, flight cut (hatched steps)
   assert.ok(s.levels.includes(3600) && s.levels.includes(6900));
   assert.deepEqual(s.rooms, ['TẦNG 1: PHÒNG KHÁCH', 'TẦNG 2: PHÒNG NGỦ']);
   assert.throws(() => floorsOf({ floors: [{ walls: [], parapet: { walls: ['W1'] } }] }), /no floor below/);
+});
+
+test('stair detail: plans of the start, typical and arrival floors, section 1-1, notes and the tread detail', () => {
+  const r = stairDetail({ spec: TOWN });
+  noNaN(r.main);
+  noNaN(r.detail);
+  assert.equal(r.stair.risers, 21);
+  assert.deepEqual(r.stair.plans.map((p) => p.mode), ['up', 'both', 'down']);
+  const texts = r.main.filter((e) => e.type === 'text').map((e) => e.text);
+  for (const t of ['01', '20', 'MẶT BẰNG THANG TẦNG 1', 'MẶT BẰNG THANG TẦNG 2', 'MẶT BẰNG THANG TUM', 'MẶT CẮT 1-1', 'CHIẾU NGHỈ']) assert.ok(texts.includes(t), t);
+  const dims = r.main.filter((e) => e.type === 'dimension').map((e) => e.text);
+  assert.ok(dims.includes('10x257,5=<>') && dims.includes('11x171,4=<>'), dims.join(' | '));
+  assert.ok(r.main.some((e) => e.name === 'MCP_COTE' && e.attributes.COTE === '+1.886'), 'landing level');
+  assert.ok(r.main.filter((e) => e.type === 'hatch' && e.pattern === 'SOLID' && e.boundary.length > 20).length >= 2, 'cut flights');
+  assert.ok(r.main.some((e) => e.type === 'mtext' && e.text.includes('2h + b = 600')));
+  assert.equal(r.detail.filter((e) => e.type === 'leader').length, 7);
+  assert.ok(r.detail.some((e) => e.type === 'text' && e.text === 'CHI TIẾT BẬC THANG'));
+  assert.ok(r.assumed.some((a) => a.item === 'waist'));
+});
+
+test('structural calculation: three-moment equation, TCVN 5574 bending and shear, the frame of a building, the sheet', () => {
+  // two equal spans pinned at the ends: -qL²/8 over the middle support
+  assert.ok(near(supportMoments([4, 4], [10, 10])[1], -20, 1e-9));
+  // one span framing into columns: qL²/24 over the supports, qL²/12 at midspan, qL/2 shear
+  const a = analyseBeam([4.8], [10], [0]);
+  assert.ok(near(a.sup[0], -9.6, 1e-9) && near(a.span[0].M, 19.2, 1e-9) && near(a.span[0].V, 24, 1e-9), JSON.stringify(a));
+  // B20, CB300-V, 200x400, 69.4 kNm: αm 0.233, ξ 0.269, As 857 mm² (by hand)
+  const mat = { c: CONCRETE.B20, s: STEEL['CB300-V'], sw: STEEL['CB240-T'] };
+  const f = flexure(69.4, 200, 400, mat);
+  assert.ok(near(f.am, 0.2328, 1e-3) && near(f.As, 857, 2) && near(f.xiR, 0.583, 1e-3) && f.ok, JSON.stringify(f));
+  assert.deepEqual(chooseBars(f.As, 200), { n: 2, d: 25, A: 2 * Math.PI * 25 * 25 / 4 });
+  assert.equal(chooseBars(413, 200).n, 3, 'three Ø14 rather than four Ø12');
+  const s = stirrups(86.7, 200, 400, mat);
+  assert.ok(s.d === 6 && s.support === 100 && s.ok, JSON.stringify(s));
+  const R = structuralCalc({ spec: TOWN });
+  assert.ok(!JSON.stringify(R.slabs.map((S) => S.types)).includes('null'));
+  assert.deepEqual(R.slabs.map((S) => S.name), ['MÓNG', 'TẦNG 2', 'TUM', 'MÁI']);
+  assert.ok(R.slabs.every((S) => S.types.every((t) => t.bars.span[0].n >= 2 && t.stirrups.support >= 50)));
+  // the four corner columns on footings; the tower's columns stand on the TUM slab beams
+  const footed = R.columns.filter((c) => !c.on);
+  assert.equal(footed.length, 4, JSON.stringify(R.columns.map((c) => c.name)));
+  assert.ok(R.columns.some((c) => c.on === 'TUM') && footed.every((c) => c.N > 0 && c.Areq > 0));
+  assert.ok(R.assumed.some((x) => x.item === 'soil') && R.assumed.some((x) => x.item === 'live loads'));
+  const sheet = calcSheet(R);
+  const tables = sheet.entities.filter((e) => e.type === 'table');
+  assert.ok(tables.some((t) => t.title === 'DẦM: NỘI LỰC VÀ CỐT THÉP') && tables.some((t) => t.title === 'XÁC NHẬN'), tables.map((t) => t.title).join(' | '));
+  assert.ok(sheet.entities.some((e) => e.type === 'text' && /ký xác nhận/.test(e.text)), 'the sign-off note');
+  const csv = calcCsv(R);
+  assert.ok(csv.startsWith('﻿') && csv.includes('Chủ trì kết cấu') && csv.includes(';'));
+});
+
+test('bar schedule and bill of quantities of the structural set', () => {
+  const R = structuralCalc({ spec: TOWN });
+  const B = boqSheets(R);
+  const titles = B.groups.map((g) => g.title);
+  for (const t of ['MÓNG M1 (1200x1200)', 'CỘT 220x220', 'GIẰNG MÓNG', 'DẦM SÀN TẦNG 2', 'SÀN TẦNG 2 (theo cấu tạo)', 'CẦU THANG (theo cấu tạo)']) assert.ok(titles.includes(t), `${t} in ${titles.join(' | ')}`);
+  // every beam type: bottom, support top, midspan top, stirrups; weights by d²/162
+  const d2 = B.groups.find((g) => g.title === 'DẦM SÀN TẦNG 2');
+  assert.equal(d2.rows.length, 4 * R.slabs[1].types.length);
+  for (const r of d2.sched.rows) assert.ok(near(r.weight_kg, (r.total * r.length / 1000) * r.d * r.d / 162, 0.01));
+  const Q = B.quantities;
+  const q = (re) => Q.rows.find((r) => !r.head && re.test(r.item));
+  assert.ok(near(q(/^Bê tông móng M1/).q, 4 * 1.2 * 1.2 * 0.4, 1e-6));
+  assert.ok(q(/^Xây tường gạch dày 200/).q > 0 && q(/^Trát tường trong/).q > 0 && q(/^Trát tường ngoài/).q > 0 && q(/^Bê tông sàn TẦNG 2/).q > 0);
+  const total = B.groups.reduce((s, g) => s + g.sched.total_kg, 0);
+  assert.ok(near(Q.steel.total, total, 0.05), `${Q.steel.total} vs ${total}`);
+  assert.ok(B.pages.length >= 1 && B.boq.entities.some((e) => e.type === 'table' && e.title === 'BẢNG TỔNG HỢP KHỐI LƯỢNG VẬT TƯ'));
+  const csv = boqCsv(B.groups, Q);
+  assert.ok(csv.includes('BẢNG THỐNG KÊ CỐT THÉP') && csv.includes('Bê tông móng M1'));
 });
 
 // ---- smoke test: the bundled server starts, lists its tools and reports a clear error without AutoCAD
@@ -646,6 +779,13 @@ async function smoke() {
       } catch { /* not JSON */ }
     }
   });
+  // a server that cannot start answers nothing: fail with its error instead of waiting
+  let err = '';
+  child.stderr.on('data', (d) => { err += d; });
+  child.on('exit', (code) => {
+    for (const w of waiters.values()) w({ error: { message: `server exited (${code}): ${err.slice(0, 400)}` } });
+    waiters.clear();
+  });
   let id = 0;
   const rpc = (method, params) => new Promise((resolve) => {
     const mid = ++id;
@@ -656,8 +796,9 @@ async function smoke() {
     await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const list = await rpc('tools/list', {});
+    assert.ok(list.result, list.error?.message);
     const names = list.result.tools.map((t) => t.name);
-    assert.equal(names.length, 46, names.join(','));
+    assert.equal(names.length, 52, names.join(','));
     for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff']) assert.ok(names.includes(t));
     const ping = await rpc('tools/call', { name: 'ping', arguments: {} });
     assert.equal(ping.result.isError, true);

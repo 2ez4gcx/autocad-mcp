@@ -21,9 +21,14 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod';
 import { buildBuilding, buildElevation, buildingAssumed, buildSection, floorsOf } from './elevation.mjs';
 import { buildPlan, planAssumptions, PlanError } from './plan.mjs';
-import { dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, titleBlock, viewStyles, viewTitle } from './standards.mjs';
+import { coverSheet, dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, titleBlock, viewStyles, viewTitle } from './standards.mjs';
 import { beamDetail, beamSchedule, footingDetail, framingPlan, rcSection, rebarSchedule, structureNotes } from './structure.mjs';
 import { symbolDef } from './symbols.mjs';
+import { doorSchedule } from './doors.mjs';
+import { roofPlan } from './roof.mjs';
+import { stairDetail } from './stair.mjs';
+import { calcCsv, calcSheet, CONCRETE, STEEL, structuralCalc } from './calc.mjs';
+import { boqCsv, boqSheets } from './boq.mjs';
 import {
   ceilingPlan, centroid, cleanPoly, elevationKey, entBox, entityBounds, floorFinishPlan, freePoint, FURNITURE_DOC, furniturePlan, generalNotes, inside, notesBlock, shiftEntity, wallFinishPlan,
   interiorElevation, joineryDetail, labelSize, materialSchedule, polyArea, resolveFinish, resolveItems, shiftSpec,
@@ -594,6 +599,7 @@ server.registerTool('draw_plan', {
     rooms: opt(Specs), stairs: opt(Specs), levels: opt(Specs), sections: opt(Specs), north: opt(Obj),
     balconies: opt(Specs), floors: opt(Specs).describe('Several storeys: see floors above'),
     dimensions: opt(jsonish(z.union([z.boolean(), z.array(z.enum(['bottom', 'left', 'top', 'right']))]))),
+    interior_dimensions: z.boolean().default(false).describe('Interior chains through every room (not the stairwells): wall face to wall face across the building, one each way, clear of the room name and moved aside from openings'),
     entities: opt(Specs),
     scale: z.number().positive().default(100),
     wall_thickness: opt(z.number().positive()), wall_material: opt(Str), hatch_walls: z.boolean().default(true),
@@ -880,6 +886,70 @@ server.registerTool('import_drawing', {
 }, async (args) => text(await call('import_drawing', { ...args, path: path.resolve(args.path) })));
 
 // ---------------------------------------------------------------- sheets and files
+/** create_layout with several viewports: each window at its scale, packed in rows (bottoms aligned) in the drawing area. */
+async function layoutViews({ name, paper, orientation, views, title_block, lang, replace, activate, info0 }) {
+  const lng = lang ?? language;
+  const unitsPerMm = { m: 0.001, cm: 0.1 }[info0.units] ?? 1;
+  const { areas } = titleBlock({ paper, orientation, info: {}, language: lng, style: title_block?.style });
+  const area = areas.map((a) => ({ a, s: (a[1][0] - a[0][0]) * (a[1][1] - a[0][1]) })).sort((p, q) => q.s - p.s)[0].a;
+  const [ax0, ay0, ax1, ay1] = [area[0][0], area[0][1], area[1][0], area[1][1]];
+  const aw = ax1 - ax0, ah = ay1 - ay0, gap = 10;
+  const vs = views.map((v, i) => {
+    const ww = Math.abs(v.window[1][0] - v.window[0][0]), wh = Math.abs(v.window[1][1] - v.window[0][1]);
+    if (ww <= 0 || wh <= 0) throw new Error(`create_layout: views[${i}].window is empty.`);
+    const f = 1 / (v.scale * unitsPerMm);
+    return { ...v, f, w: ww * f, h: wh * f };
+  });
+  const warnings = [];
+  const auto = vs.filter((v) => !v.at);
+  const rows = [];
+  for (const v of auto) {
+    const row = rows[rows.length - 1];
+    const rw = row ? row.reduce((s, x) => s + x.w, 0) + gap * row.length : 0;
+    if (!row || rw + v.w > aw + 1e-6) rows.push([v]);
+    else row.push(v);
+  }
+  const rowH = rows.map((r) => Math.max(...r.map((v) => v.h)));
+  const totalH = rowH.reduce((s, h) => s + h, 0) + gap * Math.max(0, rows.length - 1);
+  if (totalH > ah + 1e-6 || rows.some((r) => r.reduce((s, x) => s + x.w, 0) + gap * (r.length - 1) > aw + 1e-6)) {
+    warnings.push(`the views do not fit on ${paper} ${orientation} at their scales: they overlap or leave the drawing area. Use a larger paper, smaller scales or fewer views.`);
+  }
+  let top = ay1 - Math.max(0, (ah - totalH) / 2);
+  rows.forEach((r, i) => {
+    const w = r.reduce((s, x) => s + x.w, 0) + gap * (r.length - 1);
+    let x = ax0 + Math.max(0, (aw - w) / 2);
+    const bottom = top - rowH[i];
+    for (const v of r) {
+      v.at = [x + v.w / 2, bottom + v.h / 2];
+      x += v.w + gap;
+    }
+    top = bottom - gap;
+  });
+  const scales = [...new Set(vs.map((v) => v.scale))];
+  const d = new Date();
+  const date = lng === 'en' ? d.toISOString().slice(0, 10) : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  const asShown = lng === 'en' ? 'AS SHOWN' : 'NHƯ HÌNH';
+  const info = { scale: scales.length === 1 ? FIELD.viewportScale : asShown, number: FIELD.layoutName, date, ...(title_block || {}) };
+  const sheet = titleBlock({ paper, orientation, info, language: lng, style: title_block?.style });
+  const req = withStyles({
+    name, paper, orientation, replace, activate,
+    entities: sheet.entities,
+    styles: { text_style: styleParams({ scale: scales[0] }).text_style },
+    viewports: vs.map((v) => ({
+      center: v.at.map((c) => Math.round(c * 100) / 100), width: v.w, height: v.h,
+      view_center: [(v.window[0][0] + v.window[1][0]) / 2, (v.window[0][1] + v.window[1][1]) / 2], scale_factor: v.f,
+    })),
+  });
+  req.styles.text_style.set_current = false;
+  const r = await sendNow('create_layout', req);
+  const scaleText = scales.length === 1 ? `1:${scales[0]}` : asShown;
+  const list = sheetsMade.get(info0.name) ?? [];
+  sheetsMade.set(info0.name, [...list.filter((x) => x.layout !== name), {
+    layout: name, number: title_block?.number ?? name, title: title_block?.title ?? '', scale: scaleText, paper: `${paper} ${orientation === 'portrait' ? 'đứng' : 'ngang'}`,
+  }]);
+  return { ...r, scale: scaleText, views: vs.map((v) => ({ scale: `1:${v.scale}`, at: v.at.map((c) => Math.round(c)) })), paper, orientation, ...(warnings.length ? { warnings } : {}) };
+}
+
 server.registerTool('create_layout', {
   description:
     'Create a sheet: a layout on ISO paper (A0-A4) for "DWG To PDF.pc3" with monochrome.ctb, a frame and title block (TCVN/ISO ' +
@@ -892,6 +962,11 @@ server.registerTool('create_layout', {
     orientation: z.enum(['landscape', 'portrait']).default('landscape'),
     window: opt(Window).describe('Model area to show; default: drawing extents'),
     scale: opt(z.number().positive()).describe('100 = 1:100; default: largest standard scale that fits'),
+    views: opt(z.array(z.object({ window: Window, scale: z.number().positive(), at: opt(Point) }))).describe(
+      'Several viewports on the sheet instead of window/scale, each a model window at its own scale (a plan at 1:50 and its ' +
+      'details at 1:20): packed in rows left to right, bottoms aligned, the block centred in the drawing area; at = the ' +
+      'centre of a viewport on the paper in mm. The title block scale reads "NHƯ HÌNH" (as shown) when the scales differ.',
+    ),
     title_block: opt(Obj).describe(
       '{style: strip (vertical strip on the right, default on landscape A3-A0) | bottom, company, company_address, project, location, item, ' +
       'client, client_address, title, number (default: a field of the layout name), revision, contract, phase, sheet, date, chief, lead, ' +
@@ -902,8 +977,9 @@ server.registerTool('create_layout', {
     activate: z.boolean().default(false).describe('Leave the new layout open in AutoCAD (default: back to Model)'),
   },
   annotations: EDIT,
-}, ({ name, paper, orientation, window, scale, title_block, language: lang, replace, activate }) => exclusive(async () => {
+}, ({ name, paper, orientation, window, scale, views, title_block, language: lang, replace, activate }) => exclusive(async () => {
   const info0 = await sendNow('drawing_info', {});
+  if (views?.length) return text(await layoutViews({ name, paper, orientation, views, title_block, lang, replace, activate, info0 }));
   let win = window;
   if (!win) {
     if (!info0.extents) throw new Error('create_layout: model space is empty; draw first or give a window.');
@@ -1334,6 +1410,8 @@ const sheetsMade = new Map();
 const planCopies = [];
 const roomSig = (spec) => (spec.rooms || []).map((r) => `${r.name}@${r.at}`).join('|');
 const structBeams = new Map();
+// the last structural_calc of the session (its plan as JSON): the quantities use its designed bars
+let lastCalc = null;
 
 const NotesArg = z.union([z.boolean(), z.array(Str)]).default(true)
   .describe('General notes of the sheet (GHI CHÚ): true = the standard ones for this kind of plan, a list = these, false = none');
@@ -1413,7 +1491,8 @@ server.registerTool('draw_structure_plan', {
     'preliminary (h = span/12 rounded up to 50, 300-700; b = wall thickness) and reported as assumed: the structural engineer ' +
     'designs them; give beam {b, h} and column {size} to use theirs. The beams are remembered for draw_beam_schedule.',
   inputSchema: {
-    floor: opt(z.union([Str, z.number().int().positive()])).describe('The slab: floor number from 2 or name (its floor slab), or "roof" (over the top floor; default for a one-floor plan)'),
+    floor: opt(z.union([Str, z.number().int().positive()])).describe('The slab: floor number from 2 or name (its floor slab), "roof" (over the top floor; default for a one-floor plan), or "foundation" (pad footings under the columns, ground beams GM under the ground floor walls)'),
+    footing: opt(Obj).describe('Foundation plan: {B, L, depth} of the pad footings M1 (default 1200 x 1200, depth heights.foundation.depth or 1500)'),
     scale: z.number().positive().default(100), slab: opt(z.number().positive()), prefix: opt(Str),
     beam: opt(Obj).describe('{b, h, min_wall: 150}'), column: opt(Obj).describe('{size: [b, h]}'),
     at: opt(Point), plan: opt(Obj), language: opt(Lang),
@@ -1424,10 +1503,18 @@ server.registerTool('draw_structure_plan', {
   const spec = planFor(args, 'draw_structure_plan');
   const floors = engine('draw_structure_plan', () => floorsOf(spec));
   const lang = args.language ?? language;
-  const roof = args.floor === undefined ? floors.length === 1 || null : /^(roof|mái|mai)$/i.test(String(args.floor));
-  if (roof === null) throw new Error(`draw_structure_plan: give floor (2..${floors.length}) or "roof"`);
+  const found = /^(foundation|móng|mong|1)$/i.test(String(args.floor ?? ''));
+  const roof = found ? false : args.floor === undefined ? floors.length === 1 || null : /^(roof|mái|mai)$/i.test(String(args.floor));
+  if (roof === null) throw new Error(`draw_structure_plan: give floor (2..${floors.length}), "roof" or "foundation"`);
   let below, level, name, slab, roomsSpec, prefix;
-  if (roof) {
+  if (found) {
+    below = floors[0];
+    level = below.spec.heights?.ground ?? 0;
+    name = lang === 'en' ? 'FOUNDATION' : 'MÓNG';
+    slab = args.slab ?? 120;
+    roomsSpec = floors[0].spec;
+    prefix = 'GM.';
+  } else if (roof) {
     below = floors[floors.length - 1];
     slab = args.slab ?? 120;
     // the top of the roof slab over the walls of the top floor
@@ -1450,14 +1537,15 @@ server.registerTool('draw_structure_plan', {
   const sc = args.scale;
   const rooms = roomsSpec && !args.dry_run ? await roomOutlines(roomsSpec, 'draw_structure_plan').catch(() => ({})) : {};
   const r = engine('draw_structure_plan', () => framingPlan({
-    spec: below.spec, level, slab, name, prefix: args.prefix ?? prefix, scale: sc, beam: args.beam ?? {}, column: args.column ?? {}, rooms, lang,
+    spec: below.spec, level, slab, name, prefix: args.prefix ?? prefix, scale: sc, beam: args.beam ?? (found ? { h: 400 } : {}), column: args.column ?? {}, rooms, lang,
+    foundation: found ? { depth: spec.heights?.foundation?.depth ?? 1500, ...(args.footing ?? {}) } : null,
   }));
   const beams = r.beams.map((b) => ({ name: b.name, size: `${b.b}x${b.h}`, count: b.count, spans: b.spans }));
-  if (args.dry_run) return dryRun(r.assumed, { slab: name, level, beams, columns: r.columns });
+  if (args.dry_run) return dryRun(r.assumed, { slab: name, level, beams, columns: r.columns, footings: r.footings.length ? r.footings : undefined });
   structBeams.set(name, r.beams);
   const { at, info } = await freeSpot(args.at, sc);
   const res = await drawView(placeAt(r.entities, at), sc, info, args.language);
-  return text({ slab: name, level, beams, columns: r.columns, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
+  return text({ slab: name, level, beams, columns: r.columns, footings: r.footings.length ? r.footings : undefined, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
 }));
 
 server.registerTool('draw_beam_schedule', {
@@ -1483,6 +1571,112 @@ server.registerTool('draw_beam_schedule', {
   return text({ beams: beams.length, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
 }));
 
+server.registerTool('structural_calc', {
+  description:
+    'Preliminary structural calculation (bảng tính kết cấu sơ bộ) of the frame of the plan of draw_plan, for the structural ' +
+    'set: the beams of every slab (as draw_structure_plan lays them out) and the ground beams; loads by TCVN 2737:2023 (slab ' +
+    'build-ups, live loads by room: rooms 1.5, halls and stairs 3, balconies 2 kPa..., partitions, walls on the beams less ' +
+    'their openings, self-weight); slab panels shared out to their beams (two-way trapezoid / triangle, one-way); continuous ' +
+    'beams with the live load on all / odd / even spans; bending and shear by TCVN 5574:2018 (αm, ξ ≤ ξR, As, bars; stirrups ' +
+    'at the supports and midspan); column loads down to the footings, the column capacity and the footing area for the soil ' +
+    'pressure. Drawn as a sheet of tables (materials, slab loads, floor build-up, beams, columns and footings, assumptions) ' +
+    'with the sign-off (người tính, kiểm tra, chủ trì kết cấu: name, licence No., signature, date) and the note that a ' +
+    'licensed structural engineer checks it, calculates it again and signs it. csv_path writes the tables for Excel. The ' +
+    'designed bars and stirrups replace the preliminary ones of draw_beam_schedule (call it afterwards). Defaults (materials, ' +
+    'loads, soil pressure, footing, column) are reported as assumed; sizes that fail are listed in warnings.',
+  inputSchema: {
+    concrete: z.enum(Object.keys(CONCRETE)).default('B20'), steel: z.enum(Object.keys(STEEL)).default('CB300-V'),
+    stirrup_steel: z.enum(Object.keys(STEEL)).default('CB240-T'), cover: z.number().positive().default(25),
+    soil_pressure: z.number().positive().default(100).describe('Bearing pressure R at the footing bottom, kPa (from the site investigation)'),
+    footing: opt(Obj).describe('{B, L} of the pad footings drawn, mm'), column: opt(Obj).describe('{size: [b, h], bars: {n, d}}'),
+    draw: z.boolean().default(true), csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('semicolon'),
+    scale: z.number().positive().default(50), at: opt(Point), plan: opt(Obj), language: opt(Lang), dry_run: z.boolean().default(false),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const spec = planFor(args, 'structural_calc');
+  const lang = args.language ?? language;
+  const floors = engine('structural_calc', () => floorsOf(spec));
+  // the rooms of every floor (live loads by room), measured by AutoCAD from the plan description
+  const rooms = {};
+  if (!args.dry_run) for (let k = 1; k < floors.length; k++) rooms[k] = await roomOutlines(floors[k].spec, 'structural_calc').catch(() => ({}));
+  const R = engine('structural_calc', () => structuralCalc({
+    spec, rooms, concrete: args.concrete, steel: args.steel, stirrupSteel: args.stirrup_steel, cover: args.cover, soil: args.soil_pressure,
+    footing: args.footing ?? {}, column: args.column ?? {}, lang,
+  }));
+  if (args.soil_pressure === 100) R.assumed.push({ item: 'soil_pressure', value: '100 kPa', note: 'give the bearing pressure of the site investigation' });
+  const beams = R.slabs.flatMap((S) => S.types.map((t) => ({
+    slab: S.name, name: t.name, size: `${t.b}x${t.h}`, count: t.count, bottom: `${t.barsSpan.n}Ø${t.barsSpan.d}`, top: `${t.barsSup.n}Ø${t.barsSup.d}`,
+    stirrups: `Ø${t.stirrup.d}a${t.stirrup.support}/a${t.stirrup.span}`, M: [Math.round(t.Mspan * 10) / 10, Math.round(t.Msup * 10) / 10], Q: Math.round(t.Q * 10) / 10, ok: t.ok,
+  })));
+  const summary = { beams, columns: R.columns.slice(0, 6), warnings: R.warnings, assumed: assumedOrNone(R.assumed) };
+  if (args.dry_run) return dryRun(R.assumed, { beams, columns: R.columns, warnings: R.warnings });
+  lastCalc = { key: JSON.stringify(spec), R };
+  // the beam schedule draws the designed bars from now on
+  for (const S of R.slabs) {
+    structBeams.set(S.name, S.types.map((t) => ({ name: t.name, b: t.b, h: t.h, count: t.count, spans: t.spans.map((x) => Math.round(x * 1000)), level: S.level, slab: S.slab || 120, bars: t.bars, stirrup: t.stirrups })));
+  }
+  const out = { ...summary };
+  if (args.csv_path) {
+    const file = path.resolve(args.csv_path.endsWith('.csv') ? args.csv_path : `${args.csv_path}.csv`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, calcCsv(R, lang, args.csv_format === 'comma' ? ',' : ';'), 'utf8');
+    out.csv = file;
+  }
+  if (args.draw) {
+    const sc = args.scale;
+    const { at, info } = await freeSpot(args.at, sc);
+    const sheet = calcSheet(R, { scale: sc, lang });
+    const res = await drawView(placeAt(sheet.entities, at), sc, info, args.language);
+    out.count = res.count;
+    out.bounds = res.bounds;
+  }
+  return text(out);
+}));
+
+server.registerTool('draw_quantity_schedule', {
+  description:
+    'Bar schedule of the whole structural set (bảng thống kê cốt thép: footings, columns, ground beams and the beams of every ' +
+    'slab with the bars and stirrups of structural_calc, slabs and stairs by the detailing rules; bars, lengths with laps and ' +
+    'anchorage, weights by d²/162 as table formulas, totals per diameter) and the bill of quantities (bảng tổng hợp khối ' +
+    'lượng vật tư: lean concrete, concrete and formwork of the footings, column stubs, ground beams, columns storey by storey, ' +
+    'beams, slabs and stairs; steel by grade; brick walls by thickness in m² (and m³) less the openings; plaster inside, ' +
+    'outside and of the soffits), each with how it is made up (diễn giải). Uses the last structural_calc of this session, ' +
+    'else runs it with its defaults. The bar schedule flows in columns over pages (page_height mm, per_page columns), each ' +
+    'page and the bill drawn apart for their own sheets (returned bounds); csv_path writes both for Excel. For estimating: ' +
+    'the quantity surveyor checks them against the final drawings.',
+  inputSchema: {
+    scale: z.number().positive().default(25), page_height: z.number().positive().default(330), per_page: z.number().int().positive().default(2),
+    csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('semicolon'), plan: opt(Obj), language: opt(Lang),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const spec = planFor(args, 'draw_quantity_schedule');
+  const lang = args.language ?? language;
+  const key = JSON.stringify(spec);
+  const R = lastCalc?.key === key ? lastCalc.R : engine('draw_quantity_schedule', () => structuralCalc({ spec, lang }));
+  const B = engine('draw_quantity_schedule', () => boqSheets(R, { scale: args.scale, lang, pageHeight: args.page_height, perPage: args.per_page }));
+  const sc = args.scale;
+  const drawn = [];
+  for (const p of [...B.pages, B.boq]) {
+    const { at, info } = await freeSpot(undefined, sc);
+    const res = await drawView(placeAt(p.entities, at), sc, info, args.language);
+    drawn.push({ title: p.title, bounds: res.bounds, count: res.count });
+  }
+  const out = {
+    pages: drawn.slice(0, -1), bill: drawn[drawn.length - 1],
+    steel_kg: B.quantities.steel, quantities: B.quantities.rows.filter((r) => !r.head).map((r) => `${r.stt}. ${r.item}: ${r.q} ${r.unit}`),
+    from: lastCalc?.key === key ? 'structural_calc' : 'structural_calc defaults (run structural_calc first for the rooms and your materials)',
+  };
+  if (args.csv_path) {
+    const file = path.resolve(args.csv_path.endsWith('.csv') ? args.csv_path : `${args.csv_path}.csv`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, boqCsv(B.groups, B.quantities, lang, args.csv_format === 'comma' ? ',' : ';'), 'utf8');
+    out.csv = file;
+  }
+  return text(out);
+}));
+
 server.registerTool('draw_structure_notes', {
   description:
     'Structural general notes (ghi chú chung kết cấu) as tables: materials (concrete B20/B15/B7.5, steel CB240-T / CB300-V), ' +
@@ -1504,6 +1698,107 @@ server.registerTool('draw_structure_notes', {
   const r = make([at[0], at[1] + 250 * sc]);
   const res = await drawView(r.entities, sc, info, args.language);
   return text({ assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
+}));
+
+server.registerTool('draw_door_schedule', {
+  description:
+    'Door and window schedule of the architectural set (bảng thống kê cửa đi, cửa sổ) from the plan of draw_plan: every type ' +
+    '(by tag, kind and size, on every floor) drawn in elevation with its frame, leaves and opening direction (dashed lines ' +
+    'meet on the hinge side), glazing, width / height / sill dimensions, its tag and count, then the table: tag, kind, W x H, ' +
+    'sill, count by floor, description. materials {tag: description} replaces the default descriptions (listed as assumed).',
+  inputSchema: { materials: opt(Obj), scale: z.number().positive().default(50), at: opt(Point), plan: opt(Obj), language: opt(Lang), dry_run: z.boolean().default(false) },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const spec = planFor(args, 'draw_door_schedule');
+  const sc = args.scale;
+  const make = (at) => doorSchedule({ spec, scale: sc, materials: args.materials ?? {}, lang: args.language ?? language, at });
+  const r0 = engine('draw_door_schedule', () => make([0, 0]));
+  if (args.dry_run) return dryRun(r0.assumed, { types: r0.rows });
+  const { at, info } = await freeSpot(args.at, sc);
+  const res = await drawView(placeAt(r0.entities, at), sc, info, args.language);
+  return text({ types: r0.rows, assumed: assumedOrNone(r0.assumed), count: res.count, bounds: res.bounds });
+}));
+
+server.registerTool('draw_stair_detail', {
+  description:
+    'Stair detail sheet of the architectural set (chi tiết cầu thang) for a U stair of the plan of draw_plan: the stair plan on ' +
+    'each kind of floor (start, typical floors grouped, arrival) with the walls around it, the treads numbered, run / landing / ' +
+    'width dimensions (n x going), floor and landing levels, grids and the section mark 1-1; section 1-1 along the flights (cut ' +
+    'flight with its RC waist slab and landing, the flight beyond, floor slabs and walls cut, handrails with balusters, riser ' +
+    'dimensions n x riser per flight, floor heights, levels); the build-up notes of treads and landing with 2h + b; and the tread ' +
+    'and handrail detail (granite, mortar, brick steps, waist slab, plaster, handrail, balusters) at detail_scale, drawn apart: ' +
+    'put the two parts on one sheet with create_layout views [{window: main, scale}, {window: detail, scale: detail_scale}].',
+  inputSchema: {
+    stair: z.number().int().min(0).default(0).describe('which U stair of the floor where stairs start (0 = the first)'),
+    scale: z.number().positive().default(50), detail_scale: z.number().positive().default(20),
+    waist: z.number().positive().default(120), landing: z.number().positive().default(120), rail: z.number().positive().default(900),
+    finish: z.number().positive().default(20), at: opt(Point), plan: opt(Obj), language: opt(Lang), dry_run: z.boolean().default(false),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const spec = planFor(args, 'draw_stair_detail');
+  const lang = args.language ?? language;
+  const r0 = engine('draw_stair_detail', () => stairDetail({
+    spec, stair: args.stair, scale: args.scale, detailScale: args.detail_scale, waist: args.waist, landing: args.landing, rail: args.rail, finish: args.finish, lang,
+  }));
+  if (!r0) throw new Error('draw_stair_detail: the plan has no U stair (stairs [{type: "u", region}] on a floor)');
+  if (args.dry_run) return dryRun(r0.assumed, r0.stair);
+  const { at, info } = await freeSpot(args.at, args.scale);
+  const main = await drawView(placeAt(r0.main, at), args.scale, info, args.language);
+  // the detail to the right of the main part, at its own scale
+  const b = main.bounds;
+  const dAt = [b.max[0] + 30 * args.scale, b.min[1] + 20 * args.scale];
+  const detail = await drawView(placeAt(r0.detail, dAt), args.detail_scale, info, args.language);
+  return text({ stair: r0.stair, assumed: assumedOrNone(r0.assumed), main: main.bounds, detail: detail.bounds, count: main.count + detail.count });
+}));
+
+server.registerTool('draw_roof_plan', {
+  description:
+    'Roof plan of the architectural set (mặt bằng mái) from the plan of draw_plan, for flat roofs: a copy of the top floor plan with its ' +
+    'walls (the parapets and the stair tower) at the plan scale with its grids and dimensions, the roof of the stair tower ' +
+    'hatched, the roof terrace, floor drains with falls (i=2%) and rainwater pipes, the levels of the terrace, the parapet ' +
+    'top and the tower roof, names and notes (waterproofing, screed to falls, pipes).',
+  inputSchema: {
+    scale: z.number().positive().default(100), fall: z.number().positive().default(2), title: opt(Str), plan: opt(Obj), language: opt(Lang),
+    notes: NotesArg, offset: opt(Point),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const spec = planFor(args, 'draw_roof_plan');
+  const floors = engine('draw_roof_plan', () => floorsOf(spec));
+  const top = floors[floors.length - 1];
+  const sc = args.scale;
+  const lang = args.language ?? language;
+  const parapet = (top.spec.walls || []).find((w) => w.height !== undefined)?.height ?? 1000;
+  const terrace = top.level, roofTop = top.level + (top.height ?? 3000) + 120;
+  const roofSpec = { ...top.spec, openings: [], rooms: [], stairs: [], stairs_below: [], levels: [], entities: [], sections: [], balconies: [], north: top.spec.north ?? spec.north };
+  const base = await planCopy('draw_roof_plan', roofSpec, args, sc, { doors: false, roomLabels: false, levels: false });
+  const rp = engine('draw_roof_plan', () => roofPlan({ top, terrace, roof: roofTop, parapet, fall: args.fall, scale: sc, lang }));
+  const extra = rp.entities.map((e) => shiftEntity(e, base.offset));
+  if (args.notes !== false) extra.push(...notesBlock(Array.isArray(args.notes) ? args.notes : rp.notes, [base.bounds.max[0] + 15 * sc, base.bounds.max[1]], sc, lang));
+  sheetTitle(base, args.title ?? (lang === 'en' ? 'ROOF PLAN' : 'MẶT BẰNG MÁI'), sc, extra);
+  const res = await drawPlanCopy(base, extra, sc, lang);
+  return text({ offset: base.offset, drains: rp.drains, assumed: assumedOrNone(rp.assumed), count: res.count, bounds: res.bounds });
+}));
+
+server.registerTool('draw_cover_sheet', {
+  description:
+    'Cover sheet of a set (tờ bìa): "HỒ SƠ BẢN VẼ <set>" large, the phase, then project, item, client, design consultant, ' +
+    'contractor, location and date, framed. set: KIẾN TRÚC, KẾT CẤU, NỘI THẤT... Put it on its own sheet before the drawing list.',
+  inputSchema: {
+    set: Str, project: opt(Str), item: opt(Str), client: opt(Str), company: opt(Str), contractor: opt(Str), location: opt(Str),
+    phase: opt(Str), date: opt(Str), scale: z.number().positive().default(50), at: opt(Point), language: opt(Lang),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const sc = args.scale;
+  const lang = args.language ?? language;
+  const d = new Date();
+  const date = args.date ?? (lang === 'en' ? d.toISOString().slice(0, 10) : `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`);
+  const { at, info } = await freeSpot(args.at, sc);
+  const r = coverSheet({ set: args.set, info: { ...args, date }, at: [at[0], at[1] + 200 * sc], scale: sc, lang });
+  const res = await drawView(r.entities, sc, info, args.language);
+  return text({ count: res.count, bounds: res.bounds });
 }));
 
 server.registerTool('draw_drawing_list', {

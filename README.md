@@ -10,17 +10,17 @@ Current version: **1.2.0**.
 
 ## Features
 
-46 tools. Lengths are in drawing units (mm in a metric drawing), areas in m², angles in degrees counter-clockwise from +X.
+52 tools. Lengths are in drawing units (mm in a metric drawing), areas in m², angles in degrees counter-clockwise from +X.
 
 | Group | Tools |
 |---|---|
 | Read & quantities | `ping`, `drawing_info`, `list_layers`, `list_blocks`, `query_entities`, `selection_info`, `quantity_takeoff`, `check_drawing` |
 | Standards | `setup_layers`, `setup_styles` |
 | Drawing & editing | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
-| Elevations, sections & structure | `draw_elevation`, `draw_section`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule` |
+| Elevations, sections & structure | `draw_elevation`, `draw_section`, `draw_roof_plan`, `draw_door_schedule`, `draw_stair_detail`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule`, `structural_calc`, `draw_quantity_schedule` |
 | Interior design | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
 | Images & 3D sources | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
-| Sheets & files | `create_layout`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
+| Sheets & files | `create_layout`, `draw_cover_sheet`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
 | Scripting | `run_lisp` |
 | Setup | `install_autocad_bridge` |
 
@@ -38,7 +38,33 @@ Highlights:
   - sections along the plan's section mark (or any cut line): slabs, roof slabs, lintels and the beams under the slabs on every cut wall drawn solid (poché, `beam_depth` default 300), cut walls hatched with lintels over the openings they cross, each room's ceiling at its finish level with its drop bands and hangers up to the slab and its ceiling and floor codes, level marks on both sides tied to the building by extension lines, footings with lean concrete, floor slab and fill, a porch slab out to its columns, the roof cut, walls, doors and windows seen beyond, room names, levels and grids;
   - ornaments seen in a photo (gable windows, cladding, finials) are added with `draw_entities` on `A-ELEV`.
 - **Three sets, three files**: architecture (KT), structure (KC) and interior (NT) are separate drawings, as a design office issues them. Each is made with `new_drawing` from the same plan description and has its own drawing list (`draw_drawing_list`, sheet KT-00 / KC-00 / NT-00), sheet numbers and title block item (KIẾN TRÚC, KẾT CẤU, NỘI THẤT). The structural and interior tools work in a file without the architectural plan: AutoCAD computes the room outlines from the plan description without drawing it (`draw_plan rooms_only`). Example: `examples/Nha-pho-5x18-KT.pdf`, `-KC.pdf`, `-NT.pdf`.
+- **Roof plan** (`draw_roof_plan`), for flat roofs:
+  - the parapets and the stair tower of the top floor, with grids and dimensions;
+  - the tower roof hatched, the roof terrace;
+  - floor drains with falls (i=2%) and rainwater pipes;
+  - the levels of the terrace, the parapet top and the tower roof;
+  - notes on waterproofing, screed to falls and pipes.
+- **Cover sheet** (`draw_cover_sheet`): "HỒ SƠ BẢN VẼ <set>", the phase, project, item, client, consultant, contractor, location, date; every set starts with its cover and its drawing list.
+- **Door and window schedule** (`draw_door_schedule`):
+  - every type (by tag, kind and size, on every floor) drawn in elevation with its frame, leaves and opening direction (dashed lines meet on the hinge side) and glazing;
+  - its width, height and sill dimensions, its tag and count;
+  - the table: tag, kind, W x H, sill, count by floor, description.
+- **Stair detail** (`draw_stair_detail`), for a U stair:
+  - the stair plan on each kind of floor (start, typical floors grouped, arrival) at 1:50, with the walls around it, the treads numbered, run / landing / width dimensions (n x going), floor and landing levels, grids and the section mark;
+  - section 1-1 along the flights: the cut flight with its RC waist slab and landing, the flight beyond, slabs and walls cut, handrails with balusters, riser dimensions (n x riser) per flight, floor heights and levels;
+  - build-up notes of treads and landing, with 2h + b;
+  - the tread and handrail detail at 1:20 (granite, mortar, brick steps, waist slab, plaster, handrail, balusters), drawn apart: one sheet holds both through `create_layout views`.
+- **Preliminary structural calculation** (`structural_calc`), to be checked, calculated again and signed by a licensed structural engineer:
+  - loads by TCVN 2737:2023: slab build-ups, live loads by room (rooms 1.5, halls and stairs 3, balconies 2 kPa ...), partitions, walls on the beams less their openings, self-weight;
+  - slab panels shared out to their beams (two-way trapezoid / triangle, one-way), continuous beams with the live load on all / odd / even spans, end supports qL²/24;
+  - bending and shear by TCVN 5574:2018 (αm, ξ ≤ ξR, As, bars; stirrups at the supports and midspan); the designed bars go to `draw_beam_schedule`;
+  - column loads floor by floor down to the footings (a column standing on a slab hands its load to the beam under it), column capacity, footing area for the soil pressure;
+  - a sheet of tables (materials, slab loads, build-up, beams, columns and footings, assumptions) with the sign-off: calculated, checked, structural lead (name, licence No., signature, date); CSV for Excel.
+- **Bar schedule and bill of quantities** (`draw_quantity_schedule`):
+  - the bar schedule of the whole set: footings, columns, ground beams and beams as designed, slabs and stairs by the detailing rules; laps and anchorage, weights as table formulas, totals per diameter, flowing over pages;
+  - the bill of quantities with how each item is made up: lean concrete, concrete and formwork of footings, column stubs, ground beams, columns per storey, beams, slabs, stairs; steel by grade; brick walls by thickness (m², m³) less the openings; plaster inside, outside and of the soffits; CSV for Excel.
 - **Structural set** (`draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`):
+  - `draw_structure_plan floor=foundation` draws the foundation plan: pad footings M1 under the columns (hidden), ground beams GM under the ground floor walls, the footing size and bottom level;
   - `draw_structure_plan` draws the framing plan of each slab (floor 2, 3 ... and the roof):
     - beams along the load-bearing walls of the floor below (partitions under 150 mm stand on the slab), named per slab (D2.1 ..., DM.1 for the roof) with b x h and their count;
     - columns at the wall nodes;
@@ -64,7 +90,7 @@ Highlights:
   - `draw_wall_finish_plan`: a band along the inside face of every wall in the pattern of its finish (one line for paint, two lines with the tile joints for tiles), broken at the doors and windows; the kitchen splashback behind the base cabinets; a code tag per room with the tiling height; the legend with the area of each wall finish;
   - `draw_ceiling_plan`: drop bands along the walls with the step line and LED cove, downlights in the band (or a grid), a ceiling lamp or a pendant over each dining table, level tags (level over code), light legend with counts. `mode=finish` gives the ceiling finish plan (materials, levels, the step widths dimensioned, ceiling legend with areas; no lights), `mode=lighting` the lighting layout (lights and their legend; no level tags);
   - every interior plan ends with its general notes (GHI CHÚ: units, site checks, material approval, and per plan: tile joints and falls, paint and tiling build-ups, board and access panels, set-out of the lights), or the notes you give;
-  - `draw_interior_elevation`: each wall of a room seen from inside: cut walls, floor and ceiling (drop band), the doors and windows of the wall, the furniture and joinery backed on it (front view) and in the corners (side view), nearer items hiding what is behind them, wall tile joints, kitchen backsplash, skirting, dimension chains and material notes with leaders;
+  - `draw_interior_elevation`: each wall of a room seen from inside: cut walls, floor and ceiling (drop band), the doors and windows of the wall, the furniture and joinery backed on it (front view) and in the corners (side view) as blocks (one per type, size and view, `NT_MD_...` / `NT_MB_...`) with a wipeout under their outlines so that nearer items hide what is behind them, wall tile joints, kitchen backsplash, skirting, dimension chains and material notes with leaders;
   - `draw_joinery_detail`: kitchen run (base cabinets with doors/drawers/sink module, wall cabinet runs and hood, backsplash) or wardrobe: front at 1:10 with modules, hinge sides and handles, section 1-1 through the carcass with panel thicknesses and material notes; taken straight from a cabinet of the layout plan;
   - `material_schedule`: floors and ceilings in m², skirting in m (doors deducted), walls in m² (openings and backsplash deducted), furniture, joinery, sanitary ware, equipment and lights by count, one row per code with its rooms; table and CSV.
   Finishes default by kind of room (dry rooms porcelain 600x600, paint, gypsum ceiling with a drop band; WC anti-slip tiles, wall tiles to the ceiling, moisture-resistant ceiling; yards no ceiling) and every result lists what was assumed.
@@ -96,6 +122,7 @@ Highlights:
   Decimal commas in Vietnamese.
 - **Sheets** (`create_layout`, `export_pdf`): a layout on ISO A0-A4 with `DWG To PDF.pc3` and `monochrome.ctb`, a frame with ISO/TCVN margins, a title block and a locked viewport.
   - The title block on landscape A3-A0 is the vertical strip of Vietnamese construction sets: revisions, notes, client, project, item, consultant, chief of project, chief of division, designer, checker, drawing name, contract, version, phase, drawing number, scale and date, plus a general note along the bottom. `title_block.style=bottom` gives the 180 mm bottom block, which A4 and portrait sheets use. Either one is a block with attributes.
+  - `views` puts several viewports on one sheet, each a model window at its own scale (a plan at 1:100 with a detail at 1:25, three floor plans side by side): packed in rows, bottoms aligned, centred in the drawing area; the title block scale then reads "NHƯ HÌNH" when the scales differ.
   - The viewport is at a standard scale fitted automatically, placed above or beside the title block, wherever the view fits (a warning if a given scale would crop it). `export_pdf` plots layouts into one multi-page PDF (layouts on different paper sizes give one PDF per size, e.g. `set_A3.pdf`, `set_A1.pdf`) or a model-space window at a scale.
 - **Files** (`save_drawing`, `screenshot save_path`): DWG 2018/2013/2010/2007/2004/2000 and DXF; `copy=true` (the default for older versions and DXF) writes an export copy and leaves the open drawing as it is, otherwise Save As; PNG images of the drawing up to 4096 px.
 - **`run_lisp`**: when no tool fits, Claude runs AutoLISP (results come back as JSON) as one Undo group. The code never touches the disk, so AutoCAD's SECURELOAD does not ask about it.

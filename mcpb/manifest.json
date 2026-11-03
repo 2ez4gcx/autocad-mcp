@@ -146,6 +146,90 @@
       "description": "New drawing from a template"
     },
     {
+      "name": "draw_elevation",
+      "description": "Draw elevations derived from the plan of draw_plan (same walls, openings, columns, grids), so they always agree"
+    },
+    {
+      "name": "draw_section",
+      "description": "Draw a section derived from the plan of draw_plan along a cut line (from/to, looking to its left or right like the plan's section mark, or mark"
+    },
+    {
+      "name": "draw_structure_detail",
+      "description": "Draw a reinforced-concrete detail at a detail scale (default 1:20 sections, 1:25 beams/footings) on the structural layers (S-CONC, S-REBR, S-REBR-STIR, S-ANNO-*"
+    },
+    {
+      "name": "rebar_schedule",
+      "description": "Bar schedule (bảng thống kê cốt thép)"
+    },
+    {
+      "name": "draw_structure_plan",
+      "description": "Structural framing plan of one slab (mặt bằng kết cấu dầm sàn) from the plan of draw_plan, for the structural set (its own drawing"
+    },
+    {
+      "name": "draw_beam_schedule",
+      "description": "Beam schedule (bảng mặt cắt dầm) of the structural set"
+    },
+    {
+      "name": "structural_calc",
+      "description": "Preliminary structural calculation (bảng tính kết cấu sơ bộ) of the frame of the plan of draw_plan, for the structural set"
+    },
+    {
+      "name": "draw_quantity_schedule",
+      "description": "Bar schedule of the whole structural set (bảng thống kê cốt thép"
+    },
+    {
+      "name": "draw_structure_notes",
+      "description": "Structural general notes (ghi chú chung kết cấu) as tables"
+    },
+    {
+      "name": "draw_door_schedule",
+      "description": "Door and window schedule of the architectural set (bảng thống kê cửa đi, cửa sổ) from the plan of draw_plan"
+    },
+    {
+      "name": "draw_stair_detail",
+      "description": "Stair detail sheet of the architectural set (chi tiết cầu thang) for a U stair of the plan of draw_plan"
+    },
+    {
+      "name": "draw_roof_plan",
+      "description": "Roof plan of the architectural set (mặt bằng mái) from the plan of draw_plan, for flat roofs"
+    },
+    {
+      "name": "draw_cover_sheet",
+      "description": "Cover sheet of a set (tờ bìa)"
+    },
+    {
+      "name": "draw_drawing_list",
+      "description": "Drawing list (danh mục bản vẽ) of the set in this drawing"
+    },
+    {
+      "name": "draw_furniture_plan",
+      "description": "Furniture layout plan (mặt bằng bố trí nội thất)"
+    },
+    {
+      "name": "draw_floor_finish_plan",
+      "description": "Floor finish plan (mặt bằng lát sàn)"
+    },
+    {
+      "name": "draw_wall_finish_plan",
+      "description": "Wall finish plan (mặt bằng hoàn thiện tường)"
+    },
+    {
+      "name": "draw_ceiling_plan",
+      "description": "Reflected ceiling plan (mặt bằng trần đèn)"
+    },
+    {
+      "name": "draw_interior_elevation",
+      "description": "Interior elevations (triển khai mặt đứng nội thất) of the walls of one room, seen from inside, side by side"
+    },
+    {
+      "name": "draw_joinery_detail",
+      "description": "Joinery shop drawing (chi tiết đồ gỗ) at 1:10"
+    },
+    {
+      "name": "material_schedule",
+      "description": "Finish and material schedule (bảng thống kê vật liệu hoàn thiện)"
+    },
+    {
       "name": "install_autocad_bridge",
       "description": "Install the ACAD MCP Bridge add-in into AutoCAD"
     }

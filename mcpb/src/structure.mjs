@@ -380,7 +380,7 @@ export function footingDetail(p) {
   callout(out, [cx + B / 4, ym], [cx + B / 4 + 5 * sc, yb - lean - 16 * sc], `Ø${mesh.d}a${s}`, mesh.mark, sc);
   callout(out, [cx + xc, (yTop + stubTop) / 2], [cx + cb / 2 + 10 * sc, (yTop + stubTop) / 2 + 6 * sc], label(colBars.n, colBars.d), colBars.mark, sc);
   callout(out, [cx - cb / 2 + ccov + 10, tieYs[tieYs.length - 1]], [cx - cb / 2 - 10 * sc, tieYs[tieYs.length - 1] + 6 * sc], `Ø${colTies.d}a${colTies.spacing}`, colTies.mark, sc, -1);
-  title(out, `${p.name ?? 'MÓNG'} (${B}x${Lw})`, cx, yb - lean - 32 * sc, sc);
+  title(out, `${p.language === 'en' ? 'FOOTING' : 'CHI TIẾT MÓNG'} ${p.name ?? p.label ?? 'M1'} (${B}x${Lw})`, cx, yb - lean - 32 * sc, sc);
   const members = Math.round(num(p.count ?? 1, 'count', { min: 1 }));
   const schedule = [
     { mark: mesh.mark, shape: 'U', d: mesh.d, length: Math.round(B - 2 * c + 2 * up), n: nAlong, members },
@@ -463,7 +463,7 @@ const readable = (d) => {
  * with their dimensions and the title. Sizes are preliminary (h = span / 12, rounded up to 50, 300 to 700; b = wall
  * thickness): the structural engineer designs them. Returns {entities, beams, columns, assumed}.
  */
-export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = 'D', scale = 100, beam = {}, column = {}, rooms = {}, lang = 'vi' }) {
+export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = 'D', scale = 100, beam = {}, column = {}, rooms = {}, lang = 'vi', foundation = null }) {
   const sc = scale;
   const out = [], assumed = [];
   const walls = buildWalls(spec).filter((w) => w.t >= num(beam.min_wall ?? 150, 'beam.min_wall', { min: 0 }) && (spec.walls[w.index].height === undefined));
@@ -561,6 +561,18 @@ export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = '
     out.push({ type: 'hatch', boundary: r.map((q) => P(...q)), pattern: 'SOLID', layer: SL.colHatch });
   }
   const columns = cols.length ? [{ name: 'C1', size: `${csize[0]}x${csize[1]}`, count: cols.length }] : [];
+  // the foundation plan: a pad footing under every column (hidden: below the ground beams), its name and size once
+  let footings = [];
+  if (foundation) {
+    const fB = num(foundation.B ?? 1200, 'footing.B', { positive: true }), fL = num(foundation.L ?? foundation.B ?? 1200, 'footing.L', { positive: true });
+    if (foundation.B === undefined) assumed.push({ item: 'footing', value: `${fB}x${fL}`, note: 'pad footings M1 under the columns, bottom at the foundation depth' });
+    for (const c of cols) {
+      const r = [[c[0] - fB / 2, c[1] - fL / 2], [c[0] + fB / 2, c[1] - fL / 2], [c[0] + fB / 2, c[1] + fL / 2], [c[0] - fB / 2, c[1] + fL / 2]];
+      out.push({ type: 'polyline', points: r.map((q) => P(...q)), closed: true, layer: SL.beam, scale_linetype: true });
+      out.push({ type: 'text', text: 'M1', at: P(c[0] + fB / 2 - 0.5 * sc, c[1] + fL / 2 - 2 * sc), height: r2(2 * sc), align: 'right', layer: SL.text, style: TEXT_STYLE });
+    }
+    footings = cols.length ? [{ name: 'M1', size: `${fB}x${fL}`, count: cols.length, depth: foundation.depth }] : [];
+  }
   if (cols.length) {
     const c0 = cols.reduce((m, p) => (p[0] + p[1] < m[0] + m[1] ? p : m));
     out.push({ type: 'text', text: `C1 (${csize[0]}x${csize[1]})`, at: P(c0[0] - csize[0] / 2 - 1 * sc, c0[1] - csize[1] / 2 - 3 * sc), height: r2(2 * sc), align: 'right', layer: SL.text, style: TEXT_STYLE });
@@ -571,9 +583,19 @@ export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = '
   const area = (poly) => Math.abs(poly.reduce((s2, p, i) => s2 + cross2(p, poly[(i + 1) % poly.length]), 0) / 2);
   const centre = (poly) => [poly.reduce((s2, p) => s2 + p[0], 0) / poly.length, poly.reduce((s2, p) => s2 + p[1], 0) / poly.length];
   const main = entries.filter(([n]) => !STAIR_ROOM.test(n)).sort((a, b) => area(b[1]) - area(a[1]))[0];
-  if (main) out.push({ type: 'text', text: `S1 - ${lang === 'en' ? 'RC SLAB' : 'SÀN BTCT DÀY'} ${slab}`, at: P(...centre(main[1])), height: r2(2.5 * sc), align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
+  if (main && !foundation) out.push({ type: 'text', text: `S1 - ${lang === 'en' ? 'RC SLAB' : 'SÀN BTCT DÀY'} ${slab}`, at: P(...centre(main[1])), height: r2(2.5 * sc), align: 'middle_center', layer: SL.text, style: TEXT_STYLE });
+  if (main && foundation) {
+    // what the foundation plan shows, right of the plan beyond the grid bubbles
+    const bx = Math.max(...segs.flatMap((g) => [g.A[0], g.B[0]])), by = Math.max(...segs.flatMap((g) => [g.A[1], g.B[1]]));
+    const c = [bx + 18 * sc + 9 * sc + 8 * sc, by];
+    const lines = lang === 'en'
+      ? [`M1 PAD FOOTING ${footings[0]?.size ?? ''}`, `BOTTOM ${fmtLv(-(foundation.depth ?? 1500))}`, 'GROUND BEAMS GM UNDER THE WALLS']
+      : [`MÓNG ĐƠN M1 ${footings[0]?.size ?? ''}`, `ĐÁY MÓNG ${fmtLv(-(foundation.depth ?? 1500))}`, 'GIẰNG MÓNG GM DƯỚI TƯỜNG'];
+    lines.forEach((l, i) => out.push({ type: 'text', text: `${i + 1}. ${l}`, at: P(c[0], c[1] - i * 4.5 * sc), height: r2(2.5 * sc), align: 'left', layer: SL.text, style: TEXT_STYLE }));
+  }
   let lowered = 0;
-  for (const [n, poly] of entries) {
+  // the foundation plan has no slab openings or lowered slabs: the ground floor slab is drawn by the architect
+  for (const [n, poly] of foundation ? [] : entries) {
     const c = centre(poly);
     if (STAIR_ROOM.test(n)) {
       const xs = poly.map((p) => p[0]), ys = poly.map((p) => p[1]);
@@ -602,12 +624,17 @@ export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = '
   }
   if (gx.length >= 2) out.push({ type: 'dim_chain', points: gx.map((g) => P(g.at, Y0)), direction: 'horizontal', at: P(gx[0].at, Y0 - ext + 6 * sc), total: gx.length > 2, style: dimStyleName(sc), layer: SL.dims });
   if (gy.length >= 2) out.push({ type: 'dim_chain', points: gy.map((g) => P(X0, g.at)), direction: 'vertical', at: P(X0 - ext + 6 * sc, gy[0].at), total: gy.length > 2, style: dimStyleName(sc), layer: SL.dims });
-  const t = lang === 'en' ? `STRUCTURAL PLAN - SLAB ${name} (${fmtLv(level)})` : `MẶT BẰNG KẾT CẤU SÀN ${name} (${fmtLv(level)})`;
+  const t = foundation
+    ? (lang === 'en' ? 'FOUNDATION PLAN' : 'MẶT BẰNG MÓNG, GIẰNG MÓNG')
+    : lang === 'en' ? `STRUCTURAL PLAN - SLAB ${name} (${fmtLv(level)})` : `MẶT BẰNG KẾT CẤU SÀN ${name} (${fmtLv(level)})`;
   out.push(...viewTitle(t.replace(/\s+/g, ' ').trim(), (X0 + X1) / 2, Y0 - ext - 2 * rB - 12 * sc, sc, SL.text, lang));
   return {
     entities: out, assumed,
     beams: beams.map(({ segs: _s, ...b }) => ({ ...b, level, slab })),
-    columns,
+    columns, footings,
+    // for the structural calculation: every beam line with its supports, and the column points
+    members: segs.map((g) => ({ name: g.name, A: g.A, B: g.B, d: g.d, L: g.L, b: g.b, h: g.h, supports: g.supports, frame: !!g.frame })),
+    columnPoints: cols,
   };
 }
 
@@ -632,7 +659,7 @@ export function beamSchedule({ beams, scale = 25, cover = 25, perRow = 3, lang =
   const sc = scale;
   const out = [], assumed = [];
   if (!beams?.length) throw new PlanError('beam_schedule: no beams (draw the structural plans first, or give beams)');
-  const colW = 160 * sc, rowH = Math.max(...beams.map((b) => b.h)) + 75 * sc;
+  const colW = 110 * sc, rowH = Math.max(...beams.map((b) => b.h)) + 75 * sc;
   beams.forEach((bm, i) => {
     const b = num(bm.b, `beams[${i}].b`, { positive: true }), h = num(bm.h, `beams[${i}].h`, { positive: true });
     const slab = num(bm.slab ?? 120, `beams[${i}].slab`, { positive: true });

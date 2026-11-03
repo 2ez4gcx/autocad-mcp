@@ -77,8 +77,17 @@ namespace AcadMcp
                 pl.Closed = true;
                 var curves = new DBObjectCollection { pl };
                 DBObjectCollection regs;
+                // the first region after AutoCAD starts can fail while the modeler loads: try again once
                 try { regs = Region.CreateFromCurves(curves); }
-                catch (Exception) { throw new McpError(name + ": not a valid closed polygon (self-intersecting or zero area)"); }
+                catch (Exception)
+                {
+                    try { regs = Region.CreateFromCurves(curves); }
+                    catch (Exception ex)
+                    {
+                        var st = ex is Autodesk.AutoCAD.Runtime.Exception ae ? " [" + ae.ErrorStatus + "]" : "";
+                        throw new McpError(name + ": not a valid closed polygon (self-intersecting or zero area)" + st);
+                    }
+                }
                 if (regs.Count == 0) throw new McpError(name + ": not a valid closed polygon");
                 for (int i = 1; i < regs.Count; i++) regs[i].Dispose();
                 return (Region)regs[0];

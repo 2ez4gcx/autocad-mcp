@@ -726,6 +726,21 @@ export const TYPES = {
     side: (w, d, h) => [sR(0, 100, d, h), sR(0, 0, d - 40, 100)],
     tag: (w, d) => [w / 2, d * 0.45],
   },
+  altar: {
+    // the usual Lỗ Ban size of a Vietnamese altar cabinet
+    code: 'JN-08', vi: 'Tủ thờ', en: 'Altar cabinet', size: [1530, 610, 1270], role: 'casework',
+    plan: (w, d) => [sR(0, 0, w, d), sR(60, 60, w - 60, d - 60), sC(w / 2, d / 2, 90)],
+    front: (w, d, h) => {
+      const s = [sR(0, 0, w, 100), sR(0, 100, w, h - 60), sR(-30, h - 60, w + 30, h), sL(0, h - 260, w, h - 260)];
+      doorsFront(0, w, 100, h - 260, 2, s, 'mid');
+      // incense bowl and candlesticks on top
+      s.push(sP([[w / 2 - 120, h], [w / 2 - 90, h + 140], [w / 2 + 90, h + 140], [w / 2 + 120, h]]));
+      for (const x of [w * 0.22, w * 0.78]) s.push(sR(x - 25, h, x + 25, h + 320));
+      return s;
+    },
+    side: (w, d, h) => [sR(0, 0, d, 100), sR(0, 100, d, h - 60), sR(-30, h - 60, d + 30, h)],
+    tag: (w, d) => [w / 2, d * 0.3],
+  },
   bookshelf: {
     code: 'JN-06', vi: 'Kệ sách', en: 'Bookshelf', size: [800, 300, 2000], role: 'casework',
     plan: (w, d) => [sR(0, 0, w, d)],
@@ -1526,6 +1541,26 @@ function wallJoints(area, f, boxes) {
 }
 
 /**
+ * An item seen in an interior elevation as a block insert: its front (MD) or side (MB) view in its own frame (left end
+ * at the origin, floor at 0), a wipeout under every closed outline so that the item hides what stands behind it, base
+ * lines on layer 0 (they take the insert's layer), hidden and glass lines on their own layers. One block per type, size,
+ * view and shape; mirrored for a side view seen the other way.
+ */
+function elevationBlock(s, X, Y) {
+  const it = s.it;
+  const raw = (s.view === 'front' ? it.def.front : it.def.side)(it.w, it.d, it.h, it.opts, it.name);
+  const ents = [];
+  for (const sh of raw) if (sh.k === 'pl' && sh.closed && sh.role !== 'glass' && sh.role !== 'hidden') ents.push({ type: 'wipeout', points: sh.pts.map(P) });
+  emit(raw, (p) => p, (role) => (role === 'hidden' ? IL.hidden : role === 'glass' ? IL.glass : '0'), ents);
+  const name = blockName(['NT', s.view === 'front' ? 'MD' : 'MB', it.code, it.type, `${r2(it.w)}x${r2(it.d)}x${r2(it.h)}`], JSON.stringify(raw));
+  const def = { name, description: `${it.code} ${it.description ?? it.def.vi} (${s.view === 'front' ? 'mặt đứng' : 'mặt bên'})`, entities: ents };
+  return {
+    type: 'block', name, def, at: P([X(s.u), Y(0)]), scale: s.sign < 0 ? [-1, 1, 1] : 1, layer: IL[it.def.role] ?? IL.furniture,
+    box: [X(s.box[0]), Y(s.box[1]), X(s.box[2]), Y(s.box[3])],
+  };
+}
+
+/**
  * Elevation of one wall of a room seen from inside: cut end walls, floor slab and ceiling (drop band cut at the ends),
  * the doors and windows of that wall, items backed on it (front view) and items along the side walls (side view), wall
  * finish joints, kitchen backsplash, skirting, dimension chains and material notes with leaders.
@@ -1569,7 +1604,7 @@ export function interiorElevation({ spec, room, poly, finish, items = [], wall, 
       const u = F.u(it.o);
       if (u + it.w < F.u0 + 1 || u > F.u1 - 1) continue;
       const shapes = it.def.front(it.w, it.d, it.h, it.opts, it.name).map((s) => mapShape(s, (p) => [u + p[0], p[1]]));
-      seen.push({ it, view: 'front', shapes, box: bboxOf(shapes), dist: -back + it.d });
+      seen.push({ it, view: 'front', shapes, box: bboxOf(shapes), dist: -back + it.d, u, sign: 1 });
     } else if (Math.abs(dot(it.ey, F.n)) < 0.01) {
       // along a side wall: shown when it reaches this wall (a corner item), else it would clutter the elevation
       const near = Math.min(...[[0, 0], [it.w, 0], [0, it.d], [it.w, it.d]].map((q) => dot(sub(e.a, frameMap(it)(q)), F.n)));
@@ -1577,28 +1612,12 @@ export function interiorElevation({ spec, room, poly, finish, items = [], wall, 
       const sign = dot(it.ey, F.r) > 0 ? 1 : -1;
       const u = F.u(it.o);
       const shapes = it.def.side(it.w, it.d, it.h, it.opts, it.name).map((s) => mapShape(s, (p) => [u + sign * p[0], p[1]]));
-      seen.push({ it, view: 'side', shapes, box: bboxOf(shapes), dist: near + it.w });
+      seen.push({ it, view: 'side', shapes, box: bboxOf(shapes), dist: near + it.w, u, sign });
     } else if (dot(it.ey, F.n) < -0.99) skipped.push(`${it.code} ${it.type} (not against this wall)`);
   }
-  // Silhouettes (closed outlines, not glass): the items nearest the viewer hide what is behind them.
-  seen.sort((p, q) => q.dist - p.dist);
+  // Silhouettes (closed outlines, not glass) of the items: the openings and wall finishes behind them stop there.
   const occ = [];
-  const itemSegs = [];
   for (const s of seen) {
-    const own = IL[s.it.def.role] ?? IL.furniture;
-    const lay = (role) => (role === 'glass' ? IL.glass : role === 'hidden' ? IL.hidden : own);
-    for (const sh of s.shapes) {
-      const layer = lay(sh.role);
-      if (sh.k === 'l' || sh.k === 'pl') {
-        const pts = sh.k === 'l' ? [sh.a, sh.b] : sh.pts;
-        const segs = [];
-        for (let i = 0; i + 1 < pts.length; i++) segs.push([pts[i], pts[i + 1]]);
-        if (sh.k === 'pl' && sh.closed) segs.push([pts[pts.length - 1], pts[0]]);
-        for (const piece of cutBoxes(segs, occ)) itemSegs.push([piece, layer]);
-      } else if (!occ.some((b) => sh.c[0] > b[0] && sh.c[0] < b[2] && sh.c[1] > b[1] && sh.c[1] < b[3])) {
-        emit([sh], (q) => [X(q[0]), Y(q[1])], () => layer, out);
-      }
-    }
     for (const sh of s.shapes) {
       if (sh.k === 'pl' && sh.closed && sh.role !== 'glass' && sh.role !== 'hidden') {
         const xs = sh.pts.map((q) => q[0]), zs = sh.pts.map((q) => q[1]);
@@ -1650,7 +1669,7 @@ export function interiorElevation({ spec, room, poly, finish, items = [], wall, 
     for (const [a, b] of cutBoxes([[[F.u0, skH], [F.u1, skH]]], gaps.map((g) => [g[0], -1, g[2], skH + 1]))) out.push(lineE([X(a[0]), Y(a[1])], [X(b[0]), Y(b[1])], IL.elev));
   }
 
-  // Openings (hidden where furniture stands in front), then the items.
+  // Openings (hidden where furniture stands in front), then the items as blocks.
   const opSegs = [];
   const rectSegs = (a, b, c, d) => [[[a, b], [c, b]], [[c, b], [c, d]], [[c, d], [a, d]], [[a, d], [a, b]]];
   for (const o of ops) {
@@ -1668,13 +1687,15 @@ export function interiorElevation({ spec, room, poly, finish, items = [], wall, 
     }
   }
   const done = new Set();
-  for (const [sg, layer] of [...opSegs.flatMap(([sg, layer]) => cutBoxes([sg], occ).map((pc) => [pc, layer])), ...itemSegs]) {
+  for (const [sg, layer] of opSegs.flatMap(([sg, layer]) => cutBoxes([sg], occ).map((pc) => [pc, layer]))) {
     // modules side by side share their edges: one line each
     const k = [sg[0], sg[1]].map((q) => `${Math.round(q[0] * 2)},${Math.round(q[1] * 2)}`).sort().join('|') + layer;
     if (done.has(k)) continue;
     done.add(k);
     out.push(lineE([X(sg[0][0]), Y(sg[0][1])], [X(sg[1][0]), Y(sg[1][1])], layer, layer === IL.hidden ? HID : undefined));
   }
+  // the farthest first: the wipeout of each one hides what it stands in front of
+  for (const sv of [...seen].sort((p, q) => p.dist - q.dist)) out.push(elevationBlock(sv, X, Y));
 
   // Dimensions: horizontal chain (ends, openings, items backed on the wall) and heights.
   const us = [F.u0, F.u1, ...ops.flatMap((o) => [o.ua, o.ub]), ...seen.filter((s) => s.view === 'front').flatMap((s) => [s.box[0], s.box[2]])]
