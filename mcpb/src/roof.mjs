@@ -54,14 +54,19 @@ export function roofPlan({ top, terrace, roof, parapet = 1000, fall = 2, scale =
       .filter((c) => !tower || c[0] < tower[0] || c[0] > tower[2] || c[1] < tower[1] || c[1] > tower[3])
       .sort((a, b) => Math.hypot(b[0] - tc[0], b[1] - tc[1]) - Math.hypot(a[0] - tc[0], a[1] - tc[1]));
     for (const c of corners.slice(0, 2)) drains.push({ at: c, from: zc });
-    mids.push({ zc, area: (z[2] - z[0]) * (z[3] - z[1]) });
+    mids.push({ zc, z, area: (z[2] - z[0]) * (z[3] - z[1]) });
   }
-  if (tower) drains.push({ at: [tower[0] + 300, tower[1] + 300], from: tc });
+  if (tower) drains.push({ at: [tower[0] + 300, tower[1] + 300], from: tc, tower: true });
+  // what the labels keep clear of: the drains, the fall arrows (with their i=..% text), the labels already placed
+  const taken = [];
+  const hits = (b) => taken.some((x) => x[0] < b[2] && b[0] < x[2] && x[1] < b[3] && b[1] < x[3]);
   const arrow = (from, to, label) => {
     const d = [to[0] - from[0], to[1] - from[1]], L = Math.hypot(...d);
     if (L < 14 * sc) return;
     const ang = (Math.atan2(d[1], d[0]) * 180) / Math.PI;
     const tail = [to[0] - (d[0] / L) * (12 * sc + 200), to[1] - (d[1] / L) * (12 * sc + 200)];
+    const bx = bbox([tail, [to[0] - (d[0] / L) * 200, to[1] - (d[1] / L) * 200]]);
+    taken.push([bx[0] - 3 * sc, bx[1] - 3 * sc, bx[2] + 3 * sc, bx[3] + 3 * sc]);
     const upright = Math.cos((ang * Math.PI) / 180) >= -1e-9;
     out.push(upright
       ? sym('MCP_DOC', tail, { scale: sc, rotation: r2(ang), attrs: { I: label }, layer: ROLE.note })
@@ -74,25 +79,55 @@ export function roofPlan({ top, terrace, roof, parapet = 1000, fall = 2, scale =
   for (const dr of drains) {
     out.push(sym('MCP_PHEU_THU', dr.at, { attrs: { MA: lang === 'en' ? 'RD' : 'PT' }, layer: ROLE.fixture, half: [75, 75] }));
     out.push({ type: 'circle', center: P(dr.at), radius: 45, layer: ROLE.fixture });
+    taken.push([dr.at[0] - 150, dr.at[1] - 150, dr.at[0] + 150, dr.at[1] + 150]);
   }
-  // levels and names in the largest zone
-  const mid = mids.reduce((m, x) => (x.area > m.area ? x : m)).zc;
-  out.push(sym('MCP_COTE', [mid[0] + 8 * sc, mid[1] - 4 * sc], { scale: sc, attrs: { COTE: fmtLv(terrace) }, layer: ROLE.symbol }));
-  T(lang === 'en' ? 'ROOF TERRACE' : 'SÂN THƯỢNG', [mid[0], mid[1] + 3 * sc], 3);
+  // A name (lines of text, centred) with its level mark under it, as a block of labels: placed at the first of the
+  // candidate centres where it lies inside the region and clear of the drains, arrows and other labels; the name is
+  // wrapped to the width of the region.
+  const tw = (t, h) => [...t].length * 0.9 * h * sc; // capitals: about 0.83 of their height each
+  const labelBlock = (name, level, region, centres, h, mask = false) => {
+    const room = region[2] - region[0] - 2 * sc;
+    const lines = [];
+    for (const word of name.split(' ')) {
+      const last = lines[lines.length - 1];
+      if (last !== undefined && tw(`${last} ${word}`, h) <= room) lines[lines.length - 1] = `${last} ${word}`;
+      else lines.push(word);
+    }
+    const lh = 1.6 * h * sc;
+    // the level mark: the triangle at its insertion point, the value over a line 13.5 paper mm long to its right
+    const w = Math.max(...lines.map((l) => tw(l, h)), 15 * sc), H = lines.length * lh + 8 * sc;
+    const boxAt = (c) => [c[0] - w / 2, c[1] - H / 2, c[0] + w / 2, c[1] + H / 2];
+    const inside = (b) => b[0] >= region[0] + sc && b[2] <= region[2] - sc && b[1] >= region[1] + sc && b[3] <= region[3] - sc;
+    // where nothing is free inside the region: the place that covers the least of what is there
+    const over = (bx) => taken.reduce((a, x) => a + Math.max(0, Math.min(bx[2], x[2]) - Math.max(bx[0], x[0])) * Math.max(0, Math.min(bx[3], x[3]) - Math.max(bx[1], x[1])), 0);
+    const ins = centres.filter((q) => inside(boxAt(q)));
+    const c = ins.find((q) => !hits(boxAt(q))) ?? ins.map((q) => ({ q, a: over(boxAt(q)) })).sort((p, q) => p.a - q.a)[0]?.q ?? centres[0];
+    const b = boxAt(c);
+    taken.push(b);
+    // on a hatched roof the block stands on a mask: the hatch stops around it
+    if (mask) out.push({ type: 'wipeout', points: [P([b[0], b[1]]), P([b[2], b[1]]), P([b[2], b[3]]), P([b[0], b[3]])], layer: ROLE.text });
+    lines.forEach((l, i) => T(l, [c[0], b[3] - (i + 0.5) * lh], h));
+    out.push(sym('MCP_COTE', [c[0] - 5.5 * sc, b[1] + 0.5 * sc], { scale: sc, attrs: { COTE: level }, layer: ROLE.symbol }));
+  };
+  // candidate centres: the middle of the region, then the points of a grid over it, the nearest to the middle first
+  const centresOf = (region) => {
+    const c = [(region[0] + region[2]) / 2, (region[1] + region[3]) / 2], step = 2 * sc, list = [];
+    const nx = Math.floor((region[2] - region[0]) / 2 / step), ny = Math.floor((region[3] - region[1]) / 2 / step);
+    for (let i = -nx; i <= nx; i++) for (let j = -ny; j <= ny; j++) list.push([c[0] + i * step, c[1] + j * step]);
+    return list.sort((p, q) => Math.hypot(p[0] - c[0], p[1] - c[1]) - Math.hypot(q[0] - c[0], q[1] - c[1]));
+  };
+  // levels and names: the terrace in its largest zone, the tower roof inside its walls
+  const zone = mids.reduce((m, x) => (x.area > m.area ? x : m)).z;
+  labelBlock(lang === 'en' ? 'ROOF TERRACE' : 'SÂN THƯỢNG', fmtLv(terrace), zone, centresOf(zone), 3);
   if (tower) {
-    T(lang === 'en' ? 'RC ROOF OF THE STAIR TOWER' : 'MÁI BTCT TUM', [tc[0], tc[1] + 3 * sc], 2.5);
-    out.push(sym('MCP_COTE', [tc[0] + 6 * sc, tc[1] - 5 * sc], { scale: sc, attrs: { COTE: fmtLv(roof) }, layer: ROLE.symbol }));
+    const t = Math.max(...towerSegs.map((s) => s.t));
+    const region = [tower[0] + t, tower[1] + t, tower[2] - t, tower[3] - t];
+    labelBlock(lang === 'en' ? 'RC TOWER ROOF' : 'MÁI BTCT TUM', fmtLv(roof), region, centresOf(region), 2.2, true);
   }
-  if (parSegs.length) {
-    const s = parSegs.reduce((m, x) => (x.L > m.L ? x : m));
-    const c = [(s.a[0] + s.b[0]) / 2 + 6 * sc, (s.a[1] + s.b[1]) / 2 + 6 * sc];
-    out.push({
-      type: 'text', text: `${lang === 'en' ? 'PARAPET H=' : 'TƯỜNG MÁI CAO '}${parapet} (${fmtLv(terrace + parapet)})`, at: P(c),
-      height: r2(2.2 * sc), rotation: r2((Math.atan2(s.d[1], s.d[0]) * 180) / Math.PI) % 180 === 90 ? 90 : 0, layer: ROLE.text, style: TEXT_STYLE,
-    });
-  }
+  // the parapet: its height and top level in the notes (a text along the wall would lie on the grids and dimensions)
+  const top2 = fmtLv(terrace + parapet);
   const notes = lang === 'en'
-    ? ['RC roofs waterproofed, screed to falls of 2% to the floor drains.', 'Rainwater pipes uPVC Ø90 from every drain down to the ground drainage.', 'Parapets 1000 high, coping and drip on top.']
-    : ['Mái BTCT chống thấm, láng vữa tạo dốc i=2% về phễu thu.', 'Ống thoát nước mưa uPVC Ø90 từ mỗi phễu thu xuống hệ thoát nước sân.', 'Tường mái cao 1000, có gờ chắn nước và chỉ nhỏ giọt trên đỉnh.'];
-  return { entities: out, assumed, notes, drains: drains.length };
+    ? ['RC roofs waterproofed, screed to falls of 2% to the floor drains.', 'Rainwater pipes uPVC Ø90 from every drain down to the ground drainage.', `Parapets ${parapet} high (top ${top2}), coping and drip on top.`]
+    : ['Mái BTCT chống thấm, láng vữa tạo dốc i=2% về phễu thu.', 'Ống thoát nước mưa uPVC Ø90 từ mỗi phễu thu xuống hệ thoát nước sân.', `Tường mái cao ${parapet} (đỉnh tường ${top2}), có gờ chắn nước và chỉ nhỏ giọt trên đỉnh.`];
+  return { entities: out, assumed, notes, drains: drains.length, drainPoints: drains.map((d) => ({ at: [Math.round(d.at[0]), Math.round(d.at[1])], tower: Boolean(d.tower) })) };
 }

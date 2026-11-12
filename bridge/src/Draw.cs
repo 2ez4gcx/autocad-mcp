@@ -59,6 +59,18 @@ namespace AcadMcp
         // ---------------------------------------------------------------- fields
 
         /// <summary>A field code (starts with %&lt;\): text whose value AutoCAD keeps up to date.</summary>
+        static CellAlignment? ColAlign(List<object> a, int c)
+        {
+            if (a == null || c >= a.Count || a[c] == null) return null;
+            switch (Convert.ToString(a[c]))
+            {
+                case "right": return CellAlignment.MiddleRight;
+                case "center": return CellAlignment.MiddleCenter;
+                case "left": return CellAlignment.MiddleLeft;
+                default: return null;
+            }
+        }
+
         public static bool IsFieldCode(string s) => s != null && s.Contains("%<\\");
 
         /// <summary>{h:HANDLE} in a field code becomes the object id of that entity (%&lt;\_ObjId n&gt;%).</summary>
@@ -545,12 +557,42 @@ namespace AcadMcp
             if (uniq.Count < 2) throw new McpError("the points do not span any length in that direction");
             Point3d line = s.Has("at") ? U.Pt(s, "at") : pts[0] + n * s.ReqNum("offset");
             var es = new List<Entity>();
+            // A number wider than its segment would sit on the extension lines: it goes beyond the dimension line,
+            // away from the measured points (the text moves freely: DIMTMOVE 2).
+            var rec = (DimStyleTableRecord)_tr.GetObject(st, OpenMode.ForRead);
+            double dscale = rec.Dimscale > 0 ? rec.Dimscale : 1, txt = rec.Dimtxt * dscale, tgap = Math.Abs(rec.Dimgap) * dscale;
+            double lf = rec.Dimlfac != 0 ? Math.Abs(rec.Dimlfac) : 1;
+            // "up" for the text: above a horizontal line, to the left of a vertical one (the way the text reads)
+            var up = (u.X < -1e-9 || (Math.Abs(u.X) <= 1e-9 && u.Y < 0)) ? -n : n;
+            int row = 0;
             for (int i = 0; i + 1 < uniq.Count; i++)
             {
                 var d = new RotatedDimension(ang, uniq[i], uniq[i + 1], line, "", st);
                 Add(d, s);
                 d.DimensionStyle = st;
                 d.RecomputeDimensionBlock(true);
+                double len = Math.Abs((uniq[i + 1] - uniq[i]).DotProduct(u));
+                int digits = Math.Round(len * lf).ToString(System.Globalization.CultureInfo.InvariantCulture).Length;
+                bool narrow = digits * 0.8 * txt + 0.6 * txt > len;
+                if (narrow && !s.Bool("stagger_off", false))
+                {
+                    // of two narrow segments side by side only the first moves up (a third row would reach the next chain)
+                    row = row == 1 ? 0 : 1;
+                    if (row == 1)
+                    {
+                        var mid = line + u * ((uniq[i] - line).DotProduct(u) + ((uniq[i + 1] - uniq[i]).DotProduct(u)) / 2);
+                        try
+                        {
+                            // to the side of the line away from the measured points (no extension lines there): a
+                            // second row where the numbers already stand on that side, else just beyond the ticks
+                            var far = n * ((line - uniq[0]).DotProduct(n) >= 0 ? 1 : -1);
+                            d.TextPosition = mid + far * (up.DotProduct(far) > 0 ? tgap + 2.0 * txt : 1.15 * txt);
+                            d.RecomputeDimensionBlock(true);
+                        }
+                        catch (Exception) { }
+                    }
+                }
+                else row = 0;
                 es.Add(d);
             }
             if (s.Bool("total", false) && uniq.Count > 2)
@@ -781,6 +823,9 @@ namespace AcadMcp
                 t.Cells[0, 0].Alignment = CellAlignment.MiddleCenter;
                 r0 = 1;
             }
+            // col_align ["right" | "center" | "left" | null per column]: the alignment of the body cells of a column,
+            // whatever they hold (quantities given as texts with their decimals stay right-aligned)
+            var colAlign = s.List("col_align");
             for (int r = 0; r < rows.Count; r++)
             {
                 var row = rows[r] as List<object> ?? new List<object> { rows[r] };
@@ -809,7 +854,7 @@ namespace AcadMcp
                     if (c < row.Count && row[c] is double && s.Has("decimal_separator")) cell.TextString = cell.TextString.Replace(".", s.Str("decimal_separator"));
                     cell.TextHeight = th;
                     cell.Alignment = r == 0 && s.Bool("header", true) ? CellAlignment.MiddleCenter
-                        : (c < row.Count && row[c] is double ? CellAlignment.MiddleRight : CellAlignment.MiddleLeft);
+                        : ColAlign(colAlign, c) ?? (c < row.Count && row[c] is double ? CellAlignment.MiddleRight : CellAlignment.MiddleLeft);
                 }
             }
             // Cell margins in proportion to the text (the table style's margins are tiny at large scales). The table-wide

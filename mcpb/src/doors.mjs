@@ -1,7 +1,7 @@
 // Door and window schedule (bảng thống kê cửa đi, cửa sổ): every type of door and window of the building drawn in
 // elevation with its sizes and opening direction, its count by floor, and the table of types. Pure geometry: returns
 // draw_entities specs. Types come from the openings of the plan description (by tag, kind and size).
-import { buildBuilding } from './elevation.mjs';
+import { buildBuilding, isOutside, roomAt } from './elevation.mjs';
 import { dimStyleName, ROLE, TEXT_STYLE, viewTitle } from './standards.mjs';
 import { tagSym } from './symbols.mjs';
 
@@ -16,7 +16,36 @@ const MATERIAL = {
   double_door: 'Cửa nhôm hệ, kính cường lực 8 mm, phụ kiện đồng bộ',
   sliding: 'Cửa lùa nhôm hệ, kính cường lực 8 mm',
   window: 'Cửa sổ nhôm hệ, kính cường lực 6,38 mm, có song bảo vệ',
+  // a single door by what it serves: wood stays in dry rooms only
+  door_wet: 'Cửa nhôm hệ, kính mờ cường lực 8 mm, chịu nước (cửa khu vệ sinh), phụ kiện đồng bộ',
+  door_outside: 'Cửa nhôm hệ, kính cường lực 8 mm (cửa ra sân, ban công, ngoài trời), phụ kiện đồng bộ',
 };
+const MATERIAL_EN = {
+  door: 'Engineered wood door, wood frame, PU paint, matching hardware',
+  double_door: 'Aluminium system door, 8 mm tempered glass, matching hardware',
+  sliding: 'Aluminium system sliding door, 8 mm tempered glass',
+  window: 'Aluminium system window, 6.38 mm laminated glass, with a guard grille',
+  door_wet: 'Aluminium system door, 8 mm frosted tempered glass, water resistant (toilet door), matching hardware',
+  door_outside: 'Aluminium system door, 8 mm tempered glass (door to a yard, a balcony, the open air), matching hardware',
+};
+const WET = /(WC|VỆ SINH|TẮM|TOILET|BATH|WASH)/i;
+const OUTDOOR = /(SÂN|HIÊN|BAN CÔNG|LÔ GIA|LOGIA|BALCONY|TERRACE|PORCH|YARD)/i;
+
+/**
+ * What a door serves, from the rooms on its two sides: 'wet' (a toilet or bathroom), 'outside' (the open air, a
+ * balcony, a terrace, a yard), else 'inside'. Unknown (null) on a floor with no rooms named.
+ */
+function doorUse(M, op) {
+  if (!M.rooms.length) return null;
+  const s = op.s, n = [-s.d[1], s.d[0]], mid = (op.span.from + op.span.to) / 2;
+  const pts = [Math.min(s.o1, s.o2) - 300, Math.max(s.o1, s.o2) + 300].map((o) => [s.a[0] + s.d[0] * mid + n[0] * o, s.a[1] + s.d[1] * mid + n[1] * o]);
+  const names = pts.map((p) => roomAt(M, p)?.name ?? null);
+  if (names.some((x) => x && WET.test(x))) return 'wet';
+  // the open air (a space the walls do not close), or a room named as a yard, a balcony, a terrace; an enclosed space
+  // with no room named in it (a corridor) is inside
+  if (names.some((x, k) => (x ? OUTDOOR.test(x) : isOutside(M, pts[k])))) return 'outside';
+  return 'inside';
+}
 
 /**
  * The schedule: one elevation per type (frame, leaves, opening direction dashed: the lines meet on the hinge side,
@@ -34,8 +63,9 @@ export function doorSchedule({ spec, scale = 50, materials = {}, lang = 'vi', at
       const w = Math.round(op.span.to - op.span.from), h = Math.round(op.head - op.sill);
       const tag = op.tag ?? `${op.type === 'window' ? 'S' : 'D'}-${w}x${h}`;
       const key = `${tag}|${op.type}|${w}x${h}`;
-      const t = types.get(key) ?? { tag, type: op.type, w, h, sill: Math.round(op.sill), count: 0, floors: new Map() };
+      const t = types.get(key) ?? { tag, type: op.type, w, h, sill: Math.round(op.sill), count: 0, floors: new Map(), uses: new Set() };
       t.count++;
+      if (op.type === 'door') t.uses.add(doorUse(f.M, op));
       const fname = f.name ?? '';
       t.floors.set(fname, (t.floors.get(fname) ?? 0) + 1);
       types.set(key, t);
@@ -113,8 +143,14 @@ export function doorSchedule({ spec, scale = 50, materials = {}, lang = 'vi', at
   const K = KIND[lang] ?? KIND.vi;
   const head = lang === 'en' ? ['TAG', 'KIND', 'SIZE W x H', 'SILL', 'COUNT', 'WHERE', 'DESCRIPTION'] : ['KÝ HIỆU', 'LOẠI CỬA', 'KÍCH THƯỚC (R x C)', 'CAO BẬU', 'SỐ LƯỢNG', 'VỊ TRÍ', 'VẬT LIỆU, MÔ TẢ'];
   const rows = list.map((t) => {
-    const desc = materials[t.tag] ?? MATERIAL[t.type];
-    if (materials[t.tag] === undefined) assumed.push({ item: `materials.${t.tag}`, value: desc });
+    // a single door: aluminium and glass where it serves a toilet or the outside, wood between dry rooms
+    const use = t.uses.has('wet') ? 'wet' : t.uses.has('outside') ? 'outside' : 'inside';
+    const MAT = lang === 'en' ? MATERIAL_EN : MATERIAL;
+    const desc = materials[t.tag] ?? (use === 'inside' ? MAT[t.type] : MAT[`door_${use}`]);
+    if (materials[t.tag] === undefined) {
+      const mixed = use !== 'inside' && t.uses.size > 1;
+      assumed.push({ item: `materials.${t.tag}`, value: desc, ...(mixed ? { note: `type ${t.tag} serves ${use === 'wet' ? 'a toilet' : 'the outside'} and dry rooms: give those doors a tag of their own` } : {}) });
+    }
     return [t.tag, K[t.type], `${t.w} x ${t.h}`, t.type === 'window' ? t.sill : '', t.count, [...t.floors.entries()].map(([fl, n]) => (fl ? `${fl}: ${n}` : `${n}`)).join('; '), desc];
   });
   const yT = y0 - 22 * sc;
@@ -125,5 +161,5 @@ export function doorSchedule({ spec, scale = 50, materials = {}, lang = 'vi', at
   });
   const yTitle = yT - (rows.length + 2) * 8 * sc - 18 * sc;
   out.push(...viewTitle(lang === 'en' ? 'DOOR AND WINDOW SCHEDULE' : 'BẢNG THỐNG KÊ CỬA ĐI, CỬA SỔ', (at[0] + x) / 2, yTitle, sc, TXT, lang));
-  return { entities: out, rows: list.map((t) => ({ tag: t.tag, type: t.type, size: `${t.w}x${t.h}`, sill: t.sill, count: t.count })), assumed };
+  return { entities: out, rows: list.map((t) => ({ tag: t.tag, type: t.type, size: `${t.w}x${t.h}`, sill: t.sill, count: t.count, ...(t.type === 'door' && !t.uses.has(null) ? { use: t.uses.has('wet') ? 'wet' : t.uses.has('outside') ? 'outside' : 'inside' } : {}) })), assumed };
 }

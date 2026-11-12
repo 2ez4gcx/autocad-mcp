@@ -1,0 +1,66 @@
+{
+ "tolerance_percent": 0.1,
+ "structure": {
+  "members": 166,
+  "not_prisms": 9,
+  "bill_net_m3": 86.14637,
+  "autocad_union_m3": 86.14637,
+  "difference_percent": 0,
+  "ok": true,
+  "autocad_sum_m3": 93.339017,
+  "autocad_overlap_m3": 7.192647,
+  "bill_contacts_m3": 7.192647,
+  "checks": {
+   "passed": 22,
+   "failed": 0
+  },
+  "from": "structural_calc"
+ },
+ "finishes": {
+  "faces": 127,
+  "bill_m2": 1396.652,
+  "autocad_m2": 1396.652,
+  "difference_percent": 0,
+  "ok": true,
+  "floors": [
+   {
+    "floor": "TẦNG 1",
+    "plate_bill_m2": 90,
+    "plate_autocad_m2": 90,
+    "outer_faces_bill_m": 46,
+    "outline_autocad_m": 46,
+    "ok": true
+   },
+   {
+    "floor": "TẦNG 2",
+    "plate_bill_m2": 90,
+    "plate_autocad_m2": 90,
+    "outer_faces_bill_m": 46,
+    "outline_autocad_m": 46,
+    "ok": true
+   },
+   {
+    "floor": "TẦNG 3",
+    "plate_bill_m2": 90,
+    "plate_autocad_m2": 90,
+    "outer_faces_bill_m": 46,
+    "outline_autocad_m": 46,
+    "ok": true
+   },
+   {
+    "floor": "TUM",
+    "plate_bill_m2": 90,
+    "plate_autocad_m2": 90,
+    "outer_faces_bill_m": 45.998,
+    "outline_autocad_m": 46,
+    "ok": true
+   }
+  ],
+  "rules": "Phụ lục VI Thông tư 13/2021/TT-BXD",
+  "checks": {
+   "passed": 116,
+   "failed": 0
+  }
+ },
+ "ok": true
+}

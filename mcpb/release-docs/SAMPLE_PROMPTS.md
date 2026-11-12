@@ -43,10 +43,17 @@
 - Draw the floor, wall and ceiling finish plans and the lighting layout of floor 2, each with its legend and general notes. / Vẽ mặt bằng hoàn thiện sàn, hoàn thiện tường, hoàn thiện trần và bố trí đèn tầng 2, có chú thích và ghi chú chung.
 - Make the A3 sheets NT-01 to NT-07 with the vertical title strip (client, project, consultant, phase TKTC) and export one PDF. / Dàn tờ A3 NT-01 đến NT-07 với khung tên dải dọc (chủ đầu tư, dự án, tư vấn, giai đoạn TKTC) và xuất một file PDF.
 
-## Three sets: architecture, structure, interior / Ba bộ hồ sơ: kiến trúc, kết cấu, nội thất
+## Separate sets: architecture, structure, interior / Các bộ hồ sơ riêng: kiến trúc, kết cấu, nội thất
 
 - Make the structural set in a new drawing: general notes, the framing plan of every slab and the beam schedule, then sheets KC-00 to KC-06 with the drawing list. / Lập bộ kết cấu trong bản vẽ mới: ghi chú chung, mặt bằng kết cấu từng sàn, bảng mặt cắt dầm, dàn tờ KC-00 đến KC-06 kèm danh mục bản vẽ.
 - Keep architecture, structure and interior in three files, each with its own drawing list and title block item. / Tách kiến trúc, kết cấu, nội thất thành ba file, mỗi bộ có danh mục và hạng mục riêng trên khung tên.
+
+## Electrical and plumbing / Điện và cấp thoát nước
+
+- Make the electrical set of this house in a new drawing: lighting and power plans of every floor, the single-line diagram, the riser diagram and the load calculation in Excel. List what you assume first. / Lập bộ hồ sơ điện cho nhà này trong bản vẽ mới: mặt bằng chiếu sáng, ổ cắm các tầng, sơ đồ nguyên lý, sơ đồ trục đứng, bảng tính phụ tải bằng Excel; liệt kê giả định trước.
+- Put an 18000 BTU air conditioner in the living room and two more sockets by the TV. / Đặt điều hòa 18.000 BTU cho phòng khách và thêm hai ổ cắm cạnh TV.
+- Make the plumbing set: supply and drainage plans, riser diagrams, the septic tank detail, the WC enlarged at 1:25 and the calculation with the tank and pipe sizes. / Lập bộ cấp thoát nước: mặt bằng cấp nước, thoát nước, sơ đồ nguyên lý, chi tiết bể tự hoại, mặt bằng WC tỷ lệ 1/25 và bảng tính dung tích bồn, đường kính ống.
+- The house has 8 people and a 2000 L tank: recalculate the riser and the septic tank. / Nhà có 8 người, bồn 2000 lít: tính lại ống đứng và bể tự hoại.
 
 ## Buildings of several floors / Nhà nhiều tầng
 
@@ -57,6 +64,8 @@
 ## Quantities and checks / Khối lượng và kiểm tra
 
 - Take off the quantities by layer and save a CSV for Excel. / Bóc khối lượng theo layer, xuất CSV.
+- Check the structural and finish bills of this house against AutoCAD's own measure, and tell me which faces or members disagree. / Kiểm tra lại bảng khối lượng kết cấu và hoàn thiện của nhà này bằng số đo của chính AutoCAD, báo mặt hay cấu kiện nào lệch.
+- Draw the finish quantities with the geometric rule set instead of Appendix VI (every opening deducted). / Lập bảng khối lượng hoàn thiện theo khối lượng hình học thay vì Phụ lục VI (trừ mọi lỗ cửa).
 - Count the blocks with their attribute values. / Đếm block kèm giá trị thuộc tính.
 - Check the drawing and fix the duplicates and the polylines that should be closed. / Kiểm tra bản vẽ, xóa đối tượng trùng và đóng các polyline hở.
 - Find walls drawn as one thick line and redraw them with two faces. / Tìm tường vẽ 1 nét dày và vẽ lại đúng 2 nét.

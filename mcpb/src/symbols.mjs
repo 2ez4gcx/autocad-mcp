@@ -61,7 +61,8 @@ const FIXED = {
         const b1 = [dx * r * 0.9 + q[0] * r * 0.75, dy * r * 0.9 + q[1] * r * 0.75];
         const b2 = [dx * r * 0.9 - q[0] * r * 0.75, dy * r * 0.9 - q[1] * r * 0.75];
         out.push(...tri(tip, b1, b2));
-        out.push({ type: 'text', text: t, at: [dx * r * 0.45, dy * r * 0.45], height: 2.2, align: 'middle_center', style: T });
+        // the four letters clear of each other inside the circle
+        out.push({ type: 'text', text: t, at: [dx * r * 0.58, dy * r * 0.58], height: 1.5, align: 'middle_center', style: T });
       });
       return out;
     })(),
@@ -106,12 +107,175 @@ const FIXED = {
     entities: [[-500, -340], [-220, -60], [60, 220], [340, 500]].map(([a, b]) => ({ type: 'line', from: [a, 0], to: [b, 0] })),
     attributes: [attr('MA', 'Mã đèn', [0, -80], 50, 'middle_center', { invisible: true })],
   },
+  // wall light, real size: flat side on the wall (x = 0), facing +X
+  MCP_DEN_TUONG: {
+    description: 'Đèn gắn tường / wall light',
+    entities: [{ type: 'arc', start: [0, -150], mid: [150, 0], end: [0, 150] }, { type: 'line', from: [0, -150], to: [0, 150] },
+      { type: 'line', from: [10, -95], to: [110, 95] }, { type: 'line', from: [10, 95], to: [110, -95] }],
+    attributes: [attr('MA', 'Mã đèn', [0, -200], 50, 'middle_center', { invisible: true })],
+  },
+  // ---- electrical devices, paper mm (inserted at the drawing scale), on the wall at x = 0, facing +X into the room
+  MCP_E_CT_2C: {
+    description: 'Công tắc 2 chiều / two-way switch',
+    entities: [{ type: 'circle', center: [0, 0], radius: 0.9 }, { type: 'line', from: [0.9, 0], to: [3.6, 0] },
+      { type: 'line', from: [3.6, 0], to: [3.6, 1.2] }, { type: 'line', from: [3, 0], to: [3, -1.2] }],
+    attributes: [],
+  },
+  MCP_E_CT_2C_2: {
+    description: 'Công tắc 2 chiều 2 hạt / two-way switch, two gangs',
+    entities: [{ type: 'circle', center: [0, 0], radius: 0.9 }, { type: 'line', from: [0.9, 0], to: [3.6, 0] },
+      { type: 'line', from: [3.6, 0], to: [3.6, 1.2] }, { type: 'line', from: [3, 0], to: [3, -1.2] },
+      { type: 'line', from: [2.4, 0], to: [2.4, 1.2] }, { type: 'line', from: [1.8, 0], to: [1.8, -1.2] }],
+    attributes: [],
+  },
+  MCP_E_OC: {
+    description: 'Ổ cắm đôi 3 chấu +0.40 / double socket',
+    entities: [...dome(1.6), { type: 'line', from: [0.55, -0.9], to: [0.55, 0.9] }],
+    attributes: [],
+  },
+  MCP_E_OC_BEP: {
+    description: 'Ổ cắm đôi trên mặt bếp +1.10 / worktop socket',
+    entities: [...dome(1.6), { type: 'line', from: [0.55, -0.9], to: [0.55, 0.9] }, { type: 'line', from: [0, 0], to: [1.6, 0] }],
+    attributes: [],
+  },
+  MCP_E_OC_CAO: {
+    description: 'Ổ cắm đơn đặt cao (điều hòa +2.20, bình nóng lạnh +2.00) / high socket',
+    entities: [...dome(1.6), { type: 'line', from: [1.6, 0], to: [2.8, 0] }],
+    attributes: [],
+  },
+  MCP_E_OC_CN: {
+    description: 'Ổ cắm chống nước có nắp / weatherproof socket',
+    entities: [...dome(1.6), { type: 'hatch', boundary: domePts(1.6), pattern: 'SOLID' }],
+    attributes: [],
+  },
+  MCP_E_DH: {
+    description: 'Dàn lạnh điều hòa treo tường / air conditioner indoor unit',
+    entities: [{ type: 'polyline', points: [[0, -4.5], [2.2, -4.5], [2.2, 4.5], [0, 4.5]], closed: true },
+      ...[0.6, 1.1, 1.6].map((x) => ({ type: 'line', from: [x, -3.6], to: [x, 3.6] }))],
+    attributes: [],
+  },
+  MCP_E_NL: {
+    description: 'Bình nóng lạnh / water heater',
+    entities: [{ type: 'polyline', points: [[0, -2.2], [2.6, -2.2], [2.6, 2.2], [0, 2.2]], closed: true },
+      { type: 'polyline', points: [[1.3, -1.6], [0.7, -1], [1.9, -0.4], [0.7, 0.2], [1.9, 0.8], [1.3, 1.4]] }],
+    attributes: [],
+  },
+  MCP_E_BT: {
+    description: 'Đầu chờ bếp từ +0.60 / hob outlet',
+    entities: [{ type: 'polyline', points: [[0, -1.2], [2.4, -1.2], [2.4, 1.2], [0, 1.2]], closed: true },
+      { type: 'line', from: [0, -1.2], to: [2.4, 1.2] }, { type: 'line', from: [0, 1.2], to: [2.4, -1.2] }],
+    attributes: [],
+  },
+  MCP_E_QH: {
+    description: 'Quạt hút âm trần / ceiling extract fan',
+    entities: [{ type: 'circle', center: [0, 0], radius: 1.7 }, { type: 'circle', center: [0, 0], radius: 0.4 },
+      ...[90, 210, 330].map((a) => ({ type: 'line', from: polar(0.4, a), to: polar(1.5, a + 25) }))],
+    attributes: [],
+  },
+  MCP_E_TD: {
+    description: 'Tủ điện / distribution board',
+    entities: [{ type: 'polyline', points: [[0, -3], [2.4, -3], [2.4, 3], [0, 3]], closed: true },
+      { type: 'hatch', boundary: [[0, -3], [2.4, -3], [0, 3]], pattern: 'SOLID' }],
+    attributes: [],
+  },
+  MCP_E_TM: {
+    description: 'Tủ mạng, truyền hình / data cabinet',
+    entities: [{ type: 'polyline', points: [[0, -2], [2.4, -2], [2.4, 2], [0, 2]], closed: true },
+      { type: 'line', from: [0, -2], to: [2.4, 2] }, { type: 'line', from: [0, 2], to: [2.4, -2] }],
+    attributes: [],
+  },
+  MCP_E_CTO: {
+    description: 'Công tơ điện / electricity meter',
+    entities: [{ type: 'polyline', points: [[0, -2], [3, -2], [3, 2], [0, 2]], closed: true }, { type: 'circle', center: [1.5, 0], radius: 1 },
+      { type: 'line', from: [1.5, 0], to: [2.2, 0.7] }],
+    attributes: [],
+  },
+  MCP_E_MANG: {
+    description: 'Ổ cắm mạng RJ45 / data outlet',
+    entities: [{ type: 'polyline', points: [[0, -1.4], [2.2, 0], [0, 1.4]], closed: true }, { type: 'line', from: [0.7, -0.9], to: [0.7, 0.9] }],
+    attributes: [],
+  },
+  MCP_E_TV: {
+    description: 'Ổ cắm truyền hình / TV outlet',
+    entities: [{ type: 'polyline', points: [[0, -1.4], [2.2, 0], [0, 1.4]], closed: true }, { type: 'circle', center: [0.75, 0], radius: 0.4 }],
+    attributes: [],
+  },
+  MCP_E_BOM: {
+    description: 'Máy bơm / pump',
+    entities: [{ type: 'circle', center: [0, 0], radius: 2 }, { type: 'polyline', points: [[-1, -1.7], [2, 0], [-1, 1.7]] }],
+    attributes: [],
+  },
+  MCP_E_LEN: {
+    description: 'Đường dây, đường ống đi lên / xuống tầng / riser',
+    entities: [{ type: 'circle', center: [0, 0], radius: 1.3 }, { type: 'line', from: [0.92, 0.92], to: [2.8, 2.8] },
+      ...tri([3.2, 3.2], [2.2, 2.9], [2.9, 2.2])],
+    attributes: [],
+  },
+  MCP_E_TIEP_DIA: {
+    description: 'Tiếp địa / earth',
+    entities: [{ type: 'line', from: [0, 0], to: [0, -2] }, { type: 'line', from: [-2, -2], to: [2, -2] },
+      { type: 'line', from: [-1.3, -2.8], to: [1.3, -2.8] }, { type: 'line', from: [-0.6, -3.6], to: [0.6, -3.6] }],
+    attributes: [],
+  },
+  // ---- plumbing, paper mm
+  MCP_P_OD: {
+    description: 'Ống đứng / stack',
+    entities: [{ type: 'circle', center: [0, 0], radius: 1.5 }, { type: 'hatch', boundary: polarPts(0.6, 8), pattern: 'SOLID' }],
+    attributes: [],
+  },
+  MCP_P_VAN: {
+    description: 'Van khóa / gate valve',
+    entities: [{ type: 'polyline', points: [[-1.5, 1], [-1.5, -1], [1.5, 1], [1.5, -1]], closed: true }],
+    attributes: [],
+  },
+  MCP_P_DHN: {
+    description: 'Đồng hồ nước / water meter',
+    entities: [{ type: 'circle', center: [0, 0], radius: 1.8 }, { type: 'line', from: [-1.8, 0], to: [1.8, 0] }, ...tri([1.2, 0], [0.2, 0.6], [0.2, -0.6])],
+    attributes: [],
+  },
+  MCP_P_DIEM: {
+    description: 'Điểm cấp nước thiết bị / supply point',
+    entities: [{ type: 'circle', center: [0, 0], radius: 0.6 }, { type: 'hatch', boundary: polarPts(0.6, 10), pattern: 'SOLID' }],
+    attributes: [],
+  },
+  MCP_P_TT: {
+    description: 'Lỗ thông tắc / cleanout',
+    entities: [{ type: 'circle', center: [0, 0], radius: 1.1 }, { type: 'line', from: [-0.78, -0.78], to: [0.78, 0.78] }, { type: 'line', from: [-0.78, 0.78], to: [0.78, -0.78] }],
+    attributes: [],
+  },
 };
+
+/** Points of a dome (a socket outline): flat side on x = 0, bulging to +X with radius r. */
+function domePts(r, n = 8) {
+  const pts = [];
+  for (let i = 0; i <= n; i++) pts.push(polar(r, -90 + (180 * i) / n));
+  return pts;
+}
+function dome(r) {
+  return [{ type: 'arc', start: [0, -r], mid: [r, 0], end: [0, r] }, { type: 'line', from: [0, -r], to: [0, r] }];
+}
+function polar(r, deg) {
+  const a = (deg * Math.PI) / 180;
+  return [Math.round(r * Math.cos(a) * 1000) / 1000, Math.round(r * Math.sin(a) * 1000) / 1000];
+}
+function polarPts(r, n) {
+  return Array.from({ length: n }, (_, i) => polar(r, (360 * i) / n));
+}
 
 /** The definition of a symbol block (fixed, or a tag sized for its text: MCP_THE_<n>, MCP_THE_TRAN_<n>), or null. */
 export function symbolDef(name) {
   if (FIXED[name]) return { name, ...FIXED[name] };
-  let m = /^MCP_THE_(\d+)$/.exec(name);
+  let m = /^MCP_E_CT_([1-4])$/.exec(name);
+  if (m) {
+    // a switch of n gangs: one tick per gang at the end of the stem
+    const n = Number(m[1]);
+    return {
+      name, description: `Công tắc ${n} hạt / ${n}-gang switch`, attributes: [],
+      entities: [{ type: 'circle', center: [0, 0], radius: 0.9 }, { type: 'line', from: [0.9, 0], to: [3.6, 0] },
+        ...Array.from({ length: n }, (_, k) => ({ type: 'line', from: [3.6 - 0.75 * k, 0], to: [3.6 - 0.75 * k, 1.2] }))],
+    };
+  }
+  m = /^MCP_THE_(\d+)$/.exec(name);
   if (m) {
     const n = Number(m[1]), h = 2, w = tagWidth(n, h), hh = 1.9 * h;
     return {
@@ -145,11 +309,12 @@ export function symbolDef(name) {
     // a material note of an elevation: the code boxed, its description under the box; the leader ends at the
     // insertion point (under the note, or above it for the notes under the drawing)
     const below = Boolean(m[1]), n = Number(m[2]), h = 2.5, w = tagWidth(n, h), bh = 5;
-    const y0 = below ? -0.6 - bh : 4.2;
+    // the box next to the end of the leader, the description beyond the box (the leader does not run through it)
+    const y0 = below ? -0.6 - bh : 0.6;
     return {
       name, description: 'Ghi chú vật liệu mặt đứng: mã và mô tả / elevation material note',
       entities: [{ type: 'polyline', points: [[-w / 2, y0], [w / 2, y0], [w / 2, y0 + bh], [-w / 2, y0 + bh]], closed: true }],
-      attributes: [attr('MA', 'Mã', [0, y0 + bh / 2], h), attr('MO_TA', 'Mô tả', [0, below ? y0 - 3.2 : 1.2], 2, 'center')],
+      attributes: [attr('MA', 'Mã', [0, y0 + bh / 2], h), attr('MO_TA', 'Mô tả', [0, below ? y0 - 3.2 : y0 + bh + 1.2], 2, 'center')],
     };
   }
   return null;

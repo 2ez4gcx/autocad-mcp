@@ -1,0 +1,102 @@
+﻿BẢNG TÍNH ĐIỆN SƠ BỘ - kỹ sư điện có chứng chỉ hành nghề phải kiểm tra, tính lại và ký xác nhận
+
+BẢNG TÍNH PHỤ TẢI, CHỌN THIẾT BỊ BẢO VỆ VÀ DÂY DẪN
+TỦ;MẠCH;PHỤ TẢI;P (W);Ks;Ptt (W);Itt (A);BẢO VỆ;DÂY Cu/PVC;L (m);ΔU (%)
+TĐ-1;L1;Chiếu sáng: CẦU THANG, BẾP + ĂN;201,6;0,8;161,28;0,86;MCB 1P 10A;2x1,5+E1,5;37,77;0,44
+TĐ-1;L2;Chiếu sáng: BẾP + ĂN;78;0,8;62,4;0,33;MCB 1P 10A;2x1,5+E1,5;29,2;0,13
+TĐ-1;L3;Chiếu sáng: BẾP + ĂN, WC, SÂN PHƠI, PHÒNG KHÁCH;338,6;0,8;270,88;1,45;MCB 1P 10A;2x1,5+E1,5;52,35;1,04
+TĐ-1;L4;Chiếu sáng: PHÒNG KHÁCH;72;0,8;57,6;0,31;MCB 1P 10A;2x1,5+E1,5;30,41;0,13
+TĐ-1;L5;Chiếu sáng: PHÒNG KHÁCH;72;0,8;57,6;0,31;MCB 1P 10A;2x1,5+E1,5;52,44;0,22
+TĐ-1;L6;Chiếu sáng: PHÒNG KHÁCH;96;0,8;76,8;0,41;MCB 1P 10A;2x1,5+E1,5;44,44;0,25
+TĐ-1;S1;Ổ cắm: PHÒNG KHÁCH, BẾP + ĂN, WC, SÂN PHƠI;3200;0,2;640;3,42;RCBO 1P 30mA 20A;2x2,5+E2,5;40,86;1,14
+TĐ-1;S2;Ổ cắm: BẾP + ĂN;1900;0,2;380;2,03;RCBO 1P 30mA 20A;2x2,5+E2,5;20,63;0,34
+TĐ-1;ĐH1;Điều hòa: PHÒNG KHÁCH;2400;0,7;1680;12,83;MCB 1P 16A;2x2,5+E2,5;8;0,84
+TĐ-1;BT1;Bếp từ: BẾP + ĂN;4000;0,6;2400;21,39;MCB 1P 32A;2x4+E4;9,4;1,03
+TĐ-1;ĐH2;Điều hòa: BẾP + ĂN;1200;0,7;840;6,42;MCB 1P 16A;2x2,5+E2,5;11,47;0,6
+TĐ-1;NL1;Bình nóng lạnh: WC;2500;0,4;1000;13,37;RCBO 1P 30mA 20A;2x2,5+E2,5;15,04;1,65
+TĐ-1;BN1;Bơm nước: SÂN PHƠI;750;1;750;4,01;MCB 1P 16A;2x2,5+E2,5;13,29;0,44
+TĐ-1;TỔNG;"TẦNG 1; cáp cấp từ TĐ-T";16808,2;;8376,56;44,79;MCB 2P 50A;2x10+E6;3;0,27
+TĐ-2;L1;Chiếu sáng: CẦU THANG;24;0,8;19,2;0,1;MCB 1P 10A;2x1,5+E1,5;7,06;0,01
+TĐ-2;L2;Chiếu sáng: SẢNH;90;0,8;72;0,39;MCB 1P 10A;2x1,5+E1,5;24,24;0,13
+TĐ-2;L3;Chiếu sáng: PHÒNG NGỦ 1;215,6;0,8;172,48;0,92;MCB 1P 10A;2x1,5+E1,5;34,61;0,43
+TĐ-2;L4;Chiếu sáng: PHÒNG NGỦ 1, PHÒNG NGỦ 2;210,6;0,8;168,48;0,9;MCB 1P 10A;2x1,5+E1,5;48,51;0,6
+TĐ-2;L5;Chiếu sáng: PHÒNG NGỦ 2;54;0,8;43,2;0,23;MCB 1P 10A;2x1,5+E1,5;26,53;0,08
+TĐ-2;L6;Chiếu sáng: PHÒNG NGỦ 2;78;0,8;62,4;0,33;MCB 1P 10A;2x1,5+E1,5;29,82;0,13
+TĐ-2;L7;Chiếu sáng: KHO, PHÒNG NGỦ 2, WC, PHÒNG NGỦ 1;114;0,8;91,2;0,49;MCB 1P 10A;2x1,5+E1,5;52,41;0,35
+TĐ-2;S1;Ổ cắm: SẢNH, PHÒNG NGỦ 2, WC, KHO, PHÒNG NGỦ 1;2400;0,2;480;2,57;RCBO 1P 30mA 20A;2x2,5+E2,5;54,82;1,15
+TĐ-2;S2;Ổ cắm: PHÒNG NGỦ 1;300;0,2;60;0,32;RCBO 1P 30mA 20A;2x2,5+E2,5;11,5;0,03
+TĐ-2;ĐH1;Điều hòa: PHÒNG NGỦ 1;1800;0,7;1260;9,63;MCB 1P 16A;2x2,5+E2,5;5,39;0,42
+TĐ-2;ĐH2;Điều hòa: PHÒNG NGỦ 2;1200;0,7;840;6,42;MCB 1P 16A;2x2,5+E2,5;12,96;0,68
+TĐ-2;NL1;Bình nóng lạnh: WC;2500;0,4;1000;13,37;RCBO 1P 30mA 20A;2x2,5+E2,5;14,44;1,58
+TĐ-2;TỔNG;"TẦNG 2; cáp cấp từ TĐ-T";8986,2;;4268,96;22,83;MCB 2P 32A;2x6+E4;6,6;0,51
+TĐ-3;L1;Chiếu sáng: CẦU THANG;24;0,8;19,2;0,1;MCB 1P 10A;2x1,5+E1,5;7,06;0,01
+TĐ-3;L2;Chiếu sáng: SẢNH;90;0,8;72;0,39;MCB 1P 10A;2x1,5+E1,5;24,24;0,13
+TĐ-3;L3;Chiếu sáng: PHÒNG NGỦ 3;215,6;0,8;172,48;0,92;MCB 1P 10A;2x1,5+E1,5;34,61;0,43
+TĐ-3;L4;Chiếu sáng: PHÒNG NGỦ 3, PHÒNG THỜ;210,6;0,8;168,48;0,9;MCB 1P 10A;2x1,5+E1,5;48,51;0,6
+TĐ-3;L5;Chiếu sáng: PHÒNG THỜ;54;0,8;43,2;0,23;MCB 1P 10A;2x1,5+E1,5;26,53;0,08
+TĐ-3;L6;Chiếu sáng: PHÒNG THỜ, SÂN PHƠI;90;0,8;72;0,39;MCB 1P 10A;2x1,5+E1,5;36,75;0,2
+TĐ-3;L7;Chiếu sáng: PHÒNG THỜ, WC, PHÒNG NGỦ 3;78;0,8;62,4;0,33;MCB 1P 10A;2x1,5+E1,5;40,7;0,18
+TĐ-3;S1;Ổ cắm: SẢNH, PHÒNG NGỦ 3, PHÒNG THỜ, WC, SÂN PHƠI;4000;0,2;800;4,28;RCBO 1P 30mA 20A;2x2,5+E2,5;45,8;1,6
+TĐ-3;ĐH1;Điều hòa: PHÒNG NGỦ 3;1800;0,7;1260;9,63;MCB 1P 16A;2x2,5+E2,5;5,36;0,42
+TĐ-3;NL1;Bình nóng lạnh: WC;2500;0,4;1000;13,37;RCBO 1P 30mA 20A;2x2,5+E2,5;14,44;1,58
+TĐ-3;L8;Chiếu sáng: CẦU THANG, SÂN THƯỢNG;36;0,8;28,8;0,15;MCB 1P 10A;2x1,5+E1,5;11,71;0,02
+TĐ-3;S2;Ổ cắm: SÂN THƯỢNG;300;0,2;60;0,32;RCBO 1P 30mA 20A;2x2,5+E2,5;9,42;0,02
+TĐ-3;TỔNG;"TẦNG 3, TUM; cáp cấp từ TĐ-T";9398,2;;3758,56;20,1;MCB 2P 32A;2x6+E4;9,9;0,68
+TĐ-T;TỔNG;các tủ tầng, Kđt = 0,6;35192,6;0,6;9842,45;52,63;MCB 2P 63A;2x16 + E10;;
+
+BẢNG KHỐI LƯỢNG VẬT TƯ ĐIỆN
+STT;HẠNG MỤC;ĐƠN VỊ;KHỐI LƯỢNG;DIỄN GIẢI
+;THIẾT BỊ CHIẾU SÁNG;;;
+1;Đèn LED downlight âm trần 9W;cái;124;"TẦNG 1: 40; TẦNG 2: 44; TẦNG 3: 40"
+2;Đèn LED ốp trần 24W;cái;10;"TẦNG 1: 3; TẦNG 2: 3; TẦNG 3: 3; TUM: 1"
+3;Đèn gắn tường ngoài trời IP65 12W, cao +2,20;cái;5;"TẦNG 1: 1; TẦNG 2: 1; TẦNG 3: 2; TUM: 1"
+4;Quạt hút âm trần 30W;cái;3;"TẦNG 1: 1; TẦNG 2: 1; TẦNG 3: 1"
+5;Đèn LED dây hắt trần 10W/m;m;93,66;
+;CÔNG TẮC, Ổ CẮM, ĐẦU CHỜ;;;
+6;Công tắc 1 hạt;cái;9;
+7;Công tắc 2 hạt;cái;3;
+8;Công tắc 4 hạt;cái;6;
+9;Công tắc 2 chiều 1 hạt (cầu thang);cái;1;
+10;Công tắc 2 chiều 2 hạt (cầu thang);cái;3;
+11;Ổ cắm đôi 3 chấu 16A, cao +0,40;cái;16;"TẦNG 1: 4; TẦNG 2: 8; TẦNG 3: 4"
+12;Ổ cắm đôi trên mặt bếp, cao +1,10;cái;4;"TẦNG 1: 3; TẦNG 3: 1"
+13;"Ổ cắm đơn (điều hòa +2,20; bình nóng lạnh +2,00)";cái;9;"TẦNG 1: 4; TẦNG 2: 3; TẦNG 3: 2"
+14;"Ổ cắm chống nước có nắp (WC +1,25; máy giặt +1,20)";cái;6;"TẦNG 1: 2; TẦNG 2: 1; TẦNG 3: 2; TUM: 1"
+15;Đầu chờ bếp từ, cao +0,60;cái;1;TẦNG 1: 1
+16;Ổ cắm mạng RJ45 Cat6, cao +0,40;cái;4;"TẦNG 1: 1; TẦNG 2: 2; TẦNG 3: 1"
+17;Ổ cắm truyền hình, cao +0,40;cái;4;"TẦNG 1: 1; TẦNG 2: 2; TẦNG 3: 1"
+;THIẾT BỊ;;;
+18;Điều hòa treo tường 12000 BTU (kèm dàn nóng);bộ;2;
+19;Điều hòa treo tường 18000 BTU (kèm dàn nóng);bộ;2;
+20;Điều hòa treo tường 24000 BTU (kèm dàn nóng);bộ;1;
+;TỦ ĐIỆN, THIẾT BỊ BẢO VỆ;;;
+21;Tủ điện tổng TĐ-T, MCB 2P 63A;cái;1;
+22;Tủ điện TĐ-1, MCB 2P 50A;cái;1;
+23;Tủ điện TĐ-2, MCB 2P 32A;cái;1;
+24;Tủ điện TĐ-3, MCB 2P 32A;cái;1;
+25;MCB 1P 10A;cái;21;
+26;MCB 1P 16A;cái;6;
+27;MCB 1P 32A;cái;1;
+28;MCB 2P 32A;cái;3;gồm 1 lộ dự phòng ở TĐ-T
+29;MCB 2P 50A;cái;1;
+30;RCBO 1P 30mA 20A;cái;9;
+;DÂY DẪN, ỐNG LUỒN DÂY;;;
+31;Dây Cu/PVC 2x1,5+E1,5;m;769,89;699,9 x 1,1
+32;Dây Cu/PVC 2x10+E6;m;3,3;3 x 1,1
+33;Dây Cu/PVC 2x2,5+E2,5;m;311,76;283,42 x 1,1
+34;Dây Cu/PVC 2x4+E4;m;10,34;9,4 x 1,1
+35;Dây Cu/PVC 2x6+E4;m;18,15;16,5 x 1,1
+36;Cu/XLPE/PVC 2x16 + E10 (công tơ - tủ tổng);m;15;
+37;Ống luồn dây PVC D20 (theo tuyến dây);m;1113,44;1012,22 x 1,1
+38;Cáp mạng Cat6, cáp truyền hình RG6;m;77,92;
+;TIẾP ĐỊA;;;
+39;Cọc thép mạ đồng D16 L=2,4m;cái;3;
+40;Cáp đồng trần 25mm²;m;10;
+41;Dây tiếp địa Cu/PVC 1x16mm² (hệ tiếp địa - tủ tổng);m;10;
+42;Hộp kiểm tra tiếp địa;cái;1;
+
+XÁC NHẬN
+CHỨC DANH;HỌ VÀ TÊN;CHỨNG CHỈ HÀNH NGHỀ SỐ;CHỮ KÝ;NGÀY
+Người tính;;;;
+Kiểm tra;;;;
+Chủ trì thiết kế điện;;;;

@@ -1,0 +1,64 @@
+﻿BẢNG TÍNH CẤP THOÁT NƯỚC SƠ BỘ - kỹ sư cấp thoát nước có chứng chỉ hành nghề phải kiểm tra, tính lại và ký xác nhận
+
+BẢNG TÍNH CẤP THOÁT NƯỚC
+NỘI DUNG;GIÁ TRỊ;ĐƠN VỊ;GHI CHÚ
+Số người sử dụng;6;người;
+Tiêu chuẩn dùng nước;150;l/ng.ngđ;TCVN 4513:1988
+Lưu lượng ngày Q = N q / 1000;0,9;m³/ngđ;
+Bồn cầu két nước: 3 x N 0,5;1,5;đương lượng;
+Chậu rửa mặt (lavabo): 3 x N 0,33;0,99;đương lượng;
+Vòi sen tắm: 3 x N 0,67;2,01;đương lượng;
+Chậu rửa bếp: 1 x N 1;1;đương lượng;
+Máy giặt (van cấp, ống xả): 2 x N 1;2;đương lượng;
+Tổng đương lượng N;7,5;đương lượng;
+Tổng lưu lượng các thiết bị Σq0;1,53;l/s;
+q = 0,2 · N^(1/a) + K · N  (≤ Σq0);0,526;l/s;a = 2,15, K = 0,002
+Ống đứng d = √(4q / π v), v ≤ 1,5 m/s;21,13 → PPR D32;mm;PPR PN10
+Bồn mái (tối thiểu 1 ngày dùng);1500;l;
+Cột áp tại vòi sen cao nhất (chưa trừ tổn thất);4,6;m;đạt tối thiểu 3 m, dưới 8 m: nên lắp bơm tăng áp
+Thoát nước q = qc + q0 max;2,13;l/s;TCVN 4474:1987
+Thoát mưa: mái 78,92 m² chia 4 ống đứng, q = K F q5 / 10000;1,96;l/s mỗi ống;"K = 2; q5 = 496 l/s.ha; phễu D90 ≤ 5 l/s"
+Bể tự hoại Wn = N q t / 1000 (t = 1 ngày);0,9;m³;
+Cặn Wc = a T (100-W1) 0,7 1,2 N / ((100-W2) 1000);0,46;m³;"a 0,5 l; T 365 ngày; W1 95%; W2 90%"
+Bể tự hoại chọn;3;m³;2100 x 1200 x 1200
+
+BẢNG KHỐI LƯỢNG VẬT TƯ CẤP THOÁT NƯỚC
+STT;HẠNG MỤC;ĐƠN VỊ;KHỐI LƯỢNG;DIỄN GIẢI
+;ĐƯỜNG ỐNG;;;
+1;Ống cấp nước lạnh PPR D20;m;21,12;19,2 x 1,1
+2;Ống cấp nước lạnh PPR D25;m;62,31;56,64 x 1,1
+3;Ống cấp nước lạnh PPR D32;m;26,14;23,77 x 1,1
+4;Ống cấp nước nóng PPR D20;m;11,52;10,47 x 1,1
+5;Ống thoát xí uPVC D110;m;20,76;18,87 x 1,1
+6;Ống thoát nước rửa uPVC D60;m;34,89;31,72 x 1,1
+7;Ống thoát nước rửa uPVC D90;m;19,92;18,11 x 1,1
+8;Ống thoát nước rửa uPVC D110;m;19,32;17,56 x 1,1
+9;Ống thoát nước mưa uPVC D90;m;73,29;66,63 x 1,1
+10;Ống thông hơi uPVC D60;m;14,52;13,2 x 1,1
+;PHỤ KIỆN;;;
+11;Van khóa PPR (nhánh WC, bồn, bơm);cái;6;
+12;Phễu thu sàn D60 ngăn mùi;cái;8;
+13;Phễu thu nước mưa D90 có cầu chắn rác;cái;7;
+14;Chụp thông hơi D110 / D90 / D60;cái;3;
+15;Lỗ thông tắc chân ống đứng;cái;2;
+16;Phụ kiện cút, tê, măng sông: 25% giá trị ống;trọn gói;1;
+;THIẾT BỊ VỆ SINH;;;
+17;Bồn cầu két nước;bộ;3;"TẦNG 1: 1; TẦNG 2: 1; TẦNG 3: 1"
+18;Chậu rửa mặt (lavabo);bộ;3;"TẦNG 1: 1; TẦNG 2: 1; TẦNG 3: 1"
+19;Vòi sen tắm;bộ;3;"TẦNG 1: 1; TẦNG 2: 1; TẦNG 3: 1"
+20;Chậu rửa bếp;bộ;1;TẦNG 1: 1
+21;Máy giặt (van cấp, ống xả);bộ;2;"TẦNG 1: 1; TẦNG 3: 1"
+;THIẾT BỊ;;;
+22;Bình nóng lạnh 30L 2,5kW;bộ;3;
+23;Bồn inox 1500L kèm chân bồn;bộ;1;
+24;Máy bơm 0,75kW kèm phao điện;bộ;1;
+25;Đồng hồ nước D25 (cấp nước lắp);cái;1;
+;BỂ TỰ HOẠI, HỐ GA;;;
+26;Bể tự hoại 3 ngăn, dung tích hữu ích 3m³ (theo chi tiết);bể;1;
+27;Hố ga 600x600 nắp BTCT;cái;2;
+
+XÁC NHẬN
+CHỨC DANH;HỌ VÀ TÊN;CHỨNG CHỈ HÀNH NGHỀ SỐ;CHỮ KÝ;NGÀY
+Người tính;;;;
+Kiểm tra;;;;
+Chủ trì thiết kế cấp thoát nước;;;;

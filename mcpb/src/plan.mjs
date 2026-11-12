@@ -245,7 +245,7 @@ function openingBlock(kind, size, entities, origin, ex, ey, o, layer) {
 }
 
 /** Door, window and opening symbols (plan view, cut above the sill). */
-function openingSymbols(s, o, span, scale, name, center) {
+function openingSymbols(s, o, span, scale, name, center, avoid = []) {
   const type = o.type ?? 'door';
   const n = left(s.d);
   const e = [];
@@ -313,8 +313,25 @@ function openingSymbols(s, o, span, scale, name, center) {
     const swings = (type === 'door' || type === 'double_door') && (o.toward || o.side);
     const tagSide = swings ? -side : (center && cross(s.d, sub(center, s.a)) >= 0 ? -1 : 1);
     const face = tagSide > 0 ? s.o2 : s.o1;
-    // the code in a tag block, clear of the wall face
-    e.push(tagSym(String(o.tag), o.tag_at ? pt(o.tag_at, `${name}.tag_at`) : at(mid, face + tagSide * 4 * scale), scale, ROLE.text, 'hex'));
+    // the code in a tag block, clear of the wall face; where that place is taken (a stair behind the door) the tag
+    // goes to the other side of the wall, beyond the swing
+    const mk = (q) => tagSym(String(o.tag), q, scale, ROLE.text, 'hex');
+    let tag = mk(o.tag_at ? pt(o.tag_at, `${name}.tag_at`) : at(mid, face + tagSide * 4 * scale));
+    const taken = [...avoid, ...e.filter((x) => Array.isArray(x.box)).map((x) => x.box)];
+    if (!o.tag_at && taken.some((b) => boxesOverlap(b, tag.box))) {
+      // on the swing side: beyond the swing, else beside the door past either jamb
+      const other = tagSide > 0 ? s.o1 : s.o2;
+      const reach = swings ? (type === 'double_door' ? (span.to - span.from) / 2 : span.to - span.from) : 0;
+      const hw = (tag.box[2] - tag.box[0]) / 2, hh = (tag.box[3] - tag.box[1]) / 2;
+      const hn = Math.abs(n[0]) > 0.7 ? hw : hh, hs = Math.abs(n[0]) > 0.7 ? hh : hw;
+      const alts = [
+        at(mid, other - tagSide * (reach + 1.5 * scale + hn)),
+        at(span.to + 1.5 * scale + hs, other - tagSide * (1.5 * scale + hn)),
+        at(span.from - 1.5 * scale - hs, other - tagSide * (1.5 * scale + hn)),
+      ].map(mk);
+      tag = alts.find((x) => !taken.some((b) => boxesOverlap(b, x.box))) ?? tag;
+    }
+    e.push(tag);
   }
   return e;
 }
@@ -399,6 +416,22 @@ export function uStairGeom(st, height, name = 'stair') {
   };
 }
 
+/**
+ * The finished surfaces of a U stair of geometry g, as they are built (not as the plan shows them): tread (m²: the
+ * treads of both flights and the half landing), riser (m²: every riser), skirt (m: the skirting on the walls, stepped
+ * with the flights - a going and a riser for every step - and around the half landing), rail (m: the handrail along
+ * both flights on the slope, and across the well).
+ */
+export function uStairFinish(g) {
+  const goings = g.n1 - 1 + g.n2 - 1, risers = g.n1 + g.n2;
+  return {
+    tread: (goings * g.going * g.w + g.landing * (g.b1 - g.b0)) / 1e6,
+    riser: (risers * g.riser * g.w) / 1e6,
+    skirt: (goings * g.going + risers * g.riser + 2 * g.landing + (g.b1 - g.b0)) / 1000,
+    rail: (Math.hypot((g.n1 - 1) * g.going, g.n1 * g.riser) + Math.hypot((g.n2 - 1) * g.going, g.n2 * g.riser) + g.gap) / 1000,
+  };
+}
+
 /** Plan of a U stair: outline, treads, landing, well, walking lines with arrows, UP / DOWN labels, cut line. */
 export function uStairPlan(g, mode, scale, L, lang, entities, labelGap = 3 * scale) {
   const at = (a, b) => P(g.at(a, b));
@@ -432,13 +465,13 @@ export function uStairPlan(g, mode, scale, L, lang, entities, labelGap = 3 * sca
       pl([[a0 + going / 2, m1], [cutA - going * 0.6, m1]]);
       arrow(cutA - going * 0.6, m1, 1);
     }
-    textAt(LABELS[lang].up, a0 - labelGap, m1);
+    if (labelGap !== null) textAt(LABELS[lang].up, a0 - labelGap, m1);
   }
   if (mode === 'down' || mode === 'both') {
     pl([[start2 + going / 2, m2], [mL, m2], ...(mode === 'down' ? [[mL, m1], [a0 + going / 2, m1]] : [[mL, m1]])]);
     if (mode === 'down') arrow(a0 + going / 2, m1, -1);
     else pl([[mL - ah / 2, m1 + ah], [mL, m1], [mL + ah / 2, m1 + ah]]);
-    textAt(LABELS[lang].down, a0 - labelGap, m2);
+    if (labelGap !== null) textAt(LABELS[lang].down, a0 - labelGap, m2);
   }
 }
 
@@ -450,6 +483,13 @@ export function buildPlan(spec) {
   const walls = buildWalls(spec);
   const entities = [];
   const notes = [];
+  const wallBoxes = walls.flatMap((w) => w.segs.map((s) => bboxOf(segRect(s))));
+  const stairBoxes = (spec.stairs || []).concat(spec.stairs_below || []).filter((st) => st.region).map((st) => bboxOf(st.region.map((q, k) => pt(q, `stairs.region[${k}]`))));
+  // the far half of the half landings of the U stairs, beyond the walking line (filled where the stairs are drawn): a
+  // stairwell's name stands there
+  const stairLandings = [];
+  // stair_labels false: the stairs keep their arrows, not the UP / DOWN texts (plans of other trades)
+  const stairLabels = spec.stair_labels !== false;
 
   // ---- openings: cuts + symbols (centre of the wall axes: tells inside from outside)
   const axisPts = walls.flatMap((w) => w.segs.flatMap((s) => [s.a, s.b]));
@@ -466,7 +506,7 @@ export function buildPlan(spec) {
     }
     bySeg.set(key, [...(bySeg.get(key) || []), { ...span, i }]);
     cuts.push(segRect(s, span.from, span.to, 1));
-    entities.push(...openingSymbols(s, o, span, scale, name, center));
+    entities.push(...openingSymbols(s, o, span, scale, name, center, [...stairBoxes, ...wallBoxes]));
   });
 
   // ---- wall pieces grouped by material (one outline + hatch per material)
@@ -588,62 +628,6 @@ export function buildPlan(spec) {
     }
   }
 
-  // ---- interior dimensions: through every room (not the stairwells), wall face to wall face across the building
-  // between the inner faces of its outer walls, one chain each way, clear of the room names; a line that would pass
-  // through an opening or a room name moves further from its room's name
-  if (spec.interior_dimensions && box && walls.length) {
-    const segs = walls.filter((w) => w.height === undefined && spec.walls?.[w.index]?.height === undefined).flatMap((w) => w.segs);
-    const stairBoxes = (spec.stairs || []).concat(spec.stairs_below || []).filter((st) => st.region).map((st) => bboxOf(st.region.map((q, k) => pt(q, `stairs.region[${k}]`))));
-    const done = new Set();
-    // the name and area of every room (name on its point, area under it), with a margin
-    const half = (rm) => (Math.max(6, [...String(rm.name ?? '')].length) * 0.9 + 1) * scale;
-    const labels = (spec.rooms || []).filter((rm) => rm.at).map((rm) => {
-      const a = pt(rm.at, 'rooms.at');
-      return [a[0] - half(rm), a[1] - 6 * scale, a[0] + half(rm), a[1] + 2.5 * scale];
-    });
-    // faces met by the line c (y = c for a horizontal chain, x = c for a vertical one), or null when it meets an
-    // opening or a room name
-    const facesOn = (horiz, c) => {
-      if (labels.some((b) => (horiz ? c > b[1] && c < b[3] : c > b[0] && c < b[2]))) return null;
-      const out = [];
-      for (const s of segs) {
-        const across = horiz ? Math.abs(s.d[0]) < 1e-6 : Math.abs(s.d[1]) < 1e-6;
-        if (!across) continue;
-        const k = horiz ? 1 : 0, j = horiz ? 0 : 1;
-        const lo = Math.min(s.a[k], s.b[k]), hi = Math.max(s.a[k], s.b[k]);
-        const half = s.t / 2 + 1;
-        if (c < lo - half || c > hi + half) continue;
-        const t = (c - s.a[k]) / s.d[k];
-        if ((bySeg.get(`${s.wall}:${s.index}`) || []).some((op) => t > op.from - 50 && t < op.to + 50)) return null;
-        const n = left(s.d);
-        for (const o of [s.o1, s.o2]) out.push(Math.round((s.a[j] + n[j] * o) * 10) / 10);
-      }
-      return [...new Set(out)].sort((p, q) => p - q);
-    };
-    for (const rm of spec.rooms || []) {
-      if (!rm.at) continue;
-      const at = pt(rm.at, 'rooms.at');
-      if (stairBoxes.some((b) => at[0] > b[0] && at[0] < b[2] && at[1] > b[1] && at[1] < b[3])) continue;
-      for (const horiz of [true, false]) {
-        // below the name and area, or beside them
-        const base = horiz ? at[1] - 9 * scale : at[0] - half(rm) - 2 * scale;
-        let faces = null, c = base;
-        for (const dc of [0, -4, -8, -12, -16, 4, 8, 12, 16]) {
-          c = base + dc * scale;
-          faces = facesOn(horiz, c);
-          if (faces) faces = faces.filter((f) => Math.abs(f - (horiz ? box.x0 : box.y0)) > 1 && Math.abs(f - (horiz ? box.x1 : box.y1)) > 1);
-          if (faces && faces.length >= 2) break;
-        }
-        if (!faces || faces.length < 2) continue;
-        const key = `${horiz}:${faces.join(',')}`;
-        if (done.has(key)) continue;
-        done.add(key);
-        const p = faces.map((f) => (horiz ? [f, c] : [c, f]));
-        entities.push({ type: 'dim_chain', points: p.map(P), direction: horiz ? 'horizontal' : 'vertical', at: P(horiz ? [faces[0], c] : [c, faces[0]]), style: dimStyle, layer: L.dims });
-      }
-    }
-  }
-
   // ---- grids: lines past the dimension chains, bubbles at both ends
   if (box && (grids.x.length || grids.y.length)) {
     const ext = num(spec.grids?.extend ?? 0, 'grids.extend', { min: 0 });
@@ -672,15 +656,51 @@ export function buildPlan(spec) {
   // same stair: both), or only arriving from the floor below (down)
   const floorH = num(spec.heights?.top ?? 3600, 'heights.top', { positive: true });
   const same = (p, q) => JSON.stringify(p.region) === JSON.stringify(q.region);
+  // the walls across the foot of the flights (in front of the first riser): the UP / DOWN labels go beyond them, and a
+  // foot closed by a wall with no opening is reported (no floor landing)
+  const cutBoxes = cuts.map((c) => bboxOf(c));
+  const inBox = (q, bx2) => q[0] > bx2[0] && q[0] < bx2[2] && q[1] > bx2[1] && q[1] < bx2[3];
+  const footOf = (g, name, range) => {
+    const corners = [g.at(g.a0 - 6 * scale, g.b0), g.at(g.a0, g.b0), g.at(g.a0, g.b1), g.at(g.a0 - 6 * scale, g.b1)];
+    let gap = 3 * scale;
+    for (const s of walls.flatMap((w) => w.segs)) {
+      // a wall along the flights (the side of the stairwell) does not stand across their foot
+      if (Math.abs(dot(s.d, g.u)) > 0.7 * Math.hypot(s.d[0], s.d[1])) continue;
+      const rect = segRect(s);
+      if (!boxesOverlap(bboxOf(rect), bboxOf(corners))) continue;
+      const far = Math.min(...rect.map((q) => dot(q, g.u)));
+      gap = Math.max(gap, g.a0 - far + 0.8 * scale + 1.25 * scale);
+    }
+    // a landing as deep as the flight is wide (900 at least is asked for) in front of the first riser
+    const need = Math.min(g.w, 900);
+    let blocked = 0, all = 0;
+    for (const da of [60, need / 2, need - 60]) {
+      for (let k = 0; k < 5; k++) {
+        const q = g.at(g.a0 - da, range[0] + ((k + 0.5) * (range[1] - range[0])) / 5);
+        all++;
+        if (wallBoxes.some((bx2) => inBox(q, bx2)) && !cutBoxes.some((bx2) => inBox(q, bx2))) blocked++;
+      }
+    }
+    if (blocked >= all / 5) {
+      notes.push(`${name}: no floor landing in front of the flights: a wall stands within ${Math.round(need)} mm of the first riser. Open that wall across the flight, or shorten the stair so that a landing at least ${Math.round(g.w)} deep (the flight width) is left.`);
+    }
+    return gap;
+  };
   (spec.stairs || []).forEach((st, i) => {
     if (st.type !== 'u') return;
     const g = uStairGeom(st, floorH, `stairs[${i}]`);
     notes.push(...g.warnings);
-    uStairPlan(g, (spec.stairs_below || []).some((b) => same(b, st)) ? 'both' : 'up', scale, L, lang, entities);
+    stairLandings.push(bboxOf([g.at(g.a0 + g.run + g.landing / 2, g.b0), g.at(g.a1, g.b1)]));
+    const both = (spec.stairs_below || []).some((b) => same(b, st));
+    const gap = footOf(g, `stairs[${i}]`, both ? [g.b0, g.b1] : g.f1);
+    uStairPlan(g, both ? 'both' : 'up', scale, L, lang, entities, stairLabels ? gap : null);
   });
   (spec.stairs_below || []).forEach((st, i) => {
     if ((spec.stairs || []).some((x) => x.type === 'u' && same(x, st))) return;
-    uStairPlan(uStairGeom(st, st.height ?? floorH, `stairs_below[${i}]`), 'down', scale, L, lang, entities);
+    const g = uStairGeom(st, st.height ?? floorH, `stairs_below[${i}]`);
+    stairLandings.push(bboxOf([g.at(g.a0 + g.run + g.landing / 2, g.b0), g.at(g.a1, g.b1)]));
+    const gap = footOf(g, `stairs_below[${i}]`, g.f2);
+    uStairPlan(g, 'down', scale, L, lang, entities, stairLabels ? gap : null);
   });
 
   // ---- balconies: slab edge and railing (double line) on the sides away from the building
@@ -721,7 +741,7 @@ export function buildPlan(spec) {
     entities.push({ type: 'polyline', points: [corner(g / 2, w / 2), tip], layer: L.stair });
     const ah = Math.min(g * 0.8, 3 * scale);
     entities.push({ type: 'polyline', points: [corner(run - g / 2 - ah, w / 2 - ah / 2), tip, corner(run - g / 2 - ah, w / 2 + ah / 2)], layer: L.stair });
-    const lbl = st.label ?? LABELS[lang].up;
+    const lbl = stairLabels ? st.label ?? LABELS[lang].up : null;
     if (lbl) {
       entities.push({
         type: 'text', text: lbl, at: corner(g * 0.5, w / 2 - 3 * scale), height: 2.5 * scale, rotation: (a * 180) / Math.PI,
@@ -731,7 +751,7 @@ export function buildPlan(spec) {
   });
 
   // ---- level marks (+0.000), section marks, north arrow
-  const wallBoxes = walls.flatMap((w) => w.segs.map((s) => bboxOf(segRect(s))));
+  const markBoxes = [];
   (spec.levels || []).forEach((lv, i) => {
     const at = pt(lv.at, `levels[${i}].at`);
     // the mark reads to the right, or to the left when a wall is in the way on the right
@@ -739,6 +759,7 @@ export function buildPlan(spec) {
     const leftBox = [at[0] - 12 * scale, at[1], at[0] + 1.5 * scale, at[1] + 6 * scale];
     const flip = lv.side === 'left' || (lv.side === undefined && wallBoxes.some((b) => boxesOverlap(b, right)) && !wallBoxes.some((b) => boxesOverlap(b, leftBox)));
     entities.push(sym(flip ? 'MCP_COTE_TRAI' : 'MCP_COTE', at, { scale, attrs: { COTE: String(lv.value ?? '±0.000') }, layer: L.symbol }));
+    markBoxes.push(flip ? leftBox : right);
   });
   const drawn = boundsOf(entities, wallBoxes);
   (spec.sections || []).forEach((sc, i) => {
@@ -794,6 +815,20 @@ export function buildPlan(spec) {
         }
         return true;
       };
+      // the name of a stairwell stands alone (no area) on the half landing beyond the walking line, not over the treads
+      const well = stairBoxes.findIndex((b) => out.at[0] > b[0] && out.at[0] < b[2] && out.at[1] > b[1] && out.at[1] < b[3]);
+      const nameW = [...out.name].length * 0.8 * roomH;
+      const land = well >= 0 && r.hatch === undefined
+        ? stairLandings.find((b) => boxesOverlap(b, stairBoxes[well]) && b[2] - b[0] >= nameW + roomH && b[3] - b[1] >= 1.6 * roomH) : null;
+      if (land) {
+        const c = P([(land[0] + land[2]) / 2, (land[1] + land[3]) / 2]);
+        entities.push({ type: 'text', text: out.name, at: c, height: roomH, align: 'middle_center', layer: L.room_tag, style: TEXT_STYLE });
+        out.label = false;
+        notes.push(`${out.name}: the name alone on the half landing of the stair, clear of the treads (rooms[${i}].keep_at keeps the name and area at its point)`);
+        if (r.number !== undefined) out.number = String(r.number);
+        if (r.area_m2 !== undefined) out.area_m2 = num(r.area_m2, `rooms[${i}].area_m2`);
+        return out;
+      }
       if (doorBoxes.some((b) => boxesOverlap(b, boxAt(out.at)))) {
         let best = null;
         for (let dx = -1200; dx <= 1200; dx += 100) {
@@ -817,6 +852,90 @@ export function buildPlan(spec) {
     }
     return out;
   });
+
+  // ---- interior dimensions: the clear width and length of every room (not the stairwells), wall face to wall face,
+  // each on a line that is clear of the room names, door swings, tags, level marks, stairs, the walls beside it and
+  // the dimensions already placed (the text above a horizontal line, left of a vertical one). A room with no clear
+  // line for a dimension gets a note, not a dimension over something else.
+  if (spec.interior_dimensions && box && walls.length) {
+    const segs = walls.flatMap((w) => w.segs);
+    const th = 2.5 * scale;
+    const labelBox = (rm) => {
+      const w = Math.max(String(rm.name ?? '').length, 9) * 0.78 * roomH, h = 3.4 * roomH;
+      return [rm.at[0] - w / 2, rm.at[1] - h / 2, rm.at[0] + w / 2, rm.at[1] + h / 2];
+    };
+    const obstacles = [
+      ...rooms.filter((rm) => rm.label !== false).map(labelBox),
+      ...entities.filter((e) => e.type === 'block' && Array.isArray(e.box)).map((e) => e.box),
+      ...entities.filter((e) => e.type === 'text' && Array.isArray(e.at)).map((e) => {
+        const w = [...String(e.text)].length * 0.8 * e.height;
+        return [e.at[0] - w, e.at[1] - e.height, e.at[0] + w, e.at[1] + e.height];
+      }),
+      ...markBoxes, ...stairBoxes,
+    ];
+    // the wall faces on both sides of v on the line c (horizontal: the line y = c, measured along x); null when a side
+    // has no wall or, when strict, the line meets an opening of that wall (there is no face to dimension to)
+    const spanAt = (horiz, c, v, strict = true) => {
+      const k = horiz ? 1 : 0, j = horiz ? 0 : 1;
+      let lo = null, hi = null;
+      for (const s of segs) {
+        const across = horiz ? Math.abs(s.d[0]) < 1e-6 : Math.abs(s.d[1]) < 1e-6;
+        if (!across) continue;
+        const a0 = Math.min(s.a[k], s.b[k]), a1 = Math.max(s.a[k], s.b[k]);
+        if (c < a0 - s.t / 2 - 1 || c > a1 + s.t / 2 + 1) continue;
+        const t = (c - s.a[k]) / s.d[k];
+        const open = (bySeg.get(`${s.wall}:${s.index}`) || []).some((op) => t > op.from - 50 && t < op.to + 50);
+        const n = left(s.d);
+        for (const o of [s.o1, s.o2]) {
+          const f = s.a[j] + n[j] * o;
+          if (f <= v && (!lo || f > lo.f)) lo = { f, open };
+          if (f >= v && (!hi || f < hi.f)) hi = { f, open };
+        }
+      }
+      if (!lo || !hi || hi.f - lo.f < 1 || (strict && (lo.open || hi.open))) return null;
+      return [Math.round(lo.f * 10) / 10, Math.round(hi.f * 10) / 10];
+    };
+    const placed = [];
+    for (const rm of rooms) {
+      if (stairBoxes.some((bx2) => rm.at[0] > bx2[0] && rm.at[0] < bx2[2] && rm.at[1] > bx2[1] && rm.at[1] < bx2[3])) continue;
+      const lb = labelBox(rm);
+      for (const horiz of [true, false]) {
+        const j = horiz ? 0 : 1, k = horiz ? 1 : 0;
+        // where the line may go: between the walls around the name, across the dimension
+        const ext = spanAt(!horiz, rm.at[j], rm.at[k], false);
+        if (!ext) continue;
+        // just below (left of) the name and further from it, then above (right of) it
+        const first = horiz ? lb[1] - th - 3 * scale : lb[0] - 3 * scale;
+        const second = horiz ? lb[3] + 3 * scale : lb[2] + th + 3 * scale;
+        const cands = [];
+        for (let d = 0; d <= 250; d++) cands.push([first - d * scale, d], [second + d * scale, d + 0.5]);
+        cands.sort((p, q) => p[1] - q[1]);
+        let ok = false;
+        for (const [c] of cands) {
+          if (c < ext[0] + 1.4 * scale || c > ext[1] - 1.4 * scale) continue;
+          const sp = spanAt(horiz, c, rm.at[j]);
+          if (!sp) continue;
+          const [lo, hi] = sp;
+          const tw = String(Math.round(hi - lo)).length * 0.8 * th + 0.6 * scale;
+          if (hi - lo < tw + scale) continue;
+          const mid = (lo + hi) / 2;
+          const lineBox = horiz ? [lo + 1, c - 1.2 * scale, hi - 1, c + 1.2 * scale] : [c - 1.2 * scale, lo + 1, c + 1.2 * scale, hi - 1];
+          const textBox = horiz ? [mid - tw / 2, c + 0.2 * scale, mid + tw / 2, c + th + 1.1 * scale] : [c - th - 1.1 * scale, mid - tw / 2, c - 0.2 * scale, mid + tw / 2];
+          const hit = (bx2) => boxesOverlap(bx2, lineBox) || boxesOverlap(bx2, textBox);
+          // two dimension lines may cross; a text keeps clear of every line and text
+          if (obstacles.some(hit) || wallBoxes.some(hit) || placed.some((d) => hit(d.text) || boxesOverlap(d.line, textBox))) continue;
+          placed.push({ line: lineBox, text: textBox });
+          entities.push({
+            type: 'dim_chain', points: [P(horiz ? [lo, c] : [c, lo]), P(horiz ? [hi, c] : [c, hi])], direction: horiz ? 'horizontal' : 'vertical',
+            at: P(horiz ? [lo, c] : [c, lo]), style: dimStyle, layer: L.dims,
+          });
+          ok = true;
+          break;
+        }
+        if (!ok) notes.push(`${rm.name}: no clear line for its ${horiz ? 'width' : 'length'} dimension (names, doors and walls leave no room): not dimensioned inside`);
+      }
+    }
+  }
 
   if (!walls.length) notes.push('No walls: only the other elements were drawn.');
   return {

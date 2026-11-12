@@ -56,15 +56,36 @@ const LAYER_TABLE = [
   ['X-REF', 8, 'Continuous', 0.09, true, 'Imported reference drawings', 'Bản vẽ tham chiếu nhập vào', 'reference'],
 ];
 
-export const LAYERS = LAYER_TABLE.map(([name, color, linetype, lineweight, plot, en, vi, role]) =>
-  ({ name, color, linetype, lineweight, plot, en, vi, role }));
+// The electrical and plumbing sets (setup_layers standard "mep"): devices, wiring, pipes by system, equipment, notes.
+const MEP_LAYER_TABLE = [
+  ['E-LITE-SWCH', 2, 'Continuous', 0.25, true, 'Switches', 'Công tắc', 'switch'],
+  ['E-LITE-WIRE', 2, 'Continuous', 0.18, true, 'Lighting wiring', 'Dây dẫn chiếu sáng', 'light_wire'],
+  ['E-POWR', 1, 'Continuous', 0.25, true, 'Sockets and outlets', 'Ổ cắm, đầu chờ thiết bị', 'power'],
+  ['E-POWR-WIRE', 1, 'Continuous', 0.18, true, 'Power wiring', 'Dây dẫn ổ cắm, động lực', 'power_wire'],
+  ['E-POWR-EQPM', 6, 'Continuous', 0.25, true, 'Electrical equipment: boards, air conditioners, water heaters, pumps', 'Thiết bị điện: tủ điện, điều hòa, bình nóng lạnh, bơm', 'elec_equipment'],
+  ['E-COMM', 4, 'DASHED', 0.18, true, 'Data and TV outlets and cables', 'Điện nhẹ: mạng, truyền hình', 'comm'],
+  ['E-GRND', 3, 'Continuous', 0.35, true, 'Earthing', 'Tiếp địa', 'earth'],
+  ['E-ANNO-TEXT', 7, 'Continuous', 0.18, true, 'Electrical notes, circuit names, diagrams', 'Ghi chú điện, tên mạch, sơ đồ', 'elec_text'],
+  ['P-DOMW-CWTR', 5, 'Continuous', 0.35, true, 'Cold water pipes', 'Ống cấp nước lạnh', 'cold_water'],
+  ['P-DOMW-HWTR', 1, 'DASHED', 0.35, true, 'Hot water pipes', 'Ống cấp nước nóng', 'hot_water'],
+  ['P-SANR-SOIL', 6, 'Continuous', 0.5, true, 'Soil pipes (WC)', 'Ống thoát xí', 'soil'],
+  ['P-SANR-WAST', 3, 'DASHED', 0.35, true, 'Waste pipes', 'Ống thoát nước rửa', 'waste'],
+  ['P-SANR-VENT', 8, 'HIDDEN', 0.25, true, 'Vent pipes', 'Ống thông hơi', 'vent'],
+  ['P-STRM', 4, 'DASHDOT', 0.35, true, 'Rainwater pipes', 'Ống thoát nước mưa', 'rain'],
+  ['P-EQPM', 6, 'Continuous', 0.35, true, 'Plumbing equipment: tank, pump, septic tank, manholes', 'Thiết bị cấp thoát nước: bồn, bơm, bể tự hoại, hố ga', 'plumb_equipment'],
+  ['P-UGND', 3, 'HIDDEN', 0.35, true, 'Pipes and tanks under the ground floor slab', 'Ống, bể ngầm dưới sàn tầng 1', 'underground'],
+  ['P-ANNO-TEXT', 7, 'Continuous', 0.18, true, 'Plumbing notes, pipe names, diagrams', 'Ghi chú cấp thoát nước, ký hiệu ống, sơ đồ', 'plumb_text'],
+];
+
+const layerRow = (mep) => ([name, color, linetype, lineweight, plot, en, vi, role]) => ({ name, color, linetype, lineweight, plot, en, vi, role, mep });
+export const LAYERS = [...LAYER_TABLE.map(layerRow(false)), ...MEP_LAYER_TABLE.map(layerRow(true))];
 
 /** Standard layer name by role (wall, door, dims...). */
 export const ROLE = Object.fromEntries(LAYERS.map((l) => [l.role, l.name]));
 
-/** Layer specs for setup_layers / layer_styles in the user's language. */
-export function layerSpecs(language = 'vi') {
-  return LAYERS.map((l) => ({
+/** Layer specs for setup_layers / layer_styles in the user's language (mep: also the electrical and plumbing layers). */
+export function layerSpecs(language = 'vi', mep = true) {
+  return LAYERS.filter((l) => mep || !l.mep).map((l) => ({
     name: l.name, color: l.color, linetype: l.linetype, lineweight: l.lineweight, plot: l.plot,
     description: language === 'en' ? l.en : l.vi,
   }));
@@ -215,7 +236,12 @@ const capsWidth = (s, h) => [...String(s)].reduce((w, ch) => w + (ch === ' ' ? 0
  * The title under a drawing (as Vietnamese construction sets do): the name, a line under it, the scale written 1/50
  * under the line. h = the name's height in paper mm.
  */
-export function viewTitle(text, cx, y, scale, layer, lang = 'vi', h = 5, showScale = true) {
+// the language of the tool call being drawn (set by the server before every tool): what a title falls back to
+let drawingLanguage = 'vi';
+export const setDrawingLanguage = (lang) => { drawingLanguage = lang === 'en' ? 'en' : 'vi'; };
+export const getDrawingLanguage = () => drawingLanguage;
+
+export function viewTitle(text, cx, y, scale, layer, lang = drawingLanguage, h = 5, showScale = true) {
   const w = capsWidth(text, h * scale) / 2 + scale;
   const r = (v) => Math.round(v * 100) / 100;
   return [
@@ -348,17 +374,17 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
   }
   // revisions: a header and four rows
   {
-    const [b, t] = at.rev, c1 = x0 + 8, c2 = x1 - 12;
+    const [b, t] = at.rev, c1 = x0 + 11, c2 = x1 - 13;
     line(c1, b, c1, t);
     line(c2, b, c2, t);
     line(x0, t - 7, x1, t - 7);
-    label(x0 + 4, t - 4.2, T.rev[0], 1.4, 'center');
+    label(x0 + 5.5, t - 4.2, T.rev[0], 1.4, 'center');
     label((c1 + c2) / 2, t - 4.2, T.rev[1], 1.4, 'center');
-    label(x1 - 6, t - 4.2, T.rev[2], 1.4, 'center');
+    label(x1 - 6.5, t - 4.2, T.rev[2], 1.4, 'center');
     for (let i = 1; i <= 4; i++) {
       const yy = t - 7 - 4 * i;
       if (i < 4) line(x0, yy, x1, yy);
-      label(x0 + 4, yy + 1.2, String(i), 1.6, 'center');
+      label(x0 + 5.5, yy + 1.2, String(i), 1.6, 'center');
     }
   }
   label(x0 + 1.5, at.notes[1] - 3, T.notes);

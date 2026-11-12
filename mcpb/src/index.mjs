@@ -21,7 +21,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod';
 import { buildBuilding, buildElevation, buildingAssumed, buildSection, floorsOf } from './elevation.mjs';
 import { buildPlan, planAssumptions, PlanError } from './plan.mjs';
-import { coverSheet, dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, titleBlock, viewStyles, viewTitle } from './standards.mjs';
+import { coverSheet, dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, setDrawingLanguage, titleBlock, viewStyles, viewTitle } from './standards.mjs';
 import { beamDetail, beamSchedule, footingDetail, framingPlan, rcSection, rebarSchedule, structureNotes } from './structure.mjs';
 import { symbolDef } from './symbols.mjs';
 import { doorSchedule } from './doors.mjs';
@@ -29,12 +29,22 @@ import { roofPlan } from './roof.mjs';
 import { stairDetail } from './stair.mjs';
 import { calcCsv, calcSheet, CONCRETE, STEEL, structuralCalc } from './calc.mjs';
 import { boqCsv, boqSheets } from './boq.mjs';
+import { ruleSet } from './rules.mjs';
+import { structurePrisms } from './solids.mjs';
 import { finishCsv, finishQuantities, finishSheet } from './archboq.mjs';
+import * as SURF from './surfaces.mjs';
 import { finishWorkbook, kcWorkbook } from './workbooks.mjs';
 import {
-  ceilingPlan, centroid, cleanPoly, elevationKey, entBox, entityBounds, floorFinishPlan, freePoint, FURNITURE_DOC, furniturePlan, generalNotes, inside, notesBlock, shiftEntity, wallFinishPlan,
-  interiorElevation, joineryDetail, labelSize, materialSchedule, polyArea, resolveFinish, resolveItems, shiftSpec,
+  ceilingPlan, centroid, cleanPoly, elevationKey, entBox, entityBounds, floorFinishPlan, footprints, freePoint, FURNITURE_DOC, furniturePlan, generalNotes, inside, notesBlock, shiftEntity, wallFinishPlan,
+  interiorElevation, joineryDetail, labelBox, labelSize, materialSchedule, polyArea, resolveFinish, resolveItems, shiftSpec, textWidth,
 } from './interior.mjs';
+import { LIGHT_BLOCKS } from './symbols.mjs';
+import { calcSheetOf, defaultFixtures, legend as mepLegend, maskTexts, signOff, tablesCsv, wallBoxes } from './mep.mjs';
+import {
+  DEVICES, electricalBasis, electricalDesign, electricalNotes, electricalPlan, electricalQuantities, electricalTables, riserDiagram, singleLineDiagram,
+} from './electrical.mjs';
+import { FIXTURES, plumbingBasis, plumbingDesign, plumbingNotes, plumbingPlan, plumbingQuantities, plumbingRisers, plumbingTables, septicDetail } from './plumbing.mjs';
+import { electricalWorkbook, plumbingWorkbook } from './mepbooks.mjs';
 
 /* global __AUTOCAD_MCP_VERSION__ */
 const VERSION = typeof __AUTOCAD_MCP_VERSION__ !== 'undefined' ? __AUTOCAD_MCP_VERSION__ : '0.0.0-dev';
@@ -305,6 +315,14 @@ function text(result) {
 }
 
 function bridgeTool(name, description, inputSchema, annotations, prep = (a) => a) {
+// every tool draws in the language of its call (its language argument), else in the language of the session: the
+// view titles of the engines that are not handed a language follow it
+const registerTool = server.registerTool.bind(server);
+server.registerTool = (name, def, handler) => registerTool(name, def, (args, extra) => {
+  setDrawingLanguage(args?.language ?? language);
+  return handler(args, extra);
+});
+
   server.registerTool(name, { description, inputSchema, annotations }, async (args) => text(await call(name, prep(args))));
 }
 
@@ -400,6 +418,39 @@ const csvCell = (v, sep = ',') => {
   return s.includes(sep) || /["\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
+/** AutoCAD measures prisms and faces (drawing units, mm) and the result comes back in m³ and m². */
+async function measureModel({ solids = [], faces = [] }, send = call) {
+  const r = await send('measure_model', { ...(solids.length ? { solids } : {}), ...(faces.length ? { faces } : {}) });
+  const m3 = (v) => Math.round((v / 1e9) * 1e6) / 1e6, m2 = (v) => Math.round((v / 1e6) * 1e6) / 1e6;
+  const out = {};
+  if (r.solids) {
+    out.solids = r.solids.map((x) => ({ id: x.id, group: x.group || undefined, volume_m3: m3(x.volume) }));
+    out.sum_m3 = m3(r.sum);
+    out.union_m3 = m3(r.union);
+    out.overlap_m3 = m3(r.overlap);
+    out.union_by_group_m3 = Object.fromEntries(Object.entries(r.union_by_group || {}).map(([k, v]) => [k || '-', m3(v)]));
+  }
+  if (r.faces) {
+    out.faces = r.faces.map((x) => ({ id: x.id, area_m2: m2(x.area), perimeter_m: Math.round(x.perimeter) / 1000 }));
+    out.area_m2 = m2(r.area);
+  }
+  return out;
+}
+
+server.registerTool('measure_model', {
+  description:
+    'Independent measure by AutoCAD\'s own solid modeler, to check quantities: solids [{id, group, profile: [[x,y]...], holes: ' +
+    '[[[x,y]...]], z0, z1}] (prisms in mm: a column, a beam, a slab with its openings) give the volume of each, their sum, the ' +
+    'volume of their union (members that overlap counted once), the overlap (sum - union) and the union of each group, in m³; ' +
+    'faces [{id, outline: [[u,v]...], holes, add}] (a wall face with its door and window holes, a floor; add: more outlines ' +
+    'united with the first) give each area in m² and perimeter in m. Nothing is drawn or changed in the drawing.',
+  inputSchema: {
+    solids: opt(Specs).describe('[{id, group, profile, holes, z0, z1}] in mm'),
+    faces: opt(Specs).describe('[{id, outline, holes, add}] in mm, in the plane of the face'),
+  },
+  annotations: READ,
+}, async (args) => text(await measureModel({ solids: args.solids ?? [], faces: args.faces ?? [] })));
+
 server.registerTool('quantity_takeoff', {
   description:
     'Quantity takeoff of the drawing (QS): per layer (or per block / type): count, length in m (lines, arcs, polylines, circles, ' +
@@ -468,11 +519,13 @@ server.registerTool('setup_layers', {
     '0.5, A-WALL-PATT hatch, A-DOOR cửa đi, A-GLAZ cửa sổ/kính, A-OPEN lỗ mở (HIDDEN), A-FLOR-STRS cầu thang, A-FLOR-LEVL, ' +
     'A-FLOR-PATT, A-FLOR-FIXT TBVS, A-FURN nội thất, A-EQPM, A-ROOF, A-ELEV, A-ELEV-OTLN, A-SECT, A-SECT-PATT, A-HIDD, ' +
     'A-AREA ranh diện tích (no plot), A-ANNO-ROOM, A-ANNO-TEXT, A-ANNO-DIMS, A-ANNO-SYMB, A-ANNO-TTLB khung tên, A-ANNO-VPRT ' +
-    '(no plot), X-IMAGE ảnh tham chiếu (no plot), X-REF. layers adds/changes custom layers: {name, color (1-255, [r,g,b], ' +
+    '(no plot), X-IMAGE ảnh tham chiếu (no plot), X-REF. standard="mep" adds the electrical and plumbing layers (E-LITE-SWCH, ' +
+    'E-LITE-WIRE, E-POWR, E-POWR-WIRE, E-POWR-EQPM, E-COMM, E-GRND, E-ANNO-TEXT, P-DOMW-CWTR, P-DOMW-HWTR, P-SANR-SOIL, ' +
+    'P-SANR-WAST, P-SANR-VENT, P-STRM, P-EQPM, P-ANNO-TEXT). layers adds/changes custom layers: {name, color (1-255, [r,g,b], ' +
     '"#rrggbb"), linetype, lineweight (mm), plot, description, transparency %, on, frozen, locked}. Existing layers are kept as ' +
     'they are unless update_existing=true (use that to turn layers on/off, freeze or lock). current sets the current layer.',
   inputSchema: {
-    standard: z.enum(['arch', 'none']).default('arch'),
+    standard: z.enum(['arch', 'mep', 'none']).default('arch'),
     language: opt(Lang).describe('Language of the layer descriptions (default vi)'),
     layers: opt(Specs),
     update_existing: z.boolean().default(false),
@@ -481,7 +534,7 @@ server.registerTool('setup_layers', {
   annotations: EDIT_IDEMPOTENT,
 }, async ({ standard, language: lang, layers, update_existing, current }) => {
   if (lang) language = lang;
-  const list = [...(standard === 'arch' ? layerSpecs(lang ?? language) : []), ...(layers || [])];
+  const list = [...(standard === 'none' ? [] : layerSpecs(lang ?? language, standard === 'mep')), ...(layers || [])];
   return text(await call('setup_layers', { layers: list, update_existing, current }));
 });
 
@@ -521,7 +574,7 @@ const ENTITY_DOC =
   '- leader {points (arrow first, text last), text, height?}\n' +
   '- block {name, at or points:[...] (several copies), scale?, rotation?, attributes?:{TAG: value}, file? (.dwg to load the ' +
   'block from), redefine?}\n' +
-  '- table {at (top-left), rows:[[...],...], title?, col_widths?, row_height?, height?}\n' +
+  '- table {at (top-left), rows:[[...],...], title?, col_widths?, row_height?, height?, col_align? ("right" | "center" | "left" | null per column)}\n' +
   'Text heights are in drawing units: paper height x scale (2.5 mm at 1:100 = 250). Use style "MCP-ARIAL" for Vietnamese text.';
 
 async function pixelsToDrawing(handle, specs) {
@@ -601,7 +654,7 @@ server.registerTool('draw_plan', {
     rooms: opt(Specs), stairs: opt(Specs), levels: opt(Specs), sections: opt(Specs), north: opt(Obj),
     balconies: opt(Specs), floors: opt(Specs).describe('Several storeys: see floors above'),
     dimensions: opt(jsonish(z.union([z.boolean(), z.array(z.enum(['bottom', 'left', 'top', 'right']))]))),
-    interior_dimensions: z.boolean().default(false).describe('Interior chains through every room (not the stairwells): wall face to wall face across the building, one each way, clear of the room name and moved aside from openings'),
+    interior_dimensions: z.boolean().default(false).describe('Interior dimensions (not the stairwells): the clear width and length of each room, wall face to wall face, on a line clear of the names, doors, tags, level marks and stairs; rooms with no clear line are listed in notes'),
     entities: opt(Specs),
     scale: z.number().positive().default(100),
     wall_thickness: opt(z.number().positive()), wall_material: opt(Str), hatch_walls: z.boolean().default(true),
@@ -1083,6 +1136,16 @@ function dryRun(assumed, extra = {}) {
 
 const assumedOrNone = (a) => (a?.length ? a : undefined);
 
+/** The building of a plan description as a key: the plot scale a tool was called with is not part of the building. */
+// what a plan says about how it is drawn, not about the building: two descriptions that differ only there (or in the
+// order of their fields) are the same building, so a calculation made for one serves the other
+const DRAWN_ONLY = new Set(['scale', 'dimensions', 'interior_dimensions', 'entities', 'room_options', 'layers', 'language', 'hatch_walls', 'sections', 'north', 'levels', 'dry_run']);
+const specKey = (spec) => {
+  const strip = (o) => Object.fromEntries(Object.entries(o).filter(([k, v]) => !DRAWN_ONLY.has(k) && v !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => [k, k === 'floors' && Array.isArray(v) ? v.map((f) => (f && typeof f === 'object' && !Array.isArray(f) ? strip(f) : f)) : v]));
+  return JSON.stringify(strip(spec));
+};
+
 const engine = (tool, fn) => {
   try {
     return fn();
@@ -1108,8 +1171,8 @@ async function freeSpot(at, scale) {
   const info = await sendNow('drawing_info', {});
   if (at) return { at, info };
   if (!info.extents) return { at: [0, 0], info };
-  // far enough that a sheet window around the new view does not catch its neighbour
-  return { at: [info.extents.max[0] + 40 * scale, info.extents.min[1] + 80 * scale], info };
+  // far enough that a sheet window around the new view does not catch its neighbour (texts run past the bounds)
+  return { at: [info.extents.max[0] + Math.max(40 * scale, 5000), info.extents.min[1] + 80 * scale], info };
 }
 
 async function drawView(ents, scale, info, lang) {
@@ -1430,17 +1493,30 @@ function sheetNotes(args, kind, base, sc, lang, below, extra) {
 }
 
 /** A copy of the plan (walls, openings, columns, grids, dimensions, room names) at an interior scale, moved by offset. */
-async function planCopy(tool, spec, args, scale, { doors = true, roomLabels = true, labels = {}, levels = true } = {}) {
+async function planCopy(tool, spec, args, scale, { doors = true, roomLabels = true, labels = {}, levels = true, hideRooms = null, dimensions = undefined, tags: withTags = true, stairLabels = true, front = undefined } = {}) {
   const info = await sendNow('drawing_info', {});
   const pts = (spec.walls || []).flatMap((w) => w.points || []);
   const x0 = Math.min(...pts.map((p) => p[0])), x1 = Math.max(...pts.map((p) => p[0]));
-  const y0 = Math.min(...pts.map((p) => p[1]));
+  const y0 = Math.min(...pts.map((p) => p[1])), y1 = Math.max(...pts.map((p) => p[1]));
   const offset = args.offset ?? [info.extents ? info.extents.max[0] + 80 * scale - x0 : 0, 0];
+  // front (a point in front of the house: the meter, the manhole; null: the bottom of the plan): that side stays free,
+  // the dimension chains go to two other sides and the grid bubbles on that side are left out
+  let frontSide = null;
+  if (front !== undefined) {
+    const d = front ? { bottom: front[1] - y0, top: y1 - front[1], left: front[0] - x0, right: x1 - front[0] } : { bottom: -1 };
+    frontSide = Object.entries(d).sort((a, b) => a[1] - b[1])[0][0];
+    if (dimensions === undefined) dimensions = [frontSide === 'left' ? 'right' : 'left', frontSide === 'top' ? 'bottom' : 'top'];
+  }
   // room names where given (clear of the furniture), else where the plan has them
   const moved = { ...spec, rooms: (spec.rooms || []).map((r) => (labels[r.name] ? { ...r, at: labels[r.name] } : r)) };
+  // tags false: the doors and windows without their schedule tags (plans of other trades)
+  if (!withTags) moved.openings = (spec.openings || []).map(({ tag, ...o }) => o);
   const shifted = shiftSpec(moved, offset);
   const plan = engine(tool, () => buildPlan({
-    ...shifted, scale, language: args.language ?? language, rooms: roomLabels ? shifted.rooms : [], levels: levels ? shifted.levels : [],
+    ...shifted, scale, language: args.language ?? language, levels: levels ? shifted.levels : [], ...(stairLabels ? {} : { stair_labels: false }),
+    ...(dimensions !== undefined ? { dimensions } : {}),
+    // hideRooms: rooms whose name would lie on what the plan draws there (a stair)
+    rooms: roomLabels ? shifted.rooms.filter((r) => !hideRooms || !hideRooms(String(r.name))) : [],
     room_options: { ...(spec.room_options || {}), boundary: false, text_height: undefined },
   }));
   const tags = new Set((spec.openings || []).map((o) => o.tag).filter(Boolean).map(String));
@@ -1448,6 +1524,11 @@ async function planCopy(tool, spec, args, scale, { doors = true, roomLabels = tr
   if (!doors) ents = ents.filter((e) => e.layer !== ROLE.door && !(e.type === 'text' && tags.has(String(e.text))));
   ents = ents.map((e) => ([ROLE.grid, ROLE.opening, ROLE.hidden, ROLE.beam].includes(e.layer) ? { ...e, scale_linetype: true } : e));
   const b = entityBounds(ents) ?? { min: [x0 + offset[0], y0 + offset[1]], max: [x1 + offset[0], y0 + offset[1]] };
+  // the grid bubbles on the front side go (the bounds keep their room: the title stays where it was)
+  if (frontSide) {
+    const beyond = { bottom: (q) => q[1] < y0 + offset[1], top: (q) => q[1] > y1 + offset[1], left: (q) => q[0] < x0 + offset[0], right: (q) => q[0] > x1 + offset[0] }[frontSide];
+    ents = ents.filter((e) => !(e.type === 'block' && e.name === 'MCP_TRUC' && beyond(e.at)));
+  }
   planCopies.unshift({ sig: roomSig(spec), offset });
   return { info, offset, plan, ents, bounds: b, centerX: (x0 + x1) / 2 + offset[0] };
 }
@@ -1493,12 +1574,16 @@ server.registerTool('draw_structure_plan', {
     'their count, columns at the wall nodes, the slab thickness, lowered slabs (wet rooms, balconies -50) hatched, stair ' +
     'openings crossed, grids with bubbles and dimensions, title "MẶT BẰNG KẾT CẤU SÀN <floor> (+level)". Sizes are ' +
     'preliminary (h = span/12 rounded up to 50, 300-700; b = wall thickness) and reported as assumed: the structural engineer ' +
-    'designs them; give beam {b, h} and column {size} to use theirs. The beams are remembered for draw_beam_schedule.',
+    'designs them; give beam {b, h} and column {size} to use theirs. After structural_calc of the same plan the columns ' +
+    '(marks C1, C2 ... with a legend) and the pad footings (M1, M2 ...) are those it designed; column {sizes: [{at, size, ' +
+    'mark}]} and footing {sizes: [{at, B, L, mark}]} give them by hand. Cantilever balconies are outlined and hatched ' +
+    '(BC), columns planted on a beam are marked, a beam that ends on another beam rests on it. The beams are remembered ' +
+    'for draw_beam_schedule.',
   inputSchema: {
     floor: opt(z.union([Str, z.number().int().positive()])).describe('The slab: floor number from 2 or name (its floor slab), "roof" (over the top floor; default for a one-floor plan), or "foundation" (pad footings under the columns, ground beams GM under the ground floor walls)'),
-    footing: opt(Obj).describe('Foundation plan: {B, L, depth} of the pad footings M1 (default 1200 x 1200, depth heights.foundation.depth or 1500)'),
+    footing: opt(Obj).describe('Foundation plan: {B, L, depth} of the pad footings M1 (default 1200 x 1200, depth heights.foundation.depth or 1500), or {sizes: [{at, B, L, mark}]}; default after structural_calc: the pads it designed'),
     scale: z.number().positive().default(100), slab: opt(z.number().positive()), prefix: opt(Str),
-    beam: opt(Obj).describe('{b, h, min_wall: 150}'), column: opt(Obj).describe('{size: [b, h]}'),
+    beam: opt(Obj).describe('{b, h, min_wall: 150}'), column: opt(Obj).describe('{size: [b, h]} or {sizes: [{at, size, mark}]}; default after structural_calc: the columns it designed'),
     at: opt(Point), plan: opt(Obj), language: opt(Lang),
     dry_run: z.boolean().default(false).describe('List the beams, columns and sizes it would assume, without drawing'),
   },
@@ -1540,16 +1625,24 @@ server.registerTool('draw_structure_plan', {
   }
   const sc = args.scale;
   const rooms = roomsSpec && !args.dry_run ? await roomOutlines(roomsSpec, 'draw_structure_plan').catch(() => ({})) : {};
+  // the sizes of the last calculation of this plan: columns, pads, the columns planted on this slab
+  const calc = lastCalc?.key === specKey(spec) ? lastCalc.R : null;
   const r = engine('draw_structure_plan', () => framingPlan({
-    spec: below.spec, level, slab, name, prefix: args.prefix ?? prefix, scale: sc, beam: args.beam ?? (found ? { h: 400 } : {}), column: args.column ?? {}, rooms, lang,
-    foundation: found ? { depth: spec.heights?.foundation?.depth ?? 1500, ...(args.footing ?? {}) } : null,
+    spec: below.spec, level, slab, name, prefix: args.prefix ?? prefix, scale: sc, beam: args.beam ?? (found ? { h: 400 } : {}),
+    column: args.column ?? (calc ? { sizes: calc.design.columns } : {}), rooms, lang,
+    foundation: found ? { depth: spec.heights?.foundation?.depth ?? 1500, ...(args.footing ?? (calc ? { sizes: calc.design.footings } : {})) } : null,
+    balconies: roomsSpec?.balconies ?? [],
+    planted: calc ? calc.columns.filter((c) => c.on === name).map((c) => ({ at: c.at, size: c.size })) : [],
   }));
   const beams = r.beams.map((b) => ({ name: b.name, size: `${b.b}x${b.h}`, count: b.count, spans: b.spans }));
   if (args.dry_run) return dryRun(r.assumed, { slab: name, level, beams, columns: r.columns, footings: r.footings.length ? r.footings : undefined });
   structBeams.set(name, r.beams);
   const { at, info } = await freeSpot(args.at, sc);
   const res = await drawView(placeAt(r.entities, at), sc, info, args.language);
-  return text({ slab: name, level, beams, columns: r.columns, footings: r.footings.length ? r.footings : undefined, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
+  return text({
+    slab: name, level, beams, columns: r.columns, footings: r.footings.length ? r.footings : undefined, sizes: calc ? 'structural_calc' : undefined,
+    notes: r.notes?.length ? r.notes : undefined, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds,
+  });
 }));
 
 server.registerTool('draw_beam_schedule', {
@@ -1582,17 +1675,23 @@ server.registerTool('structural_calc', {
     'build-ups, live loads by room: rooms 1.5, halls and stairs 3, balconies 2 kPa..., partitions, walls on the beams less ' +
     'their openings, self-weight); slab panels shared out to their beams (two-way trapezoid / triangle, one-way); continuous ' +
     'beams with the live load on all / odd / even spans; bending and shear by TCVN 5574:2018 (αm, ξ ≤ ξR, As, bars; stirrups ' +
-    'at the supports and midspan); column loads down to the footings, the column capacity and the footing area for the soil ' +
-    'pressure. Drawn as a sheet of tables (materials, slab loads, floor build-up, beams, columns and footings, assumptions) ' +
+    'at the supports and midspan; shear and reactions from the loads really carried, a beam on a beam and a planted column ' +
+    'as point loads); column loads down to the footings; the columns sized for their load (220x220, 220x300, 300x300 ... ' +
+    'with φ by l0/h), the pad footings sized for the soil pressure (side, thickness by punching, mesh by bending, at most ' +
+    'four types; a note when they overlap: strip footings or a raft), the slabs (two-way by Marcus, one-way strips), the ' +
+    'stairs and the cantilever balconies. Drawn as a sheet of tables (materials, slab loads, floor build-up, beams, slabs, ' +
+    'columns and footings, assumptions) ' +
     'with the sign-off (người tính, kiểm tra, chủ trì kết cấu: name, licence No., signature, date) and the note that a ' +
     'licensed structural engineer checks it, calculates it again and signs it. csv_path writes the tables for Excel. The ' +
-    'designed bars and stirrups replace the preliminary ones of draw_beam_schedule (call it afterwards). Defaults (materials, ' +
+    'designed bars and stirrups replace the preliminary ones of draw_beam_schedule, and draw_structure_plan of the same plan ' +
+    'takes the designed columns and pads (call them afterwards; draw=false calculates without the sheet). Returns design ' +
+    '{columns, footings} and the pad types (footings: mark, B, L, H, mesh) for draw_structure_detail. Defaults (materials, ' +
     'loads, soil pressure, footing, column) are reported as assumed; sizes that fail are listed in warnings.',
   inputSchema: {
     concrete: z.enum(Object.keys(CONCRETE)).default('B20'), steel: z.enum(Object.keys(STEEL)).default('CB300-V'),
     stirrup_steel: z.enum(Object.keys(STEEL)).default('CB240-T'), cover: z.number().positive().default(25),
     soil_pressure: z.number().positive().default(100).describe('Bearing pressure R at the footing bottom, kPa (from the site investigation)'),
-    footing: opt(Obj).describe('{B, L} of the pad footings drawn, mm'), column: opt(Obj).describe('{size: [b, h], bars: {n, d}}'),
+    footing: opt(Obj).describe('{B, L}: the least size of the pad footings, mm'), column: opt(Obj).describe('{size: [b, h], bars: {n, d}}: the first size tried'),
     draw: z.boolean().default(true), csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('semicolon'),
     xlsx_path: opt(Str).describe('Excel workbook with live formulas: the inputs (materials, loads, soil, sections, bars, q) in yellow cells, the design calculated from them'),
     scale: z.number().positive().default(50), at: opt(Point), plan: opt(Obj), language: opt(Lang), dry_run: z.boolean().default(false),
@@ -1609,17 +1708,20 @@ server.registerTool('structural_calc', {
     spec, rooms, concrete: args.concrete, steel: args.steel, stirrupSteel: args.stirrup_steel, cover: args.cover, soil: args.soil_pressure,
     footing: args.footing ?? {}, column: args.column ?? {}, lang,
   }));
-  if (args.soil_pressure === 100) R.assumed.push({ item: 'soil_pressure', value: '100 kPa', note: 'give the bearing pressure of the site investigation' });
   const beams = R.slabs.flatMap((S) => S.types.map((t) => ({
     slab: S.name, name: t.name, size: `${t.b}x${t.h}`, count: t.count, bottom: `${t.barsSpan.n}Ø${t.barsSpan.d}`, top: `${t.barsSup.n}Ø${t.barsSup.d}`,
     stirrups: `Ø${t.stirrup.d}a${t.stirrup.support}/a${t.stirrup.span}`, M: [Math.round(t.Mspan * 10) / 10, Math.round(t.Msup * 10) / 10], Q: Math.round(t.Q * 10) / 10, ok: t.ok,
   })));
-  const summary = { beams, columns: R.columns.slice(0, 6), warnings: R.warnings, assumed: assumedOrNone(R.assumed) };
-  if (args.dry_run) return dryRun(R.assumed, { beams, columns: R.columns, warnings: R.warnings });
-  lastCalc = { key: JSON.stringify(spec), R };
+  const columns = R.columns.map((c) => ({
+    name: c.name, N: c.N, mark: c.mark, size: `${c.size[0]}x${c.size[1]}`, bars: `${c.bars.n}Ø${c.bars.d}`, capacity: c.cap, ok: c.colOk,
+    footing: c.foot ? `${c.foot.mark} ${c.foot.B}x${c.foot.L}x${c.foot.H}` : undefined, footing_ok: c.foot ? c.footOk : undefined,
+  }));
+  const summary = { beams, columns, footings: R.footings, design: R.design, warnings: R.warnings, assumed: assumedOrNone(R.assumed) };
+  if (args.dry_run) return dryRun(R.assumed, { beams, columns, footings: R.footings, warnings: R.warnings });
+  lastCalc = { key: specKey(spec), R };
   // the beam schedule draws the designed bars from now on
   for (const S of R.slabs) {
-    structBeams.set(S.name, S.types.map((t) => ({ name: t.name, b: t.b, h: t.h, count: t.count, spans: t.spans.map((x) => Math.round(x * 1000)), level: S.level, slab: S.slab || 120, bars: t.bars, stirrup: t.stirrups })));
+    structBeams.set(S.name, S.types.map((t) => ({ name: t.name, b: t.b, h: t.h, count: t.count, spans: t.spans.map((x) => Math.round(x * 1000)), level: S.level, slab: S.kind === 'foundation' ? 0 : (S.slab || 120), bars: t.bars, stirrup: t.stirrups })));
   }
   const out = { ...summary };
   if (args.csv_path) {
@@ -1645,39 +1747,99 @@ server.registerTool('structural_calc', {
   return text(out);
 }));
 
+/** The finish faces measured again by AutoCAD (filled in by the surface model). */
+let verifyFinishes = async () => ({ skipped: 'the finish faces are not available' });
+
+/** The rule set of a bill: its name, or the fields given over the default set. */
+const RulesArg = opt(z.union([Str, Obj])).describe(
+  'Measurement rules: "PL6" (default: Phụ lục VI of Thông tư 13/2021/TT-BXD - openings under 0.25 m² are not deducted from masonry and ' +
+  'finishes, under 1 m² from formwork, voids under 0.1 m³ from concrete; the column-beam node belongs to the beam, what lies in the slab ' +
+  'thickness to the slab), "NET" (the geometry as it is, everything deducted), or an object over a set, e.g. {base: "PL6", void: {finish: 0.5}}');
+const ruleName = (rules, lang) => {
+  try {
+    const r = typeof rules === 'object' && rules?.name ? rules : ruleSet(rules);
+    if (typeof r.name === 'string') return r.name;
+    return r.name?.[lang] ?? r.name?.vi ?? (typeof rules === 'string' ? rules : 'PL6');
+  } catch {
+    return String(rules ?? 'PL6');
+  }
+};
+/** The checks of a bill in a result: how many pass, and those that fail in full. */
+const checkSummary = (checks) => {
+  if (!Array.isArray(checks) || !checks.length) return undefined;
+  const bad = checks.filter((c) => !c.ok);
+  return { passed: checks.length - bad.length, failed: bad.length, ...(bad.length ? { failures: bad.map((c) => ({ id: c.id, name: c.name, lhs: c.lhs, rhs: c.rhs, where: c.where })) } : {}) };
+};
+// the last structural bill of this session (for verify_quantities)
+let lastBill = null;
+/** The earthwork and ground slab options of a bill as boqSheets takes them (true or nothing: the defaults). */
+const billOptions = (args) => ({
+  earth: args.earth === false ? false : args.earth && typeof args.earth === 'object' ? args.earth : null,
+  groundSlab: args.ground_slab === false ? false : args.ground_slab && typeof args.ground_slab === 'object' ? args.ground_slab : null,
+});
+
 server.registerTool('draw_quantity_schedule', {
   description:
     'Bar schedule of the whole structural set (bảng thống kê cốt thép: footings, columns, ground beams and the beams of every ' +
-    'slab with the bars and stirrups of structural_calc, slabs and stairs by the detailing rules; bars, lengths with laps and ' +
+    'slab with the bars and stirrups of structural_calc, the slabs, stairs and balconies with the bars it designed; bars, lengths with laps and ' +
     'anchorage, weights by d²/162 as table formulas, totals per diameter) and the bill of quantities (bảng tổng hợp khối ' +
     'lượng vật tư: lean concrete, concrete and formwork of the footings, column stubs, ground beams, columns storey by storey, ' +
-    'beams, slabs and stairs; steel by grade; brick walls by thickness in m² (and m³) less the openings; plaster inside, ' +
-    'outside and of the soffits), each with how it is made up (diễn giải). Uses the last structural_calc of this session, ' +
-    'else runs it with its defaults. The bar schedule flows in columns over pages (page_height mm, per_page columns), each ' +
-    'page and the bill drawn apart for their own sheets (returned bounds); csv_path writes both for Excel. For estimating: ' +
+    'beams, slabs and stairs; excavation of the pits and trenches, backfill and surplus soil, the slab on grade and the fill ' +
+    'under it; steel by grade; brick walls by thickness in m² (and m³) less the openings, lintels, brick stair steps; plaster ' +
+    'inside, outside and of the soffits), each with how it is made up (diễn giải: like parts x one part). The concrete is ' +
+    'measured on a solid model where members that meet are counted once (the sum of the lines is the volume poured), by the ' +
+    'rule set (rules) with the geometric net beside it; the result lists the cross-checks that fail and what was assumed ' +
+    '(working space of the excavation, the ground slab). Uses the last structural_calc of this session, ' +
+    'else runs it with its defaults. The bar schedule flows in columns over pages (page_height mm, per_page columns) and the ' +
+    'bill breaks into pages of the same height (bills), each page drawn apart for its own sheet (returned bounds); csv_path ' +
+    'writes both for Excel. For estimating: ' +
     'the quantity surveyor checks them against the final drawings.',
   inputSchema: {
     scale: z.number().positive().default(25), page_height: z.number().positive().default(330), per_page: z.number().int().positive().default(2),
     csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('semicolon'), plan: opt(Obj), language: opt(Lang),
-    xlsx_path: opt(Str).describe('Excel workbook with live formulas: the calculation (parameters, loads, beams, columns and footings), the bar schedule and the bill of quantities'),
+    xlsx_path: opt(Str).describe('Excel workbook with live formulas: the calculation (parameters, loads, beams, columns and footings), the bar schedule, the bill of quantities line by line (Bảng 6.2: like parts x one part) and its checks'),
+    rules: RulesArg,
+    earth: opt(jsonish(z.union([z.boolean(), z.record(z.any())]))).describe('Earthwork: {space: working space each side of the pits and trenches in mm (300), slope: horizontal for 1 vertical (0 = vertical sides)}; false leaves it out'),
+    ground_slab: opt(jsonish(z.union([z.boolean(), z.record(z.any())]))).describe('Slab on grade of the ground floor: {thickness: 100, concrete: "B15"}; false leaves it out (with the fill under it)'),
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
   const spec = planFor(args, 'draw_quantity_schedule');
   const lang = args.language ?? language;
-  const key = JSON.stringify(spec);
+  const key = specKey(spec);
   const R = lastCalc?.key === key ? lastCalc.R : engine('draw_quantity_schedule', () => structuralCalc({ spec, lang }));
-  const B = engine('draw_quantity_schedule', () => boqSheets(R, { scale: args.scale, lang, pageHeight: args.page_height, perPage: args.per_page }));
+  const B = engine('draw_quantity_schedule', () => boqSheets(R, { scale: args.scale, lang, pageHeight: args.page_height, perPage: args.per_page, rules: args.rules ?? null, ...billOptions(args) }));
+  lastBill = { key, B, options: JSON.stringify(billOptions(args)) };
   const sc = args.scale;
   const drawn = [];
-  for (const p of [...B.pages, B.boq]) {
+  const bills = B.bills ?? [B.boq];
+  for (const p of [...B.pages, ...bills]) {
     const { at, info } = await freeSpot(undefined, sc);
+    if (p.tables && p.under) {
+      // a page of the bill: its tables first, then the note and the title under them as they were drawn (a row with a
+      // long text is taller than the others)
+      // (one shift for both: the page as estimated stands on the free spot, its tables hang from y = 0 of the page)
+      const eb = entityBounds(p.entities);
+      const d = eb ? [at[0] - eb.min[0], at[1] - eb.min[1]] : [0, 0];
+      const t = await drawView(p.tables.map((e) => shiftEntity(e, d)), sc, info, args.language);
+      const u = await drawView(p.under((d[1] - t.bounds.min[1]) / sc).map((e) => shiftEntity(e, d)), sc, info, args.language);
+      const bounds = { min: [Math.min(t.bounds.min[0], u.bounds.min[0]), Math.min(t.bounds.min[1], u.bounds.min[1])], max: [Math.max(t.bounds.max[0], u.bounds.max[0]), Math.max(t.bounds.max[1], u.bounds.max[1])] };
+      drawn.push({ title: p.title, bounds, count: t.count + u.count });
+      continue;
+    }
     const res = await drawView(placeAt(p.entities, at), sc, info, args.language);
     drawn.push({ title: p.title, bounds: res.bounds, count: res.count });
   }
   const out = {
-    pages: drawn.slice(0, -1), bill: drawn[drawn.length - 1],
-    steel_kg: B.quantities.steel, quantities: B.quantities.rows.filter((r) => !r.head).map((r) => `${r.stt}. ${r.item}: ${r.q} ${r.unit}`),
+    // the bar schedule pages, then the bill (bills: its pages when it runs over more than one)
+    pages: drawn.slice(0, B.pages.length), bill: drawn[B.pages.length], bills: bills.length > 1 ? drawn.slice(B.pages.length) : undefined,
+    steel_kg: B.quantities.steel,
+    // measured by the rule set; the geometric quantity beside it where the two differ
+    quantities: B.quantities.rows.filter((r) => !r.head).map((r) => `${r.stt}. ${r.item}: ${r.q} ${r.unit}${r.geo !== undefined && Math.abs(r.geo - r.q) > 5e-4 ? ` (geometric ${r.geo})` : ''}`),
+    rules: ruleName(B.rules ?? args.rules, lang),
+    checks: checkSummary(B.checks),
+    not_counted: B.notCounted?.length ? B.notCounted : undefined,
+    assumed: assumedOrNone(B.assumed),
     from: lastCalc?.key === key ? 'structural_calc' : 'structural_calc defaults (run structural_calc first for the rooms and your materials)',
   };
   if (args.csv_path) {
@@ -1692,6 +1854,50 @@ server.registerTool('draw_quantity_schedule', {
     await fs.writeFile(file, kcWorkbook(R, B, lang));
     out.xlsx = file;
   }
+  return text(out);
+}));
+
+server.registerTool('verify_quantities', {
+  description:
+    'Independent check of the quantities by AutoCAD\'s own solid modeler (nothing is drawn): the concrete members of the ' +
+    'structural bill (footings, columns, beams, slabs with their openings, lintels, stairs as plates) are rebuilt as solids in ' +
+    'AutoCAD, their union is measured and compared with the sum of the net volumes of the bill (members that meet are counted ' +
+    'once: the two must agree); the wall, floor and ceiling faces of the finish bill are rebuilt as regions with their openings ' +
+    'and their areas compared face by face. Returns the differences and the faces or members that disagree by more than the ' +
+    'tolerance; the floor plate of every floor (rooms, walls and columns united) is compared with the plate of the bill. Run ' +
+    'structural_calc / draw_quantity_schedule and draw_finish_quantities of the same plan first, else it measures with their ' +
+    'defaults; the finish part needs the plan drawn in the current drawing (draw_plan) for the room outlines.',
+  inputSchema: {
+    plan: opt(Obj), language: opt(Lang), rules: RulesArg,
+    tolerance: z.number().positive().default(0.1).describe('Allowed difference in percent'),
+    structure: z.boolean().default(true), finishes: z.boolean().default(true),
+  },
+  annotations: READ,
+}, (args) => exclusive(async () => {
+  const tool = 'verify_quantities';
+  const spec = planFor(args, tool);
+  const lang = args.language ?? language;
+  const key = specKey(spec);
+  const pct = (a, b) => (Math.abs(b) > 1e-9 ? Math.round(((a - b) / b) * 1e5) / 1e3 : 0);
+  const out = { tolerance_percent: args.tolerance };
+  if (args.structure) {
+    const R = lastCalc?.key === key ? lastCalc.R : engine(tool, () => structuralCalc({ spec, lang }));
+    const B = lastBill?.key === key && !args.rules ? lastBill.B : engine(tool, () => boqSheets(R, { lang, rules: args.rules ?? null }));
+    // the same members as the bill (its ground slab as it was given)
+    const prisms = engine(tool, () => structurePrisms(R, B.model.options ?? {}));
+    const m = await measureModel({ solids: prisms.map((q) => ({ id: q.id, group: q.group ?? q.kind, profile: q.profile, holes: q.holes?.length ? q.holes : undefined, z0: q.z0, z1: q.z1 })) }, sendNow); // already inside exclusive()
+    const bill = Math.round(B.model.sumNet * 1e6) / 1e6;
+    const d = pct(m.union_m3, bill);
+    out.structure = {
+      members: prisms.length, not_prisms: prisms.filter((q) => q.exact === false).length || undefined,
+      bill_net_m3: bill, autocad_union_m3: m.union_m3, difference_percent: d, ok: Math.abs(d) <= args.tolerance,
+      autocad_sum_m3: m.sum_m3, autocad_overlap_m3: m.overlap_m3, bill_contacts_m3: Math.round((B.model.sumGross - B.model.sumNet) * 1e6) / 1e6,
+      checks: checkSummary(B.checks),
+      from: lastCalc?.key === key ? 'structural_calc' : 'structural_calc defaults',
+    };
+  }
+  if (args.finishes) out.finishes = await verifyFinishes(tool, spec, args, lang);
+  out.ok = [out.structure, out.finishes].filter(Boolean).every((x) => x.ok !== false);
   return text(out);
 }));
 
@@ -2015,9 +2221,9 @@ server.registerTool('draw_ceiling_plan', {
   if (args.dry_run) return dryRun(assumed, { ceilings });
   const sc = args.scale;
   const lang = args.language ?? language;
-  const base = await planCopy('draw_ceiling_plan', spec, args, sc, { doors: false, roomLabels: false, levels: false });
+  const base = await planCopy('draw_ceiling_plan', spec, args, sc, { doors: false, roomLabels: false, levels: false, tags: false });
   const cp = engine('draw_ceiling_plan', () => ceilingPlan({
-    rooms, finishes, items: st.items, offset: base.offset, scale: sc, spacing: args.spacing, lang, mode: args.mode,
+    spec, rooms, finishes, items: st.items, offset: base.offset, scale: sc, spacing: args.spacing, lang, mode: args.mode,
     legendAt: args.legend ? [base.bounds.max[0] + 15 * sc, base.bounds.max[1]] : undefined,
   }));
   if (cp.lights) st.lights = cp.lights;
@@ -2154,6 +2360,108 @@ server.registerTool('draw_joinery_detail', {
   return text({ kind: p.kind, at, scale: `1:${sc}`, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
 }));
 
+/**
+ * The finish bill of the building of a plan: the rooms of every floor as they are drawn, their finishes (those of the
+ * interior tools of this session, else the defaults by room name), the surface model and its rows. The exposed sides
+ * of beams and columns come from the structure of structural_calc when it was run for the same plan.
+ */
+async function finishModel(args, tool, lang) {
+  const whole = planFor(args, tool);
+  const F = engine(tool, () => floorsOf(whole));
+  const assumed = [];
+  const floors = [];
+  for (let i = 0; i < F.length; i++) {
+    const t = F.length > 1 || whole.floors ? floorFor({ ...args, floor: i + 1 }, tool) : floorFor(args, tool);
+    const st = interiorOf(t.key);
+    const rooms = await roomOutlines(t.spec, tool, t.offset).catch(() => ({}));
+    const finishes = finishesFor(st, rooms, undefined, assumed, t.height);
+    floors.push({ name: t.key || F[i].name || '', spec: t.spec, height: F[i].height ?? t.height ?? 3000, rooms, finishes, items: st.items });
+  }
+  if (!floors.some((f) => Object.keys(f.rooms).length)) throw new Error(`${tool}: no room outlines found: draw the plan with draw_plan (or rooms_only) first.`);
+  const key = specKey(whole);
+  const structure = lastCalc?.key === key ? lastCalc.R : null;
+  const Q = engine(tool, () => finishQuantities({ floors, spec: whole, lang, rules: args.rules ?? null, structure }));
+  lastFinish = { key, rules: args.rules ?? null, lang, whole, floors, Q, assumed };
+  return lastFinish;
+}
+
+/**
+ * The finish faces measured again by AutoCAD: every face with an outline in plan (floors, landings, ceilings, soffits,
+ * waterproofing, screed) as a region less the wells cut in it, every wall face of a room as its rectangle less its
+ * openings where they stand, and the floor plate of every floor as the union of its rooms, walls and columns (its area
+ * against the plate of the bill, its perimeter against the lengths of the outer faces).
+ */
+verifyFinishes = async (tool, spec, args, lang) => {
+  let fm = lastFinish?.key === specKey(spec) && !args.rules && lastFinish.lang === lang ? lastFinish : null;
+  if (!fm) {
+    try {
+      fm = await finishModel(args, tool, lang);
+    } catch (e) {
+      return { skipped: e.message };
+    }
+  }
+  const { Q } = fm;
+  const r3 = (v) => Math.round(v * 1e3) / 1e3, r6 = (v) => Math.round(v * 1e6) / 1e6;
+  const faces = [], expect = new Map();
+  const rect = (x, y, w, h) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+  for (const f of Q.faces) {
+    if (f.unit !== 'm²' || expect.has(f.id)) continue;
+    if (Array.isArray(f.outline) && f.outline.length >= 3) {
+      const cut = f.deductions.filter((d) => Array.isArray(d.poly) && d.poly.length >= 3);
+      faces.push({ id: f.id, outline: f.outline, holes: cut.length ? cut.map((d) => d.poly) : undefined });
+      expect.set(f.id, f.gross - cut.reduce((a, d) => a + d.area, 0));
+    } else if (f.kind === 'wall' && f.L > 0 && f.H > 0 && (f.n ?? 1) === 1) {
+      const cut = f.deductions.filter((d) => d.u !== undefined && d.w > 0 && d.h > 0);
+      faces.push({
+        id: f.id, outline: rect(0, 0, f.L * 1000, f.H * 1000),
+        holes: cut.length ? cut.map((d) => rect(d.u * 1000, (d.z ?? 0) * 1000, d.w * 1000, d.h * 1000)) : undefined,
+      });
+      expect.set(f.id, f.gross - cut.reduce((a, d) => a + d.area, 0));
+    }
+  }
+  const plates = [];
+  for (const fl of Q.floors || []) {
+    const M = fl.S?.M;
+    if (!M || !SURF.plateOutlines || !Object.keys(fl.rooms || {}).length) continue;
+    const o = engine(tool, () => SURF.plateOutlines(M, fl.rooms));
+    const all = [...o.rooms, ...o.walls, ...o.columns];
+    if (!all.length) continue;
+    const id = `plate/${fl.name}`;
+    faces.push({ id, outline: all[0], add: all.length > 1 ? all.slice(1) : undefined });
+    plates.push({ id, floor: fl.name, plate: SURF.floorPlate(M, fl.rooms).plate / 1e6, outer: fl.S.faces.filter((f) => f.kind === 'exterior').reduce((a, f) => a + f.L, 0) });
+  }
+  if (!faces.length) return { skipped: 'no finish face to measure' };
+  const m = await measureModel({ faces }, sendNow); // already inside exclusive()
+  const got = new Map(m.faces.map((x) => [x.id, x]));
+  const tol = args.tolerance / 100;
+  const off = (a, b) => Math.abs(a - b) > Math.max(0.001, tol * Math.abs(b));
+  let bill = 0, acad = 0;
+  const bad = [];
+  for (const [id, e] of expect) {
+    const a = got.get(id)?.area_m2 ?? 0;
+    bill += e;
+    acad += a;
+    if (off(a, e)) bad.push({ face: id, bill_m2: r6(e), autocad_m2: a });
+  }
+  const pct = Math.abs(bill) > 1e-9 ? Math.round(((acad - bill) / bill) * 1e5) / 1e3 : 0;
+  const floorsOut = plates.map((q) => {
+    const g = got.get(q.id) ?? {};
+    // the outer faces of the bill follow the outline of the plate (to the millimetre of their ends)
+    const lineOk = Math.abs((g.perimeter_m ?? 0) - q.outer) <= Math.max(0.02, tol * q.outer);
+    return {
+      floor: q.floor, plate_bill_m2: r3(q.plate), plate_autocad_m2: r3(g.area_m2 ?? 0), outer_faces_bill_m: r3(q.outer), outline_autocad_m: r3(g.perimeter_m ?? 0),
+      ok: !off(g.area_m2 ?? 0, q.plate) && lineOk,
+    };
+  });
+  return {
+    faces: expect.size, bill_m2: r3(bill), autocad_m2: r3(acad), difference_percent: pct,
+    ok: !bad.length && Math.abs(pct) <= args.tolerance && floorsOut.every((x) => x.ok),
+    disagree: bad.length ? bad.slice(0, 30) : undefined, disagree_count: bad.length || undefined,
+    floors: floorsOut.length ? floorsOut : undefined,
+    rules: Q.rules?.name, checks: checkSummary(Q.checks),
+  };
+};
+
 server.registerTool('draw_finish_quantities', {
   description:
     'Architectural finish quantities (bảng khối lượng hoàn thiện kiến trúc) of the building of draw_plan, floor by floor, for ' +
@@ -2162,30 +2470,30 @@ server.registerTool('draw_finish_quantities', {
     'concrete soffits); gypsum ceilings; waterproofing of toilets, balconies and the roof terrace (300 up the walls), screed ' +
     'to falls, the tower roof; stair granite (treads, landings, risers), stair and balcony railings; doors and windows by ' +
     'type (sets and m²). The rooms and finishes are those of the interior tools (material_schedule, the same defaults by ' +
-    'room name, the finishes given there in this session). Drawn as a table with the quantity of every floor (diễn giải); ' +
-    'csv_path writes it for Excel. Masonry and plaster are in the structural bill (draw_quantity_schedule).',
+    'room name, the finishes given there in this session). Every quantity is the sum of the faces of a surface model ' +
+    '(a wall face by the height of the wall behind it with its openings and reveals, the vertical face of a dropped ' +
+    'ceiling, treads and risers, the floor under the doors), measured by the rule set (rules) with the geometric net ' +
+    'beside it, to three decimals; the result lists the cross-checks that fail. Drawn as a table with the quantity of every ' +
+    'floor (diễn giải); csv_path writes it for Excel (with a geometric column). Masonry and plaster are in the structural ' +
+    'bill (draw_quantity_schedule); verify_quantities has AutoCAD measure the faces again.',
   inputSchema: {
     scale: z.number().positive().default(25), csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('semicolon'),
     at: opt(Point), plan: opt(Obj), language: opt(Lang), draw: z.boolean().default(true),
-    xlsx_path: opt(Str).describe('Excel workbook: the quantity of every floor, the total as their sum'),
+    xlsx_path: opt(Str).describe('Excel workbook with live formulas: the bill summed from the faces (sheet "Bề mặt", Bảng 6.2: like parts x length x height, less and plus), the stairs from their parameters, the doors, and the cross-checks (sheet "Kiểm tra")'),
+    rules: RulesArg,
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
   const lang = args.language ?? language;
-  const whole = planFor(args, 'draw_finish_quantities');
-  const F = engine('draw_finish_quantities', () => floorsOf(whole));
-  const assumed = [];
-  const floors = [];
-  for (let i = 0; i < F.length; i++) {
-    const t = F.length > 1 || whole.floors ? floorFor({ ...args, floor: i + 1 }, 'draw_finish_quantities') : floorFor(args, 'draw_finish_quantities');
-    const st = interiorOf(t.key);
-    const rooms = await roomOutlines(t.spec, 'draw_finish_quantities', t.offset).catch(() => ({}));
-    const finishes = finishesFor(st, rooms, undefined, assumed, t.height);
-    floors.push({ name: t.key || F[i].name || '', spec: t.spec, height: F[i].height ?? t.height ?? 3000, rooms, finishes, items: st.items });
-  }
-  if (!floors.some((f) => Object.keys(f.rooms).length)) throw new Error('draw_finish_quantities: no room outlines found: draw the plan with draw_plan (or rooms_only) first.');
-  const Q = engine('draw_finish_quantities', () => finishQuantities({ floors, spec: whole, lang }));
-  const out = { rows: Q.rows.filter((r) => !r.head).map((r) => `${r.stt}. ${r.item}: ${r.q} ${r.unit}`), assumed: assumedOrNone(assumed) };
+  const { whole, floors, Q, assumed } = await finishModel(args, 'draw_finish_quantities', lang);
+  const out = {
+    // measured by the rule set; the geometric quantity beside it where the two differ
+    rows: Q.rows.filter((r) => !r.head).map((r) => `${r.stt}. ${r.item}: ${r.q} ${r.unit}${r.geo !== undefined && Math.abs(r.geo - r.q) > 5e-4 ? ` (geometric ${r.geo})` : ''}`),
+    rules: Q.rules?.name,
+    checks: checkSummary(Q.checks),
+    warnings: Q.warnings?.length ? Q.warnings : undefined,
+    assumed: assumedOrNone([...assumed, ...(Q.assumed || [])]),
+  };
   if (args.draw) {
     const sc = args.scale;
     const { at, info } = await freeSpot(args.at, sc);
@@ -2206,20 +2514,21 @@ server.registerTool('draw_finish_quantities', {
     await fs.writeFile(file, finishWorkbook(Q, floors.map((x) => x.name), lang));
     out.xlsx = file;
   }
-  lastFinish = { key: JSON.stringify(whole), Q };
   return text(out);
 }));
 
 server.registerTool('material_schedule', {
   description:
     'Finish and material schedule (bảng thống kê vật liệu hoàn thiện): floors and ceilings in m² from the room outlines, ' +
-    'skirting in m (door widths deducted), walls in m² (perimeter x height to the ceiling, openings deducted), kitchen ' +
+    'skirting in m (door widths deducted), walls in m² face by face (the height of the wall behind each face, openings ' +
+    'deducted by the rule set of rules, their reveals added), the drop face of a ceiling, stairs on their treads and risers, kitchen ' +
     'backsplash, furniture/joinery/sanitary/equipment by count (draw_furniture_plan) and lights (draw_ceiling_plan); one row per ' +
     'code with its rooms. Draws a table (default right of the drawing) and csv_path saves it for Excel. ' + INTERIOR_DEFAULTS,
   inputSchema: {
     rooms: FinishRooms, draw: z.boolean().default(true), at: opt(Point), scale: z.number().positive().default(50),
     csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('comma'), plan: opt(Obj), language: opt(Lang),
     floor: FloorArg.describe('One floor of a building; default: every floor (rooms listed as "<floor>: <room>")'),
+    rules: RulesArg,
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
@@ -2229,6 +2538,8 @@ server.registerTool('material_schedule', {
   const multi = Array.isArray(whole.floors) && whole.floors.length && args.floor === undefined;
   const targets = multi ? floorsOf(whole).map((f, i) => floorFor({ ...args, floor: i + 1 }, 'material_schedule')) : [floorFor(args, 'material_schedule')];
   const acc = new Map();
+  const FL = Array.isArray(whole.floors) && whole.floors.length ? engine('material_schedule', () => floorsOf(whole)) : [];
+  const structure = lastCalc?.key === specKey(whole) ? lastCalc.R : null;
   let ms;
   for (const t of targets) {
     const st = interiorOf(t.key);
@@ -2241,7 +2552,11 @@ server.registerTool('material_schedule', {
       throw e;
     }
     const finishes = finishesFor(st, rooms, multi ? undefined : args.rooms, assumed, t.height);
-    ms = engine('material_schedule', () => materialSchedule({ spec: t.spec, rooms, finishes, items: st.items, lights: st.lights, lang, floor: multi ? t.key : null, acc, handles }));
+    // the place of the floor in the building: the slab over it (a room with no suspended ceiling is finished up to its
+    // soffit) and the columns of structural_calc that stand out of its walls, as in the architectural bill
+    const k = FL.findIndex((f) => f.name === t.key);
+    const place = k >= 0 ? { top: k === FL.length - 1, slab: FL[k + 1]?.slab ?? null, structure, index: k } : {};
+    ms = engine('material_schedule', () => materialSchedule({ spec: t.spec, rooms, finishes, items: st.items, lights: st.lights, lang, floor: multi ? t.key : null, acc, handles, rules: args.rules ?? null, ...place }));
   }
   if (!ms) throw new Error('material_schedule: no room outlines found: draw the plan with draw_plan first.');
   const out = { rows: ms.rows, assumed: assumedOrNone(assumed) };
@@ -2265,6 +2580,614 @@ server.registerTool('material_schedule', {
     out.csv = file;
   }
   return text(out);
+}));
+
+// ---------------------------------------------------------------- electrical and plumbing sets (điện, cấp thoát nước)
+
+/** The lights of a floor by the ceiling rules of the interior set (the lighting layout of draw_ceiling_plan). */
+function ceilingLights(rooms, finishes, items, spacing) {
+  const cp = ceilingPlan({ rooms, finishes, items, offset: [0, 0], scale: 100, spacing, mode: 'lighting' });
+  const kinds = Object.fromEntries(Object.entries(LIGHT_BLOCKS).map(([k, v]) => [v.name, k]));
+  const out = [];
+  for (const e of cp.entities) {
+    if (e.type === 'block' && kinds[e.name] && kinds[e.name] !== 'strip') out.push({ kind: kinds[e.name], at: e.at });
+    else if (e.type === 'polyline' && e.layer === ROLE.light_strip && e.closed) {
+      const L = e.points.reduce((s, p, i) => {
+        const q = e.points[(i + 1) % e.points.length];
+        return s + Math.hypot(q[0] - p[0], q[1] - p[1]);
+      }, 0);
+      out.push({ kind: 'strip', at: e.points[0], points: e.points, length: L });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every floor of the building with its rooms (measured by AutoCAD from the plan), its furniture (draw_furniture_plan,
+ * else the default fixtures of wet rooms and kitchens) and its finishes, for the electrical and plumbing designs.
+ */
+async function mepFloors(args, tool) {
+  const spec = planFor(args, tool);
+  const multi = Array.isArray(spec.floors) && spec.floors.length > 0;
+  const list = multi ? engine(tool, () => floorsOf(spec)) : [{ spec, name: '', level: 0, height: spec.heights?.top ?? 3000 }];
+  const assumed = [], floors = [];
+  for (const [k, f] of list.entries()) {
+    const key = multi ? f.name : '';
+    const offset = !args.plan && lastFloors?.offsets?.[k] ? lastFloors.offsets[k] : [0, 0];
+    const rooms = await roomOutlines(f.spec, tool, offset).catch(() => ({}));
+    const st = interiorOf(key);
+    const df = engine(tool, () => defaultFixtures(rooms, f.spec, st.items, args.options?.shaft ?? 400));
+    const extra = engine(tool, () => resolveItems(df.items, rooms)).items;
+    assumed.push(...df.assumed.map((a) => ({ ...a, item: `${key ? `${key} ` : ''}${a.item}` })));
+    floors.push({ name: key, index: k, level: f.level ?? 0, height: f.height ?? 3000, spec: f.spec, rooms, items: [...st.items, ...extra], finishes: finishesFor(st, rooms, undefined, [], f.height) });
+  }
+  return { spec, floors, assumed, list };
+}
+
+/** items of one floor (as draw_furniture_plan, nothing drawn): remembered for the device and fixture positions. */
+async function rememberItems(args, tool) {
+  const { spec, offset, key } = floorFor(args, tool);
+  const rooms = await roomOutlines(spec, tool, offset);
+  interiorOf(key).items = engine(tool, () => resolveItems(args.items, rooms)).items;
+}
+
+const mepCache = { elec: null, plumb: null };
+const interiorSig = () => JSON.stringify([...interiorStates.entries()].map(([k, s]) => [k, s.items.map((it) => [it.type, it.room, it.o, it.ex, it.w, it.d, it.opts?.sink, it.opts?.hob]), s.given]));
+
+async function electricalModel(args, tool) {
+  if (args.items) await rememberItems(args, tool);
+  const spec = planFor(args, tool);
+  const lang = args.language ?? language;
+  const key = JSON.stringify([specKey(spec), args.options ?? null, args.spacing ?? 1200, lang, interiorSig()]);
+  if (mepCache.elec?.key === key) return mepCache.elec.D;
+  const { floors, assumed } = await mepFloors(args, tool);
+  for (const f of floors) f.lights = ceilingLights(f.rooms, f.finishes, f.items, args.spacing ?? 1200);
+  const D = engine(tool, () => electricalDesign({ floors, options: args.options ?? {}, lang }));
+  D.assumed.unshift(...assumed);
+  D.floors.forEach((F, k) => {
+    F.polys = floors[k].rooms;
+  });
+  mepCache.elec = { key, D };
+  return D;
+}
+
+async function plumbingModel(args, tool) {
+  if (args.items) await rememberItems(args, tool);
+  const spec = planFor(args, tool);
+  const lang = args.language ?? language;
+  const key = JSON.stringify([specKey(spec), args.options ?? null, lang, interiorSig()]);
+  if (mepCache.plumb?.key === key) return mepCache.plumb.D;
+  const { floors, assumed, list } = await mepFloors(args, tool);
+  // the drains of the roof terrace (as draw_roof_plan places them)
+  let roofDrains = [];
+  try {
+    const top = list[list.length - 1];
+    const parapet = (top.spec.walls || []).find((w) => w.height !== undefined)?.height ?? 1000;
+    roofDrains = roofPlan({ top, terrace: top.level ?? 0, roof: (top.level ?? 0) + (top.height ?? 3000) + 120, parapet, fall: 2, scale: 100, lang }).drainPoints ?? [];
+  } catch {
+    roofDrains = [];
+  }
+  const D = engine(tool, () => plumbingDesign({ floors, roofDrains, options: args.options ?? {}, lang }));
+  D.assumed.unshift(...assumed);
+  D.floors.forEach((F, k) => {
+    F.polys = floors[k].rooms;
+    F.items = floors[k].items;
+  });
+  mepCache.plumb = { key, D };
+  return D;
+}
+
+/** Boxes of the drawn devices or fixtures (room names keep clear of them). */
+const pointBoxes = (pts, half) => pts.map((p) => [p[0] - half, p[1] - half, p[0] + half, p[1] + half]);
+const textBoxes = (ents) => [
+  ...ents.filter((e) => e.type === 'text').map((e) => {
+    const w = textWidth(e.text, e.height), h = e.height;
+    const x0 = /right/.test(e.align ?? '') ? e.at[0] - w : /center/.test(e.align ?? '') ? e.at[0] - w / 2 : e.at[0];
+    const y0 = /^middle/.test(e.align ?? '') ? e.at[1] - h / 2 : e.at[1];
+    return [x0, y0, x0 + w, y0 + h];
+  }),
+  // tags and symbols that know their extent (door and window tags, grid bubbles, door swings)
+  ...ents.filter((e) => e.type === 'block' && Array.isArray(e.box)).map((e) => e.box),
+  // dimension chains: the band of their line and texts (text above a horizontal line, left of a vertical one)
+  ...ents.filter((e) => e.type === 'dim_chain' && Array.isArray(e.points) && Array.isArray(e.at)).map((e) => {
+    const xs = e.points.map((p) => p[0]), ys = e.points.map((p) => p[1]);
+    const sc = Number(String(e.style ?? '').split('-').pop()) || 100;
+    return e.direction === 'vertical' ? [e.at[0] - 4 * sc, Math.min(...ys), e.at[0] + 0.6 * sc, Math.max(...ys)] : [Math.min(...xs), e.at[1] - 0.6 * sc, Math.max(...xs), e.at[1] + 4 * sc];
+  }),
+];
+/** The plan copy with its dimensions as the box the labels of a plan stay in. */
+const planLimit = (base, sc) => [base.bounds.min[0] - 2 * sc, base.bounds.min[1] - 2 * sc, base.bounds.max[0] + 2 * sc, base.bounds.max[1] + 2 * sc];
+
+/**
+ * The plan under an electrical or plumbing plan: walls, doors, grids and two dimension chains away from the front of
+ * the house (front: the meter or the manhole there), no tags, no stair texts; the room names come after.
+ */
+const mepCopy = (front) => ({ roomLabels: false, levels: false, tags: false, stairLabels: false, front: front ?? null });
+
+/**
+ * Boxes along the lines, arcs and symbols an engine drew (at offset), back in plan coordinates: the room names keep
+ * off the wires and the pipes.
+ */
+function drawnBoxes(ents, offset, sc) {
+  const out = [];
+  const put = (p, r) => out.push([p[0] - offset[0] - r, p[1] - offset[1] - r, p[0] - offset[0] + r, p[1] - offset[1] + r]);
+  const seg = (a, b, bulge) => {
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (L < 1) return;
+    // a positive bulge: the arc runs counter-clockwise from a to b, to the right of the chord
+    const n = [(b[1] - a[1]) / L, -(b[0] - a[0]) / L], sag = (bulge * L) / 2;
+    const steps = Math.max(1, Math.ceil(L / 120));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps, q = 4 * t * (1 - t) * sag;
+      put([a[0] + (b[0] - a[0]) * t + n[0] * q, a[1] + (b[1] - a[1]) * t + n[1] * q], 70);
+    }
+  };
+  for (const e of ents) {
+    if (e.type === 'line' && e.from && e.to) seg(e.from, e.to, 0);
+    else if (e.type === 'polyline' && Array.isArray(e.points)) {
+      const n = e.points.length;
+      for (let i = 0; i < (e.closed ? n : n - 1); i++) seg(e.points[i], e.points[(i + 1) % n], e.bulges?.[i] ?? 0);
+    } else if (e.type === 'block' && e.at) put(e.at, 1.5 * sc);
+    else if (e.type === 'circle' && e.center) put(e.center, (e.radius ?? 0) + 30);
+  }
+  return out;
+}
+
+/** The stairs of a plan as boxes (labels are not written on the treads). */
+const stairBoxes = (spec, offset) => [...(spec.stairs || []), ...(spec.stairs_below || [])].filter((st) => Array.isArray(st.region)).map((st) => {
+  const [[x0, y0], [x1, y1]] = st.region;
+  return [Math.min(x0, x1) + offset[0], Math.min(y0, y1) + offset[1], Math.max(x0, x1) + offset[0], Math.max(y0, y1) + offset[1]];
+});
+
+/**
+ * The room names of an electrical or plumbing plan: the name alone (the areas are on the architectural plans), where
+ * the devices or fixtures (busy boxes, plan coordinates) leave room, not for the stairs. Returns the text entities at
+ * offset and their boxes (obstacles of the other labels).
+ */
+function roomNames(spec, polys, busy, offset, sc, planEnts = []) {
+  const entities = [], boxes = [];
+  // the doors with their swings, the windows and the tags of the plan copy (their boxes are at offset)
+  const taken = [...busy, ...planEnts.filter((e) => e.type === 'block' && e.box).map((e) => [e.box[0] - offset[0], e.box[1] - offset[1], e.box[2] - offset[0], e.box[3] - offset[1]])];
+  for (const rm of spec.rooms || []) {
+    const name = String(rm.name);
+    const poly = polys?.[name];
+    if (!poly || STAIR_ROOM(name)) continue;
+    // a text height clear of the walls on both sides
+    const sizeOf = (hh) => [textWidth(name, hh) + 2 * hh, 1.8 * hh];
+    // clear of the devices and the doors, smaller in a crowded room; when nothing is free: over as little as it can
+    let h = 2.5 * sc, p = null;
+    for (const k of [2.5, 2, 1.8]) {
+      p = freePoint(poly, taken, sizeOf(k * sc), rm.at, [], 50);
+      if (p) { h = k * sc; break; }
+    }
+    if (!p) {
+      h = 2 * sc;
+      p = freePoint(poly, [], sizeOf(h), rm.at, taken, 50) ?? rm.at;
+    }
+    const size = sizeOf(h);
+    const box = [p[0] - size[0] / 2, p[1] - size[1] / 2, p[0] + size[0] / 2, p[1] + size[1] / 2];
+    taken.push(box);
+    entities.push({ type: 'text', text: name, at: [Math.round(p[0] + offset[0]), Math.round(p[1] + offset[1])], height: h, align: 'middle_center', layer: ROLE.room_tag, style: TEXT_STYLE });
+    boxes.push([box[0] + offset[0], box[1] + offset[1], box[2] + offset[0], box[3] + offset[1]]);
+  }
+  return { entities, boxes };
+}
+
+const MepOptions = opt(Obj);
+const STAIR_ROOM = (name) => /(CẦU THANG|STAIR)/i.test(name);
+const ItemsArg = opt(Specs).describe('Furniture of this floor (as draw_furniture_plan, not drawn): sets the bedside, desk, kitchen and bathroom positions');
+const floorIndex = (D, key) => Math.max(0, D.floors.findIndex((F) => F.name === key));
+const langOf = (args) => args.language ?? language;
+
+server.registerTool('draw_electrical_plan', {
+  description:
+    'Electrical plan of one floor (mặt bằng điện) for the electrical set (its own file), from the plan of draw_plan. mode ' +
+    'lighting (mặt bằng chiếu sáng): the lights by the ceiling rules of the interior set (downlights in the drop band, ' +
+    'ceiling lamps, pendants over dining tables, LED coves), extract fans in WCs, outdoor wall lights, the stair lamp; one ' +
+    'switch per room by its main door (latch side, WC switches outside the WC) with one gang per group of lights, two-way ' +
+    'switches at the stairs; the wiring of each circuit as arcs and its home run to the board named L1, L2... (the circuits listed under the plan). mode power ' +
+    '(mặt bằng ổ cắm, điều hòa): double sockets by the kind of room (bedside, desk, TV wall, dining), worktop sockets, hob ' +
+    'outlet and hood socket, weatherproof sockets in WCs and yards, wall air conditioners sized at 600 BTU/m² with their ' +
+    'sockets, water heaters in WCs, the pump, data and TV outlets to the data cabinet, the meter outside the front door; ' +
+    'circuits S, ĐH, NL, BT, BN. Boards: TĐ-1, TĐ-2... by the stair door, the main board TĐ-T on the ground floor (a floor ' +
+    'without rooms of its own, e.g. the stair tower, is fed from the board below). Legend with the counts, the circuits of ' +
+    'the floor, general notes. The same design (devices, circuits, loads) serves draw_electrical_diagram and ' +
+    'electrical_calc. Defaults (heights, circuit sizes, demand factors, powers) are listed in assumed; options: {heights, ' +
+    'max_lights, max_sockets, btu_per_m2, power, ks, kdt, pump: false}.',
+  inputSchema: {
+    floor: FloorArg, mode: z.enum(['lighting', 'power']).default('lighting'), scale: z.number().positive().default(100),
+    offset: opt(Point), legend: z.boolean().default(true), notes: NotesArg, title: opt(Str), plan: opt(Obj), language: opt(Lang),
+    items: ItemsArg, options: MepOptions, spacing: z.number().positive().default(1200).describe('Downlight spacing of the ceiling rules (mm)'),
+    circuits: z.boolean().default(true).describe('List the circuits of the floor under its plan'),
+    dry_run: z.boolean().default(false).describe('List the design (boards, circuits, devices) and what it assumes, without drawing'),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const tool = 'draw_electrical_plan';
+  const { spec, key, label: floorLabel } = floorFor(args, tool);
+  const D = await electricalModel(args, tool);
+  const k = floorIndex(D, key);
+  const F = D.floors[k];
+  const count = {};
+  for (const d of F.devices) count[d.kind] = (count[d.kind] ?? 0) + 1;
+  const B = D.boards.find((b) => b.id === F.served);
+  const circuits = (B?.circuits ?? []).filter((c) => c.floors.includes(F.name)).map((c) => `${c.id} ${c.name} (${c.rooms.join(', ')}): ${c.P} W, ${c.breaker}, ${c.cable}`);
+  const summary = { floor: F.name, board: F.board?.label ?? `${F.served} (${langOf(args) === 'en' ? 'floor below' : 'tầng dưới'})`, devices: count, circuits };
+  if (args.dry_run) return dryRun(D.assumed, { ...summary, warnings: D.warnings.length ? D.warnings : undefined });
+  const sc = args.scale;
+  const lg = langOf(args);
+  const pts = F.devices.filter((d) => d.kind !== 'strip').map((d) => d.at);
+  const base = await planCopy(tool, spec, args, sc, mepCopy(D.floors[0]?.board?.meter?.at));
+  // a first pass for the wires: the room names keep off them and off the devices
+  const wires = engine(tool, () => electricalPlan(D, k, { mode: args.mode, offset: base.offset, scale: sc, lang: lg, hard: [], limit: null, legendAt: null, circuitsAt: null }));
+  const names = roomNames(spec, F.polys, [...pointBoxes(pts, 2.2 * sc), ...drawnBoxes(wires.entities.filter((e) => e.type !== 'text'), base.offset, sc)], base.offset, sc, base.ents);
+  const hard = [...textBoxes(base.ents), ...names.boxes, ...wallBoxes(F.polys, base.offset), ...stairBoxes(spec, base.offset),
+    ...pointBoxes(pts.map((p) => [p[0] + base.offset[0], p[1] + base.offset[1]]), 1.2 * sc)];
+  const lp = engine(tool, () => electricalPlan(D, k, {
+    mode: args.mode, offset: base.offset, scale: sc, lang: lg, hard, limit: planLimit(base, sc),
+    legendAt: args.legend ? [base.bounds.max[0] + 15 * sc, base.bounds.max[1]] : null,
+    circuitsAt: args.circuits === false ? null : [base.bounds.min[0], base.bounds.min[1] - 28 * sc],
+  }));
+  const extra = [...lp.entities, ...names.entities];
+  if (args.notes !== false) {
+    const lines = Array.isArray(args.notes) ? args.notes : electricalNotes(args.mode, lg);
+    extra.push(...notesBlock(lines, [base.bounds.max[0] + 15 * sc, lp.legendBottom != null ? lp.legendBottom - 6 * sc : base.bounds.max[1]], sc, lg));
+  }
+  const TITLE = { lighting: lg === 'en' ? 'LIGHTING PLAN' : 'MẶT BẰNG BỐ TRÍ ĐIỆN CHIẾU SÁNG', power: lg === 'en' ? 'POWER PLAN' : 'MẶT BẰNG BỐ TRÍ Ổ CẮM, ĐIỀU HÒA' };
+  sheetTitle(base, args.title ?? `${TITLE[args.mode]}${floorLabel}`, sc, extra);
+  // a name or a circuit mark that a wire crosses stands on a mask: the wire breaks at it
+  const res = await drawPlanCopy(base, maskTexts(extra), sc, lg);
+  return text({ offset: base.offset, ...summary, assumed: assumedOrNone(D.assumed), warnings: D.warnings.length ? D.warnings : undefined, count: res.count, bounds: res.bounds });
+}));
+
+
+server.registerTool('draw_electrical_diagram', {
+  description:
+    'Diagrams of the electrical set from the design of draw_electrical_plan (same plan, items and options). kind ' +
+    'single_line (sơ đồ nguyên lý cấp điện): the main board TĐ-T from the meter (cable, main breaker, earth) with a drop per ' +
+    'floor board and its schedule, then each floor board (incoming breaker, busbar, a drop per circuit) with its schedule: ' +
+    'circuit, load, breaker, cable Cu/PVC, P, Ks, Itt, length, voltage drop. kind riser (sơ đồ trục đứng cấp điện): the ' +
+    'floors and levels, the meter, the main and floor boards with their feeders, the data cabinet, the earthing; with the ' +
+    'earthing detail (chi tiết tiếp địa: 3 rods D16 L=2.4 m in a trench, bare copper 25 mm², test box, R ≤ 4 Ω).',
+  inputSchema: {
+    kind: z.enum(['single_line', 'riser']).default('single_line'), scale: z.number().positive().default(50), at: opt(Point),
+    plan: opt(Obj), language: opt(Lang), options: MepOptions, spacing: z.number().positive().default(1200),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const tool = 'draw_electrical_diagram';
+  const D = await electricalModel(args, tool);
+  const sc = args.scale;
+  const { at, info } = await freeSpot(args.at, sc);
+  const r = engine(tool, () => (args.kind === 'riser' ? riserDiagram(D, { scale: sc, lang: langOf(args) }) : singleLineDiagram(D, { scale: sc, lang: langOf(args) })));
+  const res = await drawView(placeAt(r.entities, at), sc, info, args.language);
+  return text({
+    kind: args.kind, main: { breaker: D.main.breaker, cable: D.main.cable, Ptt: D.main.Ptt, I: D.main.I },
+    boards: D.boards.map((b) => ({ id: b.id, floors: b.floors, breaker: b.breaker, cable: b.cable, Ptt: b.Ptt, I: b.I, circuits: b.circuits.length })),
+    warnings: D.warnings.length ? D.warnings : undefined, count: res.count, bounds: res.bounds,
+  });
+}));
+
+server.registerTool('electrical_calc', {
+  description:
+    'Electrical calculation and bill of quantities (bảng tính phụ tải, khối lượng vật tư điện) of the design of ' +
+    'draw_electrical_plan: per circuit and board P, Ks, Ptt, Itt, the breaker (In ≥ Itt), the cable Cu/PVC (Iz ≥ In), length ' +
+    'and voltage drop; the main board with Kđt; the bill (lights, switches, sockets, air conditioners, boards and breakers, ' +
+    'cables by size from the circuit lengths, conduit, data cables, earthing). draw: a sheet with both tables, the design ' +
+    'basis and the sign-off for the electrical engineer (who checks, recalculates and signs it). xlsx_path: live workbook ' +
+    '(inputs in yellow; currents, breakers, cables, voltage drops and cable quantities as formulas). csv_path: the tables.',
+  inputSchema: {
+    draw: z.boolean().default(true), scale: z.number().positive().default(50), at: opt(Point), csv_path: opt(Str),
+    csv_format: z.enum(['comma', 'semicolon']).default('semicolon'), xlsx_path: opt(Str), plan: opt(Obj), language: opt(Lang),
+    options: MepOptions, spacing: z.number().positive().default(1200), dry_run: z.boolean().default(false),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const tool = 'electrical_calc';
+  const D = await electricalModel(args, tool);
+  const lg = langOf(args), en = lg === 'en';
+  const Q = electricalQuantities(D, { lang: lg });
+  const tables = electricalTables(D, Q, lg);
+  const out = {
+    main: { breaker: D.main.breaker, cable: D.main.cable, Ptt: D.main.Ptt, I: D.main.I },
+    boards: D.boards.map((b) => ({ id: b.id, breaker: b.breaker, cable: b.cable, P: b.P, Ptt: b.Ptt, I: b.I })),
+    quantities: Q.rows.filter((r) => !r.head).map((r) => `${r.stt}. ${r.item}: ${r.q} ${r.unit}`),
+    assumed: assumedOrNone(D.assumed), warnings: D.warnings.length ? D.warnings : undefined,
+  };
+  if (args.dry_run) return dryRun(D.assumed, out);
+  const head = en ? 'PRELIMINARY ELECTRICAL CALCULATION - to be checked, recalculated and signed by a licensed electrical engineer'
+    : 'BẢNG TÍNH ĐIỆN SƠ BỘ - kỹ sư điện có chứng chỉ hành nghề phải kiểm tra, tính lại và ký xác nhận';
+  const sign = signOff(en ? 'Electrical lead' : 'Chủ trì thiết kế điện', lg);
+  if (args.csv_path) {
+    const file = path.resolve(args.csv_path.endsWith('.csv') ? args.csv_path : `${args.csv_path}.csv`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, tablesCsv(head, [...tables, sign], args.csv_format === 'comma' ? ',' : ';'), 'utf8');
+    out.csv = file;
+  }
+  if (args.xlsx_path) {
+    const file = path.resolve(args.xlsx_path.endsWith('.xlsx') ? args.xlsx_path : `${args.xlsx_path}.xlsx`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, electricalWorkbook(D, Q, lg));
+    out.xlsx = file;
+  }
+  if (args.draw) {
+    const sc = args.scale;
+    const { at, info } = await freeSpot(args.at, sc);
+    const sheet = calcSheetOf({
+      title: en ? 'PRELIMINARY ELECTRICAL CALCULATION' : 'BẢNG TÍNH ĐIỆN SƠ BỘ',
+      warning: en ? 'Prepared by software for the drawings: a licensed electrical engineer must check it, calculate it again and sign it before construction.'
+        : 'Bảng tính do phần mềm lập để thể hiện bản vẽ: kỹ sư điện có chứng chỉ hành nghề phải kiểm tra, tính toán lại và ký xác nhận trước khi thi công.',
+      left: [tables[0]], right: [tables[1], sign], notes: electricalBasis(D, lg), scale: sc, lang: lg, layer: ROLE.elec_text,
+    });
+    const res = await drawView(placeAt(sheet.entities, at), sc, info, args.language);
+    out.count = res.count;
+    out.bounds = res.bounds;
+  }
+  return text(out);
+}));
+
+server.registerTool('draw_plumbing_plan', {
+  description:
+    'Plumbing plan of one floor (mặt bằng cấp thoát nước) for the plumbing set (its own file), from the plan of draw_plan. ' +
+    'mode supply (mặt bằng cấp nước): the shaft in the WC corner with the down riser from the roof tank and the pump riser ' +
+    'up, one cold water branch per floor (PPR trunk with tees and stubs to the toilet, basin, shower, kitchen sink, washer; ' +
+    'the water heater of each WC over the shower mixer), hot water from it to the basin (dashed), a stop valve where the ' +
+    'branch leaves the shaft, supply points; the ground floor adds the meter, the ' +
+    'pump and their pipes; the top floor the tank on the stair tower roof and its pipes along the terrace. mode drainage ' +
+    '(mặt bằng thoát nước): soil D110 from the toilets, waste D60 from basins, sinks and floor drains to the stacks (TX ' +
+    'D110, TR D90) with slopes, rainwater downpipes D90 of the roof and balcony drains; the ground floor adds the septic ' +
+    'tank (3 compartments, under the slab), the manholes HG1, HG2 and the drain to the street sewer. Fixtures from ' +
+    'draw_furniture_plan (or items), else defaults (toilet and shower opposite the WC door, basin on the side wall, kitchen ' +
+    'run with the sink, washer in the yard). focus: a room name, the result gives its window for an enlarged plan (e.g. ' +
+    'the WC at scale 25). Defaults (people, norms, tank, pipes, slopes, septic tank) are listed in assumed; options: ' +
+    '{people, q_day, tank, pump_kw, heater_l, pipes, slopes, shaft, a, K, v_max, head_min, head_comfort, septic_min, rain_q5, rain_k, rain_pipe}.',
+  inputSchema: {
+    floor: FloorArg, mode: z.enum(['supply', 'drainage']).default('supply'), scale: z.number().positive().default(100),
+    offset: opt(Point), legend: z.boolean().default(true), notes: NotesArg, title: opt(Str), plan: opt(Obj), language: opt(Lang),
+    items: ItemsArg, options: MepOptions, focus: opt(Str).describe('Room name: return its window for an enlarged plan'),
+    dry_run: z.boolean().default(false).describe('List the design (shaft, fixtures, pipes, tank, septic tank) and what it assumes, without drawing'),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const tool = 'draw_plumbing_plan';
+  const { spec, key, label: floorLabel } = floorFor(args, tool);
+  const D = await plumbingModel(args, tool);
+  const k = floorIndex(D, key);
+  const F = D.floors[k];
+  const summary = {
+    floor: F.name, fixtures: F.fixtures.map((x) => `${x.kind} (${x.room})`), drains: F.drains.length, downpipes: F.downpipes.length,
+    shaft: D.shafts[0]?.poly, calc: { N: D.calc.N, q: D.calc.q, riser: `D${D.calc.riser}`, tank: D.calc.tank, head: D.calc.head, septic: D.calc.septic.V },
+  };
+  if (args.dry_run) return dryRun(D.assumed, { ...summary, warnings: D.warnings.length ? D.warnings : undefined });
+  const sc = args.scale, lg = langOf(args);
+  const base = await planCopy(tool, spec, args, sc, mepCopy(D.equipment?.meter ?? D.equipment?.hg2));
+  // the fixtures themselves (furniture library), then the pipes
+  const fixtureTypes = ['toilet', 'vanity', 'shower', 'bathtub', 'kitchen_base', 'washer'];
+  const fixtureItems = (F.items || []).filter((it) => fixtureTypes.includes(it.type));
+  const extra = furniturePlan(fixtureItems, { offset: base.offset, scale: sc, tags: false });
+  // the room names clear of the fixtures, the drains, the shaft, what stands on this floor and the pipes (a first pass)
+  const E = D.equipment;
+  const pipes = engine(tool, () => plumbingPlan(D, k, { mode: args.mode, offset: base.offset, scale: sc, lang: lg, hard: [], limit: null, legendAt: null }));
+  const names = roomNames(spec, F.polys, [
+    ...drawnBoxes(pipes.entities.filter((e) => e.type !== 'text'), base.offset, sc),
+    ...footprints(fixtureItems), ...pointBoxes(F.drains.map((d) => d.at), 1.5 * sc),
+    ...D.shafts.map((g) => [Math.min(...g.poly.map((q) => q[0])), Math.min(...g.poly.map((q) => q[1])), Math.max(...g.poly.map((q) => q[0])), Math.max(...g.poly.map((q) => q[1]))]),
+    ...(F.ground ? pointBoxes([E.hg1, E.hg2, ...(E.pump ? [E.pump] : [])], 350) : []),
+  ], base.offset, sc, base.ents);
+  // an enlarged plan of one room: its window (the room and a margin for its labels and title)
+  let focusWindow = null, focusTitle = null;
+  if (args.focus) {
+    const poly = F.polys?.[args.focus];
+    if (!poly) throw new Error(`${tool}: focus: room "${args.focus}" not on ${F.name}`);
+    const xs = poly.map((p) => p[0] + base.offset[0]), ys = poly.map((p) => p[1] + base.offset[1]);
+    const m = 800;
+    focusTitle = [(Math.min(...xs) + Math.max(...xs)) / 2, Math.max(...ys) + 1500 + 5 * sc];
+    focusWindow = [[Math.min(...xs) - m, Math.min(...ys) - m], [Math.max(...xs) + m, focusTitle[1] + 6 * sc]];
+  }
+  const pp = engine(tool, () => plumbingPlan(D, k, {
+    mode: args.mode, offset: base.offset, scale: sc, lang: lg,
+    // the labels stay on the plan (inside the window of an enlarged plan, under its title)
+    limit: focusWindow ? [focusWindow[0][0], focusWindow[0][1], focusWindow[1][0], focusTitle[1] - 4 * sc] : planLimit(base, sc),
+    // the pipe names keep off the plan texts, the room names, the walls and the fixtures
+    hard: [...textBoxes(base.ents), ...names.boxes, ...wallBoxes(F.polys, base.offset), ...stairBoxes(spec, base.offset), ...footprints(fixtureItems, base.offset)],
+    legendAt: args.legend ? [base.bounds.max[0] + 15 * sc, base.bounds.max[1]] : null,
+  }));
+  extra.push(...pp.entities, ...names.entities);
+  if (args.notes !== false) {
+    const lines = Array.isArray(args.notes) ? args.notes : plumbingNotes(args.mode, lg);
+    extra.push(...notesBlock(lines, [base.bounds.max[0] + 15 * sc, pp.legendBottom != null ? pp.legendBottom - 6 * sc : base.bounds.max[1]], sc, lg));
+  }
+  const TITLE = { supply: lg === 'en' ? 'WATER SUPPLY PLAN' : 'MẶT BẰNG CẤP NƯỚC', drainage: lg === 'en' ? 'DRAINAGE PLAN' : 'MẶT BẰNG THOÁT NƯỚC' };
+  const titleText = args.title ?? `${TITLE[args.mode]}${floorLabel}`;
+  // an enlarged plan of one room: its title above the room, in the window the result gives for the sheet
+  if (focusWindow) extra.push(...viewTitle(titleText, focusTitle[0], focusTitle[1], sc, ROLE.text, lg));
+  else sheetTitle(base, titleText, sc, extra);
+  // a name or a code that a pipe crosses stands on a mask: the pipe breaks at it
+  const res = await drawPlanCopy(base, maskTexts(extra), sc, lg);
+  const out = { offset: base.offset, ...summary, assumed: assumedOrNone(D.assumed), warnings: D.warnings.length ? D.warnings : undefined, count: res.count, bounds: res.bounds };
+  if (focusWindow) out.focus_window = focusWindow;
+  return text(out);
+}));
+
+server.registerTool('draw_plumbing_diagram', {
+  description:
+    'Diagrams and details of the plumbing set from the design of draw_plumbing_plan. kind risers: the supply riser diagram ' +
+    '(sơ đồ nguyên lý cấp nước: meter, pump, the roof tank, the down riser and the branch of each floor to its fixtures) and ' +
+    'the drainage riser diagram (sơ đồ nguyên lý thoát nước: soil and waste stacks with their vents, the floor branches, ' +
+    'the septic tank, manholes HG1, HG2 and the street sewer, rain downpipes) side by side. kind septic: the 3-compartment ' +
+    'septic tank (plan and section with its volume, walls, baffles, tees, vent and covers, dimensioned, with notes) and the ' +
+    'manhole (plan and section), at 1:25 by default.',
+  inputSchema: {
+    kind: z.enum(['risers', 'septic']).default('risers'), scale: opt(z.number().positive()), at: opt(Point), plan: opt(Obj),
+    language: opt(Lang), options: MepOptions,
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const tool = 'draw_plumbing_diagram';
+  const D = await plumbingModel(args, tool);
+  const sc = args.scale ?? (args.kind === 'septic' ? 25 : 50);
+  const { at, info } = await freeSpot(args.at, sc);
+  const r = engine(tool, () => (args.kind === 'septic' ? septicDetail(D, { scale: sc, lang: langOf(args) }) : plumbingRisers(D, { scale: sc, lang: langOf(args) })));
+  const res = await drawView(placeAt(r.entities, at), sc, info, args.language);
+  return text({ kind: args.kind, scale: sc, septic: D.calc.septic.V, warnings: D.warnings.length ? D.warnings : undefined, count: res.count, bounds: res.bounds });
+}));
+
+server.registerTool('plumbing_calc', {
+  description:
+    'Plumbing calculation and bill of quantities (bảng tính cấp thoát nước, khối lượng vật tư) of the design of ' +
+    'draw_plumbing_plan: people and daily demand, fixture equivalents N, the design flow of a dwelling q = 0.2 N^(1/a) + ' +
+    'K N (TCVN 4513:1988), the riser size for the velocity limit, the roof tank, the head at the highest shower against ' +
+    'the 3 m minimum (booster pump advised under 8 m), the drainage flow (TCVN 4474:1987), rainwater per downpipe Q = K F ' +
+    'q5 / 10000 with K = 2, the septic tank volume W = Wn + Wc; the bill of ' +
+    'pipes by system and diameter (plan runs, risers, drops, allowance), fittings, fixtures, equipment, septic tank and ' +
+    'manholes. draw: a sheet with both tables and the sign-off for the plumbing engineer. xlsx_path: live workbook (inputs ' +
+    'in yellow, everything else formulas). csv_path: the tables.',
+  inputSchema: {
+    draw: z.boolean().default(true), scale: z.number().positive().default(50), at: opt(Point), csv_path: opt(Str),
+    csv_format: z.enum(['comma', 'semicolon']).default('semicolon'), xlsx_path: opt(Str), plan: opt(Obj), language: opt(Lang),
+    options: MepOptions, dry_run: z.boolean().default(false),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const tool = 'plumbing_calc';
+  const D = await plumbingModel(args, tool);
+  const lg = langOf(args), en = lg === 'en';
+  const Q = plumbingQuantities(D, { lang: lg });
+  const tables = plumbingTables(D, Q, lg);
+  const out = {
+    calc: { people: D.calc.people, N: D.calc.N, q: D.calc.q, riser: `D${D.calc.riser}`, daily_m3: D.calc.daily, tank_l: D.calc.tank, head_m: D.calc.head, rain_q: D.calc.rainQ, septic_m3: D.calc.septic.V },
+    quantities: Q.rows.filter((r) => !r.head).map((r) => `${r.stt}. ${r.item}: ${r.q} ${r.unit}`),
+    assumed: assumedOrNone(D.assumed), warnings: D.warnings.length ? D.warnings : undefined,
+  };
+  if (args.dry_run) return dryRun(D.assumed, out);
+  const head = en ? 'PRELIMINARY PLUMBING CALCULATION - to be checked, recalculated and signed by a licensed plumbing engineer'
+    : 'BẢNG TÍNH CẤP THOÁT NƯỚC SƠ BỘ - kỹ sư cấp thoát nước có chứng chỉ hành nghề phải kiểm tra, tính lại và ký xác nhận';
+  const sign = signOff(en ? 'Plumbing lead' : 'Chủ trì thiết kế cấp thoát nước', lg);
+  if (args.csv_path) {
+    const file = path.resolve(args.csv_path.endsWith('.csv') ? args.csv_path : `${args.csv_path}.csv`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, tablesCsv(head, [...tables, sign], args.csv_format === 'comma' ? ',' : ';'), 'utf8');
+    out.csv = file;
+  }
+  if (args.xlsx_path) {
+    const file = path.resolve(args.xlsx_path.endsWith('.xlsx') ? args.xlsx_path : `${args.xlsx_path}.xlsx`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, plumbingWorkbook(D, Q, lg));
+    out.xlsx = file;
+  }
+  if (args.draw) {
+    const sc = args.scale;
+    const { at, info } = await freeSpot(args.at, sc);
+    const sheet = calcSheetOf({
+      title: en ? 'PRELIMINARY PLUMBING CALCULATION' : 'BẢNG TÍNH CẤP THOÁT NƯỚC SƠ BỘ',
+      warning: en ? 'Prepared by software for the drawings: a licensed plumbing engineer must check it, calculate it again and sign it before construction.'
+        : 'Bảng tính do phần mềm lập để thể hiện bản vẽ: kỹ sư cấp thoát nước có chứng chỉ hành nghề phải kiểm tra, tính toán lại và ký xác nhận trước khi thi công.',
+      left: [tables[0]], right: [tables[1], sign], notes: plumbingBasis(D, lg), scale: sc, lang: lg, layer: ROLE.plumb_text,
+    });
+    const res = await drawView(placeAt(sheet.entities, at), sc, info, args.language);
+    out.count = res.count;
+    out.bounds = res.bounds;
+  }
+  return text(out);
+}));
+
+const MEP_NOTES = {
+  electrical: {
+    vi: [
+      'Tiêu chuẩn áp dụng: QCVN 12:2014/BXD Hệ thống điện của nhà ở và nhà công cộng; TCVN 9206:2012, TCVN 9207:2012; TCVN 7447 (IEC 60364); TCVN 9385:2012 (chống sét, tiếp địa).',
+      'Nguồn điện 1 pha 220V từ lưới điện lực qua công tơ; tủ điện tổng TĐ-T đặt tại tầng 1, mỗi tầng một tủ điện tầng cạnh cầu thang.',
+      'Dây dẫn Cu/PVC đi trong ống nhựa PVC cứng, âm tường, âm sàn, âm trần; tiết diện, thiết bị bảo vệ theo sơ đồ nguyên lý.',
+      'Mạch ổ cắm và thiết bị khu ẩm ướt bảo vệ bằng RCBO 30mA; mỗi điều hòa, bình nóng lạnh, bếp, bơm một mạch riêng.',
+      'Màu dây: pha đỏ hoặc nâu, trung tính xanh dương hoặc đen, tiếp địa vàng xanh; mọi ổ cắm 3 chấu có dây tiếp địa.',
+      'Hệ thống tiếp địa an toàn R ≤ 4Ω, nối về thanh tiếp địa của tủ điện tổng; đo kiểm tra trước khi nghiệm thu.',
+      'Chủng loại đèn, công tắc, ổ cắm theo mẫu chủ đầu tư duyệt; vị trí theo mặt bằng, cao độ theo bảng ký hiệu.',
+      'Phối hợp bản vẽ kiến trúc, nội thất, kết cấu trước khi đục tường, chôn ống; không cắt cốt thép kết cấu.',
+      'Sau khi thi công đo điện trở cách điện, thử tải, kiểm tra RCBO và lập bản vẽ hoàn công.',
+    ],
+    en: [
+      'Standards: QCVN 12:2014/BXD; TCVN 9206:2012, TCVN 9207:2012; TCVN 7447 (IEC 60364); TCVN 9385:2012 (earthing).',
+      'Single-phase 220 V supply through the utility meter; main board TĐ-T on the ground floor, a board on each floor by the stair.',
+      'Cu/PVC cables in rigid PVC conduit concealed in walls, floors and ceilings; sizes and breakers per the single-line diagram.',
+      'Socket circuits and wet areas on 30 mA RCBOs; each air conditioner, water heater, hob and pump on its own circuit.',
+      'Cable colours: line red or brown, neutral blue or black, earth green-yellow; every socket earthed.',
+      'Protective earthing R ≤ 4 Ω to the earth bar of the main board, measured before handover.',
+      'Lights, switches and sockets as approved by the client; positions per the plans, heights per the legend.',
+      'Coordinate with the architectural, interior and structural drawings before chasing; never cut structural bars.',
+      'After installation: insulation test, load test, RCBO test and as-built drawings.',
+    ],
+  },
+  plumbing: {
+    vi: [
+      'Tiêu chuẩn áp dụng: TCVN 4513:1988 Cấp nước bên trong; TCVN 4474:1987 Thoát nước bên trong.',
+      'Nguồn nước: mạng cấp nước thành phố qua đồng hồ, máy bơm đẩy lên bồn trên mái tum, cấp xuống các tầng tự chảy.',
+      'Ống cấp nước PPR (nước lạnh PN10, nước nóng PN20) hàn nhiệt; ống thoát uPVC nối keo; ống qua sàn, tường có ống lồng và chống thấm cổ ống.',
+      'Thoát nước 3 hệ riêng: xí vào bể tự hoại 3 ngăn; nước rửa, nước mưa và nước sau bể tự hoại vào hố ga rồi ra cống chung.',
+      'Độ dốc ống nằm ngang: D60 i=3%, D90-D110 i=2%; ống đứng có lỗ thông tắc ở chân, ống thông hơi cao hơn mái 0,7m (3,0m trên sân thượng có sử dụng).',
+      'Thử áp lực ống cấp 1,5 lần áp lực làm việc, không nhỏ hơn 6 bar trong 30 phút; thử kín ống thoát bằng nước trước khi lấp.',
+      'Thiết bị vệ sinh theo mẫu chủ đầu tư duyệt, lắp theo hướng dẫn nhà sản xuất; điểm chờ theo cao độ thiết bị.',
+      'Súc rửa đường ống, vệ sinh bồn nước trước khi đưa vào sử dụng; lập bản vẽ hoàn công.',
+    ],
+    en: [
+      'Standards: TCVN 4513:1988 internal water supply; TCVN 4474:1987 internal drainage.',
+      'City water through the meter; the pump fills the tank on the stair tower roof, which feeds the floors by gravity.',
+      'Supply PPR (cold PN10, hot PN20) heat-fused; drainage uPVC solvent welded; sleeves and waterproofing where pipes pass slabs and walls.',
+      'Three drainage systems: soil to the 3-compartment septic tank; waste, rainwater and the tank outflow to the manholes and the sewer.',
+      'Horizontal slopes D60 3%, D90-D110 2%; cleanouts at the foot of the stacks, vents 0.7 m above the roof (3.0 m above a roof terrace in use).',
+      'Supply pressure test 1.5 times the working pressure, at least 6 bar for 30 minutes; drains water-tested before backfilling.',
+      'Sanitary ware as approved by the client, installed to the maker\'s instructions; supply points at the fixture heights.',
+      'Flush the pipes and clean the tank before use; as-built drawings.',
+    ],
+  },
+};
+
+server.registerTool('draw_mep_notes', {
+  description:
+    'General notes and legend sheet of the electrical or plumbing set (ghi chú chung, bảng ký hiệu, chữ viết tắt): the ' +
+    'standards, supply, materials, installation and tests as numbered notes, every symbol of the set with its description ' +
+    'and mounting height, and the abbreviations (TĐ, L, S, ĐH, NL, BT, BN, MCB, RCBO / TX, TR, TM, HG, PPR, uPVC). For the ' +
+    'first sheet after the drawing list (Đ-01, N-01). notes replaces the general notes.',
+  inputSchema: { system: z.enum(['electrical', 'plumbing']), scale: z.number().positive().default(50), at: opt(Point), notes: opt(z.array(Str)), language: opt(Lang) },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const sc = args.scale, lg = langOf(args), en = lg === 'en';
+  const elec = args.system === 'electrical';
+  const layer = elec ? ROLE.elec_text : ROLE.plumb_text;
+  const { at, info } = await freeSpot(args.at, sc);
+  const out = [];
+  const lines = args.notes ?? MEP_NOTES[args.system][en ? 'en' : 'vi'];
+  out.push({ type: 'text', text: en ? (elec ? 'ELECTRICAL GENERAL NOTES' : 'PLUMBING GENERAL NOTES') : (elec ? 'GHI CHÚ CHUNG HỆ THỐNG ĐIỆN' : 'GHI CHÚ CHUNG HỆ THỐNG CẤP THOÁT NƯỚC'), at: [0, 0], height: 5 * sc, layer, style: TEXT_STYLE });
+  out.push({ type: 'mtext', text: lines.map((l, i) => `${i + 1}. ${l}`).join('\n'), at: [0, -10 * sc], height: 2.5 * sc, width: 170 * sc, layer, style: TEXT_STYLE, line_spacing: 1.2 });
+  let rows;
+  if (elec) {
+    rows = Object.entries(DEVICES).map(([kd, d]) => (kd === 'strip' ? { line: ROLE.light_strip, extra: { scale_linetype: true }, text: en ? d.en : d.vi }
+      : { block: kd === 'switch' ? 'MCP_E_CT_2' : d.block, real: d.real, layer: ROLE[d.layer], text: en ? d.en : d.vi }));
+    rows.push({ line: ROLE.light_wire, text: en ? 'Lighting wiring' : 'Dây dẫn chiếu sáng' }, { line: ROLE.power_wire, text: en ? 'Power wiring' : 'Dây dẫn ổ cắm, động lực' },
+      { line: ROLE.comm, extra: { scale_linetype: true }, text: en ? 'Data / TV cable' : 'Cáp mạng, truyền hình' }, { block: 'MCP_E_LEN', layer, text: en ? 'Riser (up / down a floor)' : 'Đường dây lên / xuống tầng' },
+      { block: 'MCP_E_TIEP_DIA', layer: ROLE.earth, text: en ? 'Earth' : 'Tiếp địa' });
+  } else {
+    rows = [
+      { line: ROLE.cold_water, text: en ? 'Cold water PPR (CL)' : 'Ống cấp nước lạnh PPR (CL)' }, { line: ROLE.hot_water, extra: { scale_linetype: true }, text: en ? 'Hot water PPR (CN)' : 'Ống cấp nước nóng PPR (CN)' },
+      { line: ROLE.soil, text: en ? 'Soil uPVC (TX)' : 'Ống thoát xí uPVC (TX)' }, { line: ROLE.waste, extra: { scale_linetype: true }, text: en ? 'Waste uPVC (TR)' : 'Ống thoát nước rửa uPVC (TR)' },
+      { line: ROLE.rain, extra: { scale_linetype: true }, text: en ? 'Rainwater uPVC (TM)' : 'Ống thoát nước mưa uPVC (TM)' }, { line: ROLE.vent, extra: { scale_linetype: true }, text: en ? 'Vent uPVC (TH)' : 'Ống thông hơi uPVC (TH)' },
+      { block: 'MCP_P_VAN', layer: ROLE.cold_water, text: en ? 'Gate valve' : 'Van khóa' }, { block: 'MCP_P_DIEM', layer: ROLE.cold_water, text: en ? 'Supply point of a fixture' : 'Điểm cấp nước thiết bị' },
+      { block: 'MCP_P_DHN', layer: ROLE.plumb_equipment, text: en ? 'Water meter' : 'Đồng hồ nước' }, { block: 'MCP_E_BOM', layer: ROLE.plumb_equipment, text: en ? 'Pump' : 'Máy bơm' },
+      { block: 'MCP_E_NL', layer: ROLE.plumb_equipment, text: en ? 'Water heater' : 'Bình nóng lạnh' }, { block: 'MCP_PHEU_THU', real: true, layer: ROLE.waste, text: en ? 'Floor / roof drain' : 'Phễu thu sàn, phễu thu mái' },
+      { draw: (p) => [{ type: 'circle', center: p, radius: 1.5 * sc, layer: ROLE.soil }], text: en ? 'Stack (soil, waste, rainwater)' : 'Ống đứng (thoát xí, thoát rửa, thoát mưa)' },
+      { block: 'MCP_P_TT', layer: ROLE.waste, text: en ? 'Cleanout' : 'Lỗ thông tắc' },
+      ...Object.values(FIXTURES).map((x) => ({ text: `${en ? x.en : x.vi}${x.N ? `: N = ${String(x.N).replace('.', en ? '.' : ',')}` : ''}` })),
+    ];
+  }
+  const lgd = mepLegend(en ? 'LEGEND' : 'BẢNG KÝ HIỆU', rows, [190 * sc, 0], sc, layer, layer);
+  out.push(...lgd.entities);
+  const abbr = elec
+    ? (en ? 'TĐ-T main board; TĐ-n floor board; L lighting; S sockets; ĐH air conditioner; NL water heater; BT hob; BN pump; MCB miniature breaker; RCBO residual current breaker with overcurrent; Cu/PVC copper PVC cable.'
+      : 'TĐ-T tủ điện tổng; TĐ-n tủ điện tầng; L chiếu sáng; S ổ cắm; ĐH điều hòa; NL bình nóng lạnh; BT bếp từ; BN bơm nước; MCB aptomat; RCBO aptomat chống dòng rò; Cu/PVC dây đồng cách điện PVC.')
+    : (en ? 'CL cold water; CN hot water; TX soil; TR waste; TM rainwater; TH vent; OĐ shaft with the stacks and risers; BTH septic tank; HG manhole; ĐHN water meter; MB pump; PPR polypropylene pipe; uPVC rigid PVC pipe; D outside diameter; i slope.'
+      : 'CL cấp lạnh; CN cấp nóng; TX thoát xí; TR thoát rửa; TM thoát mưa; TH thông hơi; OĐ hộp gen ống đứng; BTH bể tự hoại; HG hố ga; ĐHN đồng hồ nước; MB máy bơm; PPR ống nhựa PP-R; uPVC ống nhựa PVC cứng; D đường kính ngoài; i độ dốc.');
+  out.push({ type: 'text', text: en ? 'ABBREVIATIONS' : 'CHỮ VIẾT TẮT', at: [0, -110 * sc], height: 3 * sc, layer, style: TEXT_STYLE });
+  out.push({ type: 'mtext', text: abbr, at: [0, -116 * sc], height: 2.5 * sc, width: 170 * sc, layer, style: TEXT_STYLE });
+  const res = await drawView(placeAt(out, at), sc, info, args.language);
+  return text({ count: res.count, bounds: res.bounds });
 }));
 
 // ---------------------------------------------------------------- install the bridge into AutoCAD

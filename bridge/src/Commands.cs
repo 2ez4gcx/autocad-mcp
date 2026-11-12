@@ -30,6 +30,7 @@ namespace AcadMcp
             Reg("selection_info", Mode.Read, SelectionInfo);
             Reg("quantity_takeoff", Mode.Read, Takeoff.Quantity);
             Reg("check_drawing", Mode.Read, Takeoff.Check);
+            Reg("measure_model", Mode.Read, Measure.Run);
             Reg("draw_entities", Mode.Write, DrawEntities);
             Reg("draw_plan", Mode.Write, Plan.DrawPlan);
             Reg("define_block", Mode.Write, DefineBlock);

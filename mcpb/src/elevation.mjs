@@ -598,6 +598,7 @@ export function buildElevation(spec, opts = {}) {
   const Y = (y) => at[1] + y;
   let wallTop = -Infinity;
   const lowTops = new Set(); // tops of low walls (parapets of a roof terrace) get a level of their own
+  const balU = []; // u range of every balcony: the levels and the height chain stand outside them
 
   // Facade pieces (walls and columns) with their openings, floor by floor.
   for (const { f, pieces } of perFloor) {
@@ -633,6 +634,7 @@ export function buildElevation(spec, opts = {}) {
     // Balconies: slab edge (hides what is behind it) and the railing (rails and balusters, see-through).
     (f.spec.balconies || []).forEach((bc, i) => {
       const b = balconyInView(bc, V, `floors[${f.index}].balconies[${i}]`);
+      balU.push(b.u0, b.u1);
       const slab = rectPoly(b.u0, z - f.slab, b.u1, z);
       const segs = segsOfPoly(slab, L.outline);
       const rt = z + b.railing;
@@ -650,7 +652,7 @@ export function buildElevation(spec, opts = {}) {
   for (const l of hiddenLines(elements)) ents.push({ type: 'line', from: P([X(l.a[0]), Y(l.a[1])]), to: P([X(l.b[0]), Y(l.b[1])]), layer: l.layer });
 
   // Ground line with earth hatch.
-  const uLo = Math.min(uMin, ...roofs.map((r) => r.u0)), uHi = Math.max(uMax, ...roofs.map((r) => r.u1));
+  const uLo = Math.min(uMin, ...roofs.map((r) => r.u0), ...balU), uHi = Math.max(uMax, ...roofs.map((r) => r.u1), ...balU);
   ents.push({ type: 'line', from: P([X(uLo) - 1000, Y(H.ground)]), to: P([X(uHi) + 1000, Y(H.ground)]), layer: L.outline });
   ents.push({
     type: 'hatch', boundary: [P([X(uLo) - 1000, Y(H.ground)]), P([X(uHi) + 1000, Y(H.ground)]), P([X(uHi) + 1000, Y(H.ground) - 2 * scale]), P([X(uLo) - 1000, Y(H.ground) - 2 * scale])],
@@ -682,8 +684,82 @@ export function buildElevation(spec, opts = {}) {
 
 // ---------------------------------------------------------------- section
 
-/** Room whose label point is seen from p without crossing a wall axis (nearest first). */
-function roomAt(M, p) {
+const spaceGrids = new WeakMap();
+
+/** Grid over the floor: the cells whose centre lies in a wall are blocked (doors and openings stay closed). */
+function spaceGrid(M) {
+  let g = spaceGrids.get(M);
+  if (g) return g;
+  const segs = M.walls.flatMap((w) => w.segs);
+  if (!segs.length) return null;
+  const pts = segs.flatMap((s) => segRect(s));
+  const x0 = Math.min(...pts.map((q) => q[0])), y0 = Math.min(...pts.map((q) => q[1]));
+  const x1 = Math.max(...pts.map((q) => q[0])), y1 = Math.max(...pts.map((q) => q[1]));
+  let c = Math.max(20, Math.min(50, Math.min(...segs.map((s) => s.o2 - s.o1)) / 2));
+  while (((x1 - x0) / c + 4) * ((y1 - y0) / c + 4) > 400000) c *= 1.5;
+  const ox = x0 - 2 * c, oy = y0 - 2 * c, nx = Math.ceil((x1 - x0) / c) + 4, ny = Math.ceil((y1 - y0) / c) + 4;
+  const blocked = new Uint8Array(nx * ny);
+  for (const s of segs) {
+    // the segment's rectangle, longer by half its thickness at both ends so that corners close
+    const t = s.o2 - s.o1, n = left(s.d), r = segRect(s, -t / 2, s.L + t / 2);
+    const i0 = Math.max(0, Math.floor((Math.min(...r.map((q) => q[0])) - ox) / c)), i1 = Math.min(nx - 1, Math.ceil((Math.max(...r.map((q) => q[0])) - ox) / c));
+    const j0 = Math.max(0, Math.floor((Math.min(...r.map((q) => q[1])) - oy) / c)), j1 = Math.min(ny - 1, Math.ceil((Math.max(...r.map((q) => q[1])) - oy) / c));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const q = sub([ox + (i + 0.5) * c, oy + (j + 0.5) * c], s.a), u = dot(q, s.d), off = dot(q, n);
+      if (u >= -t / 2 && u <= s.L + t / 2 && off >= s.o1 && off <= s.o2) blocked[j * nx + i] = 1;
+    }
+  }
+  // the spaces between the walls, labelled once: comp[k] = the number of the space of cell k (0 in a wall); out =
+  // the space that reaches the border of the grid (the open air)
+  const comp = new Int32Array(nx * ny);
+  let count = 0;
+  for (let k0 = 0; k0 < comp.length; k0++) {
+    if (blocked[k0] || comp[k0]) continue;
+    count++;
+    const stack = [k0];
+    comp[k0] = count;
+    while (stack.length) {
+      const k = stack.pop(), i = k % nx;
+      for (const m of [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, k - nx, k + nx]) {
+        if (m < 0 || m >= comp.length || comp[m] || blocked[m]) continue;
+        comp[m] = count;
+        stack.push(m);
+      }
+    }
+  }
+  g = { ox, oy, c, nx, ny, blocked, comp, out: comp[0] };
+  spaceGrids.set(M, g);
+  return g;
+}
+
+/** True when p stands in the open air: a space the walls do not close (or beyond the walls altogether). */
+export function isOutside(M, p) {
+  const g = spaceGrid(M);
+  if (!g) return true;
+  const i = Math.floor((p[0] - g.ox) / g.c), j = Math.floor((p[1] - g.oy) / g.c);
+  if (i < 0 || j < 0 || i >= g.nx || j >= g.ny) return true;
+  const k = j * g.nx + i;
+  return !g.blocked[k] && g.comp[k] === g.out;
+}
+
+/**
+ * Room that p stands in: the nearest label point in the same space as p (reached between the walls, whatever the
+ * shape of the room: an L-shaped hall is found from either leg). Where the walls do not close a space, or p is in a
+ * wall, the room whose label point is seen from p without crossing a wall axis (nearest first).
+ */
+export function roomAt(M, p) {
+  const g = spaceGrid(M);
+  const cell = (q) => {
+    const i = Math.floor((q[0] - g.ox) / g.c), j = Math.floor((q[1] - g.oy) / g.c);
+    return i < 0 || j < 0 || i >= g.nx || j >= g.ny ? -1 : j * g.nx + i;
+  };
+  const start = g ? cell(p) : -1;
+  // a space open to the outside (it reaches the border of the grid) is not a room
+  if (start >= 0 && !g.blocked[start] && g.comp[start] !== g.out) {
+    const space = g.comp[start];
+    const inSpace = M.rooms.map((r) => ({ r, k: cell(pt(r.at, 'rooms.at')), d: dist(pt(r.at, 'rooms.at'), p) })).filter((x) => x.k >= 0 && g.comp[x.k] === space).sort((a, b) => a.d - b.d);
+    if (inSpace.length) return inSpace[0].r;
+  }
   const segs = M.walls.flatMap((w) => w.segs);
   const crosses = (a, b) => segs.some((s) => {
     const d1 = cross(sub(b, a), sub(s.a, a)), d2 = cross(sub(b, a), sub(s.b, a));
@@ -694,6 +770,19 @@ function roomAt(M, p) {
     .map((r) => ({ r, d: dist(pt(r.at, 'rooms.at'), p) }))
     .sort((a, b) => a.d - b.d)
     .find((x) => !crosses(p, pt(x.r.at, 'rooms.at')))?.r;
+}
+
+/** True when the segment a-b touches the box [x0, y0, x1, y1]. */
+function segHitsBox(a, b, bx) {
+  let t0 = 0, t1 = 1;
+  const d = sub(b, a);
+  for (const [p, q] of [[-d[0], a[0] - bx[0]], [d[0], bx[2] - a[0]], [-d[1], a[1] - bx[1]], [d[1], bx[3] - a[1]]]) {
+    if (Math.abs(p) < 1e-9) { if (q < 0) return false; continue; }
+    const r = q / p;
+    if (p < 0) t0 = Math.max(t0, r); else t1 = Math.min(t1, r);
+    if (t0 > t1) return false;
+  }
+  return true;
 }
 
 /** Range of u where the cut line crosses a rectangle region (null when it misses). */
@@ -1005,7 +1094,8 @@ export function buildSection(spec, opts = {}) {
   const X = (u) => at[0] + (u - uMin);
   const Y = (y) => at[1] + y;
   const ents = [];
-  for (const l of hiddenLines(elements)) ents.push({ type: 'line', from: P([X(l.a[0]), Y(l.a[1])]), to: P([X(l.b[0]), Y(l.b[1])]), layer: l.layer });
+  const drawn = hiddenLines(elements);
+  for (const l of drawn) ents.push({ type: 'line', from: P([X(l.a[0]), Y(l.a[1])]), to: P([X(l.b[0]), Y(l.b[1])]), layer: l.layer });
   for (const fl of fills) {
     if (fl.type === 'hatch') ents.push({ ...fl, boundary: fl.boundary.map((q) => P([X(q[0]), Y(q[1])])) });
     else ents.push({ ...fl, from: P([X(fl.from[0]), Y(fl.from[1])]), to: P([X(fl.to[0]), Y(fl.to[1])]) });
@@ -1034,7 +1124,8 @@ export function buildSection(spec, opts = {}) {
       roomsOut.push(B.length > 1 ? `${f.name}: ${room.name}` : room.name);
       // the room's ceiling (from its finishes): drop bands at the walls, hangers up to the slab; finish codes
       const cl = opts.ceilings?.[f.index]?.[room.name];
-      let yName = yRoom;
+      const tagBoxes = [], ceilSegs = [];
+      let yName = yRoom, yCeil = M.H.top - (B[f.index + 1]?.slab ?? 0);
       if (cl?.level) {
         const drop = cl.drop && u1 - u0 > 2 * cl.drop.width + 600 ? cl.drop : null;
         const low = cl.level - (drop?.depth ?? 0);
@@ -1042,6 +1133,7 @@ export function buildSection(spec, opts = {}) {
           ? [[u0, low], [u0 + drop.width, low], [u0 + drop.width, cl.level], [u1 - drop.width, cl.level], [u1 - drop.width, low], [u1, low]]
           : [[u0, cl.level], [u1, cl.level]];
         ents.push({ type: 'polyline', points: pts.map((q) => P([X(q[0]), Y(z + q[1])])), layer: L.ceiling });
+        for (let k = 1; k < pts.length; k++) ceilSegs.push({ a: [pts[k - 1][0], z + pts[k - 1][1]], b: [pts[k][0], z + pts[k][1]] });
         const under = M.H.top - (B[f.index + 1]?.slab ?? 120);
         if (under - cl.level > 50) {
           const n = Math.max(1, Math.round((u1 - u0) / 1200));
@@ -1053,12 +1145,44 @@ export function buildSection(spec, opts = {}) {
         }
         // the name well under the ceiling and its tag, clear of both
         yName = Math.min(yRoom, low - 9 * scale);
+        yCeil = cl.level;
         if (u1 - u0 > 50 * scale) {
-          if (cl.code) ents.push(tagSym(cl.code, [X(u0) + 9 * scale, Y(z + low) - 3.2 * scale], scale, L.note));
-          if (cl.floor_code) ents.push(tagSym(cl.floor_code, [X(u0) + 9 * scale, Y(z) + 3.2 * scale], scale, L.note));
+          for (const tag of [cl.code && tagSym(cl.code, [X(u0) + 9 * scale, Y(z + low) - 3.2 * scale], scale, L.note), cl.floor_code && tagSym(cl.floor_code, [X(u0) + 9 * scale, Y(z) + 3.2 * scale], scale, L.note)]) {
+            if (!tag) continue;
+            ents.push(tag);
+            tagBoxes.push(tag.box ?? [tag.at[0] - 5 * scale, tag.at[1] - 2.5 * scale, tag.at[0] + 5 * scale, tag.at[1] + 2.5 * scale]);
+          }
         }
       }
-      ents.push({ type: 'text', text: String(room.name), at: P([X(um), Y(z + yName)]), height: 2.5 * scale, align: 'middle_center', layer: L.text, style: TEXT_STYLE });
+      // the name clear of what is seen beyond the cut (door and window outlines, wall ends, the stair) and of the
+      // tags: the free place nearest to the middle of the room, between the floor and the ceiling; in two lines
+      // where one line finds no free place (between two doors, say), then in smaller letters (beside a door)
+      const name = String(room.name);
+      const near = [...drawn, ...ceilSegs].filter((l) => Math.max(l.a[0], l.b[0]) > u0 && Math.min(l.a[0], l.b[0]) < u1 && Math.max(l.a[1], l.b[1]) > z && Math.min(l.a[1], l.b[1]) < z + M.H.top);
+      const place = (lines, th) => {
+        const nw = Math.max(...lines.map((l) => [...l].length), 4) * 0.85 * th + 2 * scale, nh = (lines.length - 1) * 1.6 * th + th + 1.8 * scale;
+        const free = (u, y) => {
+          const bx = [u - nw / 2, z + y - nh / 2, u + nw / 2, z + y + nh / 2];
+          return !near.some((l) => segHitsBox(l.a, l.b, bx)) && !tagBoxes.some((t) => X(bx[0]) < t[2] && t[0] < X(bx[2]) && Y(bx[1]) < t[3] && t[1] < Y(bx[3]));
+        };
+        if (free(um, yName)) return { u: um, y: yName, lines, th };
+        const yLo = M.H.floor + 2 * scale + nh / 2, yHi = yCeil - nh / 2, uLoN = u0 + nw / 2, uHiN = u1 - nw / 2;
+        let best = null;
+        for (let i = -80; i <= 80; i++) for (let j = -30; j <= 30; j++) {
+          const u = um + i * scale, y = yName + j * scale, cost = Math.abs(i) + 1.2 * Math.abs(j);
+          if (u < uLoN || u > uHiN || y < yLo || y > yHi || (best && cost >= best.cost) || !free(u, y)) continue;
+          best = { u, y, cost, lines, th };
+        }
+        return best;
+      };
+      const words = name.split(' ');
+      let cutAt = 1;
+      for (let k = 1; k < words.length; k++) if (Math.abs(words.slice(0, k).join(' ').length - name.length / 2) < Math.abs(words.slice(0, cutAt).join(' ').length - name.length / 2)) cutAt = k;
+      const two = words.length > 1 ? [words.slice(0, cutAt).join(' '), words.slice(cutAt).join(' ')] : null;
+      const at2 = place([name], 2.5 * scale) ?? (two && place(two, 2.5 * scale)) ?? place([name], 2 * scale) ?? (two && place(two, 2 * scale)) ?? { u: um, y: yName, lines: [name], th: 2.5 * scale };
+      at2.lines.forEach((line, k) => ents.push({
+        type: 'text', text: line, at: P([X(at2.u), Y(z + at2.y + ((at2.lines.length - 1) / 2 - k) * 1.6 * at2.th)]), height: at2.th, align: 'middle_center', layer: L.text, style: TEXT_STYLE,
+      }));
     }
   }
 

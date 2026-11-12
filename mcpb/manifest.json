@@ -5,7 +5,7 @@
   "display_name": "Construction AutoCAD MCP",
   "version": "1.2.1",
   "description": "Lets Claude read, draw, check and take off quantities in AutoCAD drawings, including complete layered floor plans from an image or a 3D model (AutoCAD 2021-2024).",
-  "long_description": "Connects Claude to the drawing open in AutoCAD through the **ACAD MCP Bridge** .NET add-in (socket 127.0.0.1:9877).\n\n- No Python or Node.js install needed: runs on the Node.js built into Claude Desktop.\n- First time: ask Claude to run the `install_autocad_bridge` tool, then restart AutoCAD (choose *Always load* if it asks about the unsigned add-in).\n- `draw_plan` draws a complete plan in one step: walls with clean junctions and material hatch, doors and windows cut into the walls, columns, grids with bubbles, stairs, rooms whose areas are measured from the walls, and exterior dimension chains, all on a professional layer standard (A-WALL, A-DOOR, S-GRID, A-ANNO-DIMS...).\n- Reference images: `view_image` (zoom and pixel grid), `attach_image` (calibrated underlay), `screenshot` to compare.\n- Quantities by layer/block (`quantity_takeoff`, CSV), drawing QA (`check_drawing`), sheets with title block (`create_layout`) and PDF export.\n- Every drawing edit is one Undo step.\n- Requires full AutoCAD 2021-2024 on Windows (not AutoCAD LT).\n- Formerly *AutoCAD MCP* (`autocad-mcp`): if that extension is still installed, remove it after installing this one to avoid duplicate tools.",
+  "long_description": "Connects Claude to the drawing open in AutoCAD through the **ACAD MCP Bridge** .NET add-in (socket 127.0.0.1:9877).\n\n- No Python or Node.js install needed: runs on the Node.js built into Claude Desktop.\n- First time: ask Claude to run the `install_autocad_bridge` tool, then restart AutoCAD (choose *Always load* if it asks about the unsigned add-in).\n- `draw_plan` draws a complete plan in one step: walls with clean junctions and material hatch, doors and windows cut into the walls, columns, grids with bubbles, stairs, rooms whose areas are measured from the walls, and exterior dimension chains, all on a professional layer standard (A-WALL, A-DOOR, S-GRID, A-ANNO-DIMS...).\n- Reference images: `view_image` (zoom and pixel grid), `attach_image` (calibrated underlay), `screenshot` to compare.\n- Construction sets from the same plan, each its own file: architecture, structure (with a preliminary TCVN calculation), interior, electrical (lighting and power plans, circuits, single-line and riser diagrams, load calculation) and plumbing (supply and drainage plans, riser diagrams, septic tank, calculation), with quantities and live Excel workbooks.\n- Quantities by layer/block (`quantity_takeoff`, CSV), drawing QA (`check_drawing`), sheets with title block (`create_layout`) and PDF export.\n- Every drawing edit is one Undo step.\n- Requires full AutoCAD 2021-2024 on Windows (not AutoCAD LT).\n- Formerly *AutoCAD MCP* (`autocad-mcp`): if that extension is still installed, remove it after installing this one to avoid duplicate tools.",
   "author": {
     "name": "Khuong Doan"
   },
@@ -58,6 +58,10 @@
     {
       "name": "quantity_takeoff",
       "description": "Quantities by layer/block: lengths, areas, counts, CSV for Excel"
+    },
+    {
+      "name": "measure_model",
+      "description": "Volumes of prisms and of their union, areas of faces with holes, by AutoCAD's solid modeler"
     },
     {
       "name": "check_drawing",
@@ -184,6 +188,10 @@
       "description": "Bar schedule of the whole structural set (bảng thống kê cốt thép"
     },
     {
+      "name": "verify_quantities",
+      "description": "Independent check of the bills: AutoCAD's solid modeler measures the structure and the finish faces again"
+    },
+    {
       "name": "draw_structure_notes",
       "description": "Structural general notes (ghi chú chung kết cấu) as tables"
     },
@@ -238,6 +246,34 @@
     {
       "name": "material_schedule",
       "description": "Finish and material schedule (bảng thống kê vật liệu hoàn thiện)"
+    },
+    {
+      "name": "draw_electrical_plan",
+      "description": "Electrical lighting or power plan of a floor: lights, switches, sockets, air conditioners, boards, wiring by circuit"
+    },
+    {
+      "name": "draw_electrical_diagram",
+      "description": "Single-line diagram with board schedules, or the power riser diagram with the earthing detail"
+    },
+    {
+      "name": "electrical_calc",
+      "description": "Load calculation, breakers and cables, voltage drop, electrical bill of quantities, live Excel"
+    },
+    {
+      "name": "draw_plumbing_plan",
+      "description": "Water supply or drainage plan of a floor: shaft, pipes, fixtures, tank, pump, septic tank, manholes"
+    },
+    {
+      "name": "draw_plumbing_diagram",
+      "description": "Supply and drainage riser diagrams, or the septic tank and manhole details"
+    },
+    {
+      "name": "plumbing_calc",
+      "description": "Water demand, pipe sizes, tank, head, rainwater, septic tank volume, plumbing bill of quantities, live Excel"
+    },
+    {
+      "name": "draw_mep_notes",
+      "description": "General notes, legend and abbreviations of the electrical or plumbing set"
     },
     {
       "name": "install_autocad_bridge",

@@ -16,6 +16,10 @@ import { analyseBeam, calcCsv, calcSheet, chooseBars, CONCRETE, flexure, STEEL, 
 import { boqCsv, boqSheets } from '../src/boq.mjs';
 import { finishQuantities } from '../src/archboq.mjs';
 import { finishWorkbook, howFormula, kcWorkbook } from '../src/workbooks.mjs';
+import { defaultFixtures, inside } from '../src/mep.mjs';
+import { electricalDesign, electricalPlan, electricalQuantities, singleLineDiagram } from '../src/electrical.mjs';
+import { aForNorm, kForN, plumbingBasis, plumbingDesign, plumbingPlan, plumbingQuantities, plumbingRisers, septicDetail, supplyFlow } from '../src/plumbing.mjs';
+import { electricalWorkbook, plumbingWorkbook } from '../src/mepbooks.mjs';
 import { ceilingPlan, cleanPoly, cutBoxes, dejog, floorFinishPlan, furniturePlan, generalNotes, interiorElevation, joineryDetail, materialSchedule, notesBlock, offsetPoly, patternLines, polyArea, resolveFinish, resolveItems, roomEdge, wallFinishPlan } from '../src/interior.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -551,7 +555,9 @@ test('joinery: kitchen front + section with notes, wardrobe; schedule areas and 
   const { items } = resolveItems([{ type: 'bed', room: 'PHÒNG NGỦ', wall: 'A' }], { 'PHÒNG NGỦ': ROOM });
   const s = materialSchedule({ spec: ROOM_SPEC, rooms: { 'PHÒNG NGỦ': ROOM }, finishes: { 'PHÒNG NGỦ': resolveFinish('PHÒNG NGỦ') }, items });
   const row = (code) => s.rows.find((r) => r.code === code);
-  assert.equal(row('FL-01').qty, 24);
+  // the floor runs on under the door D1 to the middle of the 200 wall: 24 + 0.9 x 0.1 (counted since the surface model
+  // measures the floor under the doors)
+  assert.equal(row('FL-01').qty, 24.09);
   assert.ok(near(row('SK-01').qty, 20 - 0.9, 0.01), `skirting ${row('SK-01').qty}`);
   assert.equal(row('FN-01').qty, 1);
   // the drawn table shows each item's and light's block in its symbol column
@@ -561,8 +567,12 @@ test('joinery: kitchen front + section with notes, wardrobe; schedule areas and 
   const withLight = materialSchedule({ spec: ROOM_SPEC, rooms: {}, finishes: {}, lights: [{ kind: 'downlight', code: 'LT-01', description: 'Đèn', unit: 'cái', qty: 3 }] });
   assert.equal(withLight.drawn[1][1].block, 'MCP_DEN_DOWNLIGHT');
   assert.equal(withLight.rows[0].symbol, 'MCP_DEN_DOWNLIGHT');
-  // walls: 20 m x 2.85 m minus the window 1.2 x (2400 - 900) and the door 0.9 x 2.4
-  assert.ok(near(row('WL-01').qty, 20 * 2.85 - 1.2 * 1.5 - 0.9 * 2.4, 0.01), `walls ${row('WL-01').qty}`);
+  // walls: 20 m x 2.85 m minus the window 1.2 x (2400 - 900) and the door 0.9 x 2.4, plus their reveals 75 deep (half
+  // the 200 wall less half a 50 frame): window (2 x 1.5 + 1.2 head + 1.2 sill) x 0.075 = 0.405, door (2 x 2.4 + 0.9) x
+  // 0.075 = 0.4275: 53.87 m²
+  assert.ok(near(row('WL-01').qty, 20 * 2.85 - 1.2 * 1.5 - 0.9 * 2.4 + 5.4 * 0.075 + 5.7 * 0.075, 0.01), `walls ${row('WL-01').qty}`);
+  // the ceiling: the plan of the room 24 m² and the drop face of the band (20 - 8 x 0.6) x 0.15 = 2.28 m²
+  assert.equal(row('CL-01').qty, 26.28);
 });
 
 // ---- buildings of several floors
@@ -602,13 +612,21 @@ test('interior dimensions: face to face through the room, clear of its name and 
   const chains = (spec) => buildPlan(spec).entities.filter((e) => e.type === 'dim_chain');
   const extra = chains({ ...f, interior_dimensions: true }).filter((c) => !chains(f).some((d) => JSON.stringify(d) === JSON.stringify(c)));
   assert.equal(extra.length, 2, JSON.stringify(extra));
-  // between the inner faces of the outer walls
-  assert.deepEqual(extra[0].points, [[200, 7100], [4800, 7100]]);
-  // left of the name (PHÒNG KHÁCH: 11 characters)
-  assert.deepEqual(extra[1].points, [[1210, 200], [1210, 9800]]);
+  // between the inner faces of the outer walls: under the name (at 8000, 3.4 x 250 high) and over the stair (to 6700)
+  const [h, v] = [extra.find((c) => c.direction === 'horizontal'), extra.find((c) => c.direction === 'vertical')];
+  assert.deepEqual(h.points.map((q) => q[0]), [200, 4800]);
+  assert.ok(h.points[0][1] === h.points[1][1] && h.points[0][1] > 6700 && h.points[0][1] < 8000 - 425, JSON.stringify(h));
+  // beside the name (PHÒNG KHÁCH: 11 characters, 2500 +- 1073), clear of the stair (to 2550) and of the window S1 (2900-4100)
+  assert.deepEqual(v.points.map((q) => q[1]), [200, 9800]);
+  assert.ok(v.points[0][0] === v.points[1][0] && v.points[0][0] > 4150 && v.points[0][0] < 4800, JSON.stringify(v));
   // a line through an opening moves aside: the window S1 (2900-4100) at the bottom
-  const w = chains({ ...f, interior_dimensions: true, rooms: [{ name: 'P', at: [4000, 8000] }] }).filter((c) => c.direction === 'vertical' && c.points[0][1] === 200);
+  const w = chains({ ...f, interior_dimensions: true, rooms: [{ name: 'P', at: [1200, 8500] }] }).filter((c) => c.direction === 'vertical' && c.points[0][1] === 200);
   assert.ok(w.length === 1 && (w[0].points[0][0] < 2850 || w[0].points[0][0] > 4150), JSON.stringify(w));
+  // a room with no line clear of its name and walls is not dimensioned inside: a note says so
+  const small = { walls: [{ points: [[0, 0], [1600, 0], [1600, 1400], [0, 1400]], closed: true, thickness: 200 }], rooms: [{ name: 'KHO', at: [800, 700] }], interior_dimensions: true };
+  const ps = buildPlan(small);
+  assert.ok(!ps.entities.some((e) => e.type === 'dim_chain' && e.points.length === 2 && e.at[1] === e.points[0][1] && e.at[0] === e.points[0][0]));
+  assert.equal(ps.notes.filter((n) => /^KHO: no clear line/.test(n)).length, 2, ps.notes.join(' | '));
 });
 
 test('stacked elevation: every floor level, parapet top, tum roof; balcony railing', () => {
@@ -694,7 +712,9 @@ test('roof plan: the tower roof, the terrace inside its parapets, drains with fa
   assert.equal(r.drains, 5);
   assert.equal(r.entities.filter((e) => e.name === 'MCP_PHEU_THU').length, 5);
   assert.ok(r.entities.filter((e) => /^MCP_DOC/.test(e.name ?? '')).length >= 2, 'falls to the drains');
-  assert.ok(r.entities.some((e) => e.text === 'SÂN THƯỢNG') && r.entities.some((e) => e.text === 'MÁI BTCT TUM'));
+  // the names: the tower's wrapped to fit inside the tower walls
+  const names = r.entities.filter((e) => e.type === 'text').map((e) => e.text).join(' ');
+  assert.equal(names, 'SÂN THƯỢNG MÁI BTCT TUM');
   assert.ok(r.entities.some((e) => e.name === 'MCP_COTE' && e.attributes.COTE === `+${(top.level / 1000).toFixed(3)}`), 'terrace level');
   assert.ok(r.notes.length === 3 && r.assumed.some((a) => a.item === 'fall'));
 });
@@ -736,7 +756,7 @@ test('stair detail: plans of the start, typical and arrival floors, section 1-1,
   assert.ok(r.main.filter((e) => e.type === 'hatch' && e.pattern === 'SOLID' && e.boundary.length > 20).length >= 2, 'cut flights');
   assert.ok(r.main.some((e) => e.type === 'mtext' && e.text.includes('2h + b = 600')));
   assert.equal(r.detail.filter((e) => e.type === 'leader').length, 7);
-  assert.ok(r.detail.some((e) => e.type === 'text' && e.text === 'CHI TIẾT BẬC THANG'));
+  assert.ok(r.detail.some((e) => e.type === 'text' && e.text === 'CHI TIẾT BẬC THANG (TẦNG 1)'));
   assert.ok(r.assumed.some((a) => a.item === 'waist'));
 });
 
@@ -775,14 +795,14 @@ test('bar schedule and bill of quantities of the structural set', () => {
   const R = structuralCalc({ spec: TOWN });
   const B = boqSheets(R);
   const titles = B.groups.map((g) => g.title);
-  for (const t of ['MÓNG M1 (1200x1200)', 'CỘT 220x220', 'GIẰNG MÓNG', 'DẦM SÀN TẦNG 2', 'SÀN TẦNG 2 (theo cấu tạo)', 'CẦU THANG (theo cấu tạo)']) assert.ok(titles.includes(t), `${t} in ${titles.join(' | ')}`);
+  for (const t of [`MÓNG M1 (${R.footings[0].B}x${R.footings[0].L})`, 'CỘT C1 (220x220)', 'GIẰNG MÓNG', 'DẦM SÀN TẦNG 2', 'SÀN TẦNG 2', 'CẦU THANG']) assert.ok(titles.includes(t), `${t} in ${titles.join(' | ')}`);
   // every beam type: bottom, support top, midspan top, stirrups; weights by d²/162
   const d2 = B.groups.find((g) => g.title === 'DẦM SÀN TẦNG 2');
   assert.equal(d2.rows.length, 4 * R.slabs[1].types.length);
   for (const r of d2.sched.rows) assert.ok(near(r.weight_kg, (r.total * r.length / 1000) * r.d * r.d / 162, 0.01));
   const Q = B.quantities;
   const q = (re) => Q.rows.find((r) => !r.head && re.test(r.item));
-  assert.ok(near(q(/^Bê tông móng M1/).q, 4 * 1.2 * 1.2 * 0.4, 1e-6));
+  assert.ok(near(q(/^Bê tông móng M1/).q, R.footings.reduce((s, f) => s + f.count * (f.B / 1000) * (f.L / 1000) * (f.H / 1000), 0), 1e-3));
   assert.ok(q(/^Xây tường gạch dày 200/).q > 0 && q(/^Trát tường trong/).q > 0 && q(/^Trát tường ngoài/).q > 0 && q(/^Bê tông sàn TẦNG 2/).q > 0);
   const total = B.groups.reduce((s, g) => s + g.sched.total_kg, 0);
   assert.ok(near(Q.steel.total, total, 0.05), `${Q.steel.total} vs ${total}`);
@@ -819,6 +839,1425 @@ test('architectural finish quantities: tiles, paint inside and outside, waterpro
   assert.ok(kc.subarray(0, 2).toString() === 'PK');
   assert.equal(howFormula('12 x 1,40 x 1,40 x 0,1'), '12*1.40*1.40*0.1');
   assert.equal(howFormula('theo bảng thống kê cốt thép'), null);
+});
+
+// ---- the architectural set (KT): quantities by measure, the live finish workbook, labels clear of each other
+
+const boxesHit = (a, b) => a[0] < b[2] - 1 && b[0] < a[2] - 1 && a[1] < b[3] - 1 && b[1] < a[3] - 1;
+const segHits = (a, b, bx) => {
+  let t0 = 0, t1 = 1;
+  const d = [b[0] - a[0], b[1] - a[1]];
+  for (const [p, q] of [[-d[0], a[0] - bx[0]], [d[0], bx[2] - a[0]], [-d[1], a[1] - bx[1]], [d[1], bx[3] - a[1]]]) {
+    if (Math.abs(p) < 1e-9) { if (q < 0) return false; continue; }
+    const r = q / p;
+    if (p < 0) t0 = Math.max(t0, r); else t1 = Math.min(t1, r);
+    if (t0 > t1) return false;
+  }
+  return true;
+};
+const textBox = (e, k = 0.8) => {
+  const w = [...e.text].length * k * e.height;
+  return [e.at[0] - w / 2, e.at[1] - e.height / 2, e.at[0] + w / 2, e.at[1] + e.height / 2];
+};
+// level mark: the triangle on its point, the value over a line 13.5 paper mm long to its right
+const coteBox = (e) => [e.at[0] - 1.5 * e.scale, e.at[1], e.at[0] + 12 * e.scale, e.at[1] + 5.8 * e.scale];
+const KT_ROOMS = [
+  { 'PHÒNG KHÁCH': [[200, 200], [4800, 200], [4800, 9800], [200, 9800]] },
+  { 'PHÒNG NGỦ': [[1600, 200], [4800, 200], [4800, 9800], [1600, 9800]], WC: [[200, 200], [1500, 200], [1500, 1500], [200, 1500]] },
+  // the terrace up to the faces of the tower walls (T1: 200 thick about its axis)
+  { 'CẦU THANG': [[200, 3000], [2550, 3000], [2550, 6700], [200, 6700]], 'SÂN THƯỢNG': [[200, 200], [4800, 200], [4800, 9800], [200, 9800], [200, 6900], [2750, 6900], [2750, 2800], [200, 2800]] },
+];
+const ktQuantities = (spec, rooms = KT_ROOMS) => {
+  const F = floorsOf(spec);
+  const floors = F.map((f, i) => ({ name: f.name, spec: f.spec, height: f.height, rooms: rooms[i], finishes: Object.fromEntries(Object.keys(rooms[i]).map((n) => [n, resolveFinish(n, {}, [], f.height)])) }));
+  return { F, Q: finishQuantities({ floors, spec }) };
+};
+// a hall around a stairwell (L-shaped seen from either leg), a door in the far wall of its front leg
+const HALL = {
+  walls: [
+    { id: 'W1', points: [[100, 100], [4900, 100], [4900, 9900], [100, 9900]], closed: true, thickness: 200 },
+    { id: 'I1', points: [[100, 2950], [2600, 2950]], thickness: 100 },
+    { id: 'I2', points: [[2600, 2950], [2600, 6750]], thickness: 100 },
+    { id: 'I3', points: [[100, 6750], [2600, 6750]], thickness: 100 },
+  ],
+  openings: [{ wall: 'W1', segment: 1, at: [4900, 1550], width: 900, type: 'door', tag: 'D1' }],
+  rooms: [{ name: 'SẢNH', at: [3750, 5000] }],
+};
+
+test('finish quantities: walls by the height behind each edge, balconies, the arrival floor of the stair, outer faces to the corners', () => {
+  const { Q } = ktQuantities(TOWN);
+  const row = (key) => Q.rows.find((r) => r.key === key);
+  // the terrace: 24.3 m of parapet 1000 high and 9.2 m of tower wall 2800 high, not 33.5 m of a full storey
+  const ter = Q.rooms.find((r) => r.room === 'SÂN THƯỢNG');
+  assert.equal(ter.kind, 'terrace');
+  assert.ok(near(ter.per, 33.5, 1e-6) && near(ter.wallH * ter.per, 24.3 * 1.0 + 9.2 * 2.8, 0.01), JSON.stringify(ter));
+  // the balcony of floor 2 (5.0 x 1.2): outdoor tiles, waterproofing with 300 up its edges, its soffit painted
+  const bal = Q.rooms.find((r) => r.kind === 'balcony');
+  assert.ok(bal && bal.floor === 'TẦNG 2' && near(bal.area, 6, 1e-9) && near(bal.per, 12.4, 1e-9), JSON.stringify(bal));
+  assert.ok(near(row(`floor|${bal.floorCode}`).by['TẦNG 2'], 6, 0.005));
+  assert.ok(near(row('water|BALC').by['TẦNG 2'], 6 + 0.3 * 12.4, 0.005));
+  // the soffits of the floor: the balcony 6 m² and the stair that starts there, on the slope (19 risers of 3300 / 19 on
+  // goings of 2575 / 9, flights 1125 wide: flight 1 hypot(9 goings, 10 risers) = 3.106, flight 2 hypot(8 goings, 9
+  // risers) = 2.772, the half landing 1.125 x 2.35 = 2.644): 6 + 9.256
+  const going2 = 2575 / 9, riser2 = 3300 / 19;
+  const stairSoffit = ((Math.hypot(9 * going2, 10 * riser2) + Math.hypot(8 * going2, 9 * riser2)) * 1125 + 1125 * 2350) / 1e6;
+  assert.ok(near(stairSoffit, 9.256, 0.001) && near(row('paint|SLAB').by['TẦNG 2'], 6 + stairSoffit, 0.005), JSON.stringify(row('paint|SLAB').by));
+  // the stairwell of the arrival floor has no flight: no skirting along steps there (the terrace keeps its own)
+  assert.equal(Q.rooms.find((r) => r.floor === 'TUM' && r.kind === 'stair').skirtingCode, null);
+  assert.ok(near(row(`floor|${ter.skirtingCode}`).by.TUM, ter.per, 0.005));
+  // the facade of the ground floor by hand: 2 x (5.0 + 10.0) m (to the corners, not the wall axes) x (3.6 + 0.45), less
+  // the window 1.2 x 1.5, plus the outside half of its reveals (2 x 1.5 + 1.2 + 1.2) x 0.075 = 0.405
+  assert.ok(near(row('paint|OUT').by['TẦNG 1'], 30 * 4.05 - 1.2 * 1.5 + 5.4 * 0.075, 0.005), JSON.stringify(row('paint|OUT').by));
+  // the stair open to the room (a wall beside flight 1 only): its skirting steps along that wall and one side of the
+  // landing; the flat roof of the tower to its edge (the outer faces of its walls): 2.75 x 4.10
+  assert.ok(near(row('stair|SKIRT').by['TẦNG 2'], 9 * going2 / 1000 + 10 * riser2 / 1000 + 1.125, 0.005), JSON.stringify(row('stair|SKIRT').by));
+  assert.ok(near(row('water|ROOF').by.TUM, 2.75 * 4.1, 0.005));
+  // every row carries both numbers and its faces; with no opening under 0.25 m² they are the same
+  for (const r of Q.rows) if (!r.head && r.faces.length) assert.ok(r.geo === r.q && r.faces.every((id) => Q.faces.some((f) => f.id === id && f.rows.includes(r.key))), r.key);
+  // a partition meeting the outer walls leaves the outer faces as they are
+  const part = { ...TOWN, floors: [{ ...TOWN.floors[0], walls: [...TOWN.floors[0].walls, { id: 'I', points: [[100, 5000], [4900, 5000]], thickness: 100 }] }, { ...TOWN.floors[1], walls: TOWN.floors[0].walls }, TOWN.floors[2]] };
+  const rooms = [{ 'PHÒNG KHÁCH': [[200, 200], [4800, 200], [4800, 4950], [200, 4950]], 'BẾP': [[200, 5050], [4800, 5050], [4800, 9800], [200, 9800]] }, KT_ROOMS[1], KT_ROOMS[2]];
+  assert.deepEqual(ktQuantities(part, rooms).Q.rows.find((r) => r.key === 'paint|OUT').by, row('paint|OUT').by);
+  // a row's total is the sum of its floors as shown, so the sheet, the CSV and the workbook agree
+  for (const r of Q.rows) if (!r.head && r.by) assert.ok(near(r.q, Object.values(r.by).reduce((a, x) => a + x, 0), 0.005), r.item);
+});
+
+test('finish workbook: the faces (Bảng 6.2), the bill as SUMIFS over them with both numbers, stairs, doors, checks', () => {
+  const { F, Q } = ktQuantities(TOWN);
+  const names = F.map((f) => f.name);
+  const xml = finishWorkbook(Q, names).toString('utf8');
+  for (const sheet of ['Hoàn thiện', 'Bề mặt', 'Cầu thang', 'Cửa', 'Kiểm tra']) assert.ok(xml.includes(`name="${sheet}"`), sheet);
+  const n = (t) => xml.split(t).length - 1;
+  // one row per face the bill counts: gross = like parts x length x height, the geometric net and the quantity by the
+  // rules from the ledger of the face
+  const counted = Q.faces.filter((f) => !f.none && f.rows.length);
+  assert.equal(n('<f>MAX(0,J'), 2 * counted.length);
+  assert.ok(n('<f>G') >= counted.filter((f) => f.L !== undefined).length, 'gross as a formula');
+  // deductions and additions as their arithmetic: the window 1.2 x 1.5 off its wall, its reveals 5.4 x 0.075 on it
+  assert.ok(xml.includes('<f>1.2*1.5</f>') && xml.includes('<f>5.4*0.075</f>'));
+  // the bill: every quantity of a floor is a SUMIFS over the faces, by the rules (column O) and geometric (column N)
+  const cells = Q.rows.filter((r) => !r.head && r.faces.length).reduce((k, r) => k + Object.keys(r.by).length, 0);
+  assert.ok(n('<f>ROUND(SUMIFS(') >= 2 * cells && xml.includes("'Bề mặt'!$O$5") && xml.includes("'Bề mặt'!$N$5"), `${n('<f>ROUND(SUMIFS(')} of ${2 * cells}`);
+  // the stair faces take their sizes from the parameters of the stair sheet
+  assert.ok(xml.includes("<f>'Cầu thang'!$B$5-1</f>") && xml.includes("'Cầu thang'!$J$5*(("));
+  // the checks: this workbook against the model row by row, then the checks of the model, the result as a formula
+  assert.ok(n('KHÔNG ĐẠT') >= Q.checks.length && xml.includes("<f>'Hoàn thiện'!"));
+  // no number typed where a formula can stand: the main sheet has no input cell (styles 7, 14, 16) at all
+  const main = xml.slice(xml.indexOf('<sheetData>'), xml.indexOf('</sheetData>'));
+  assert.ok(!/ s="(7|14|16)"/.test(main), 'an input on the main sheet');
+  // quantities without their faces (an older result): a workbook of inputs, no formula over missing sheets
+  const flat = finishWorkbook({ ...Q, rooms: undefined, faces: undefined }, names).toString('utf8');
+  assert.ok(flat.subarray === undefined && !flat.includes('SUMIFS(') && !flat.includes('name="Bề mặt"'));
+});
+
+test('plan: a door tag beside the stair stands clear, a stair with no floor landing at its foot is reported', () => {
+  const STAIRS = { type: 'u', region: [[200, 3000], [2550, 6700]], direction: 'up', turn: 'right' };
+  const spec = { ...HALL, openings: [{ wall: 'I2', at: [2600, 3400], width: 800, type: 'door', tag: 'D6', toward: [3500, 3400] }], stairs: [STAIRS], interior_dimensions: true };
+  const p = buildPlan(spec);
+  // the wall I1 stands against the first riser: the stair is entered from its side, onto the steps
+  assert.ok(p.notes.some((n) => /^stairs\[0\]: no floor landing in front of the flights/.test(n) && n.includes('1125')), p.notes.join(' | '));
+  // I1 opened across both flights: the floor in front of them is the landing
+  const opened = buildPlan({ ...spec, openings: [{ wall: 'I1', at: [1375, 2950], width: 2300, type: 'opening' }] });
+  assert.ok(!opened.notes.some((n) => /no floor landing/.test(n)), opened.notes.join(' | '));
+  // the tag: clear of the door and its swing, of the stair and of every wall
+  const tag = p.entities.find((e) => e.type === 'block' && /^MCP_THE/.test(e.name) && e.attributes?.MA === 'D6');
+  const door = p.entities.find((e) => e.type === 'block' && /^MCP_CUA_DI/.test(e.name));
+  const wallBoxes = p.walls.flatMap((g) => g.solids.map((q) => [Math.min(...q.map((c) => c[0])), Math.min(...q.map((c) => c[1])), Math.max(...q.map((c) => c[0])), Math.max(...q.map((c) => c[1]))]));
+  for (const b of [door.box, [200, 3000, 2550, 6700], ...wallBoxes]) assert.ok(!boxesHit(tag.box, b), `${tag.box} x ${b}`);
+  // the interior dimension of the hall (2150 between the stairwell and the outer wall): clear of the name, the door and the tag
+  const inner = p.entities.filter((e) => e.type === 'dim_chain' && e.points.length === 2 && e.at[0] === e.points[0][0] && e.at[1] === e.points[0][1]);
+  assert.ok(inner.length >= 1 && inner.every((c) => c.direction !== 'horizontal' || (c.points[0][0] === 2650 && c.points[1][0] === 4800)), JSON.stringify(inner));
+  const nameBox = [3750 - 9 * 0.78 * 250 / 2, 5000 - 425, 3750 + 9 * 0.78 * 250 / 2, 5000 + 425];
+  for (const c of inner) {
+    const [a, b] = c.points, mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    // its line, and its text above (horizontal) or left of (vertical) the middle of the line
+    const boxes = c.direction === 'horizontal' ? [[a[0], a[1] - 30, b[0], a[1] + 30], [mid[0] - 400, a[1], mid[0] + 400, a[1] + 300]] : [[a[0] - 30, a[1], a[0] + 30, b[1]], [a[0] - 300, mid[1] - 400, a[0], mid[1] + 400]];
+    for (const bx of boxes) for (const o of [nameBox, door.box, tag.box]) assert.ok(!boxesHit(bx, o), `${c.direction} ${bx} x ${o}`);
+  }
+});
+
+test('roof plan: names and level marks inside their regions, clear of the drains, the fall arrows and each other', () => {
+  const fl = floorsOf(TOWN);
+  const top = fl[fl.length - 1];
+  for (const lang of ['vi', 'en']) {
+    const r = roofPlan({ top, terrace: top.level, roof: top.level + top.height + 120, parapet: 1000, lang });
+    const texts = r.entities.filter((e) => e.type === 'text');
+    const labels = [...texts.map((e) => textBox(e, 0.9)), ...r.entities.filter((e) => e.name === 'MCP_COTE').map(coteBox)];
+    // no text along a wall any more: the parapet height and its top level are in the notes
+    assert.ok(texts.every((e) => !e.rotation) && r.notes[2].includes('+7.900'), r.notes[2]);
+    const arrows = r.entities.filter((e) => /^MCP_DOC/.test(e.name ?? '')).map((e) => {
+      const a = ((e.rotation ?? 0) * Math.PI) / 180, tip = [e.at[0] + Math.cos(a) * 12 * e.scale, e.at[1] + Math.sin(a) * 12 * e.scale];
+      return [Math.min(e.at[0], tip[0]) - 250, Math.min(e.at[1], tip[1]) - 250, Math.max(e.at[0], tip[0]) + 250, Math.max(e.at[1], tip[1]) + 250];
+    });
+    const drains = r.entities.filter((e) => e.name === 'MCP_PHEU_THU').map((e) => [e.at[0] - 150, e.at[1] - 150, e.at[0] + 150, e.at[1] + 150]);
+    labels.forEach((b, i) => {
+      for (const o of [...arrows, ...drains, ...labels.slice(i + 1)]) assert.ok(!boxesHit(b, o), `${lang}: ${b.map(Math.round)} x ${o.map(Math.round)}`);
+      // on the terrace inside the parapets (200 to 4800, 200 to 9800); the tower's inside its walls (200-2550, 3000-6700)
+      assert.ok(b[0] >= 200 && b[2] <= 4800 && b[1] >= 200 && b[3] <= 9800, `${lang}: ${b.map(Math.round)} outside the terrace`);
+      const inTower = b[0] < 2750 && b[2] > 0 && b[1] < 6900 && b[3] > 2800;
+      if (inTower) assert.ok(b[0] >= 200 && b[2] <= 2550 && b[1] >= 3000 && b[3] <= 6700, `${lang}: ${b.map(Math.round)} across the tower walls`);
+    });
+  }
+});
+
+test('elevation from the side: level marks and the height chain stand outside the balcony', () => {
+  // the balcony projects 1200 in front of the facade (plan y -1200 to 0): at one end of both side elevations
+  for (const side of ['left', 'right']) {
+    const e = buildElevation(TOWN, { side });
+    const rail = e.entities.filter((x) => x.type === 'line' && Math.abs(x.from[1] - (3600 + 1100)) < 1 && Math.abs(x.to[1] - (3600 + 1100)) < 1);
+    assert.ok(rail.length >= 1, 'the balcony railing is drawn');
+    const lo = Math.min(...rail.flatMap((l) => [l.from[0], l.to[0]])), hi = Math.max(...rail.flatMap((l) => [l.from[0], l.to[0]]));
+    const marks = e.entities.filter((x) => /^MCP_COTE/.test(x.name ?? ''));
+    for (const m of marks) assert.ok(m.at[0] - 150 > hi || m.at[0] + 1200 < lo, `${side}: level mark at ${m.at[0]} in the balcony ${lo}..${hi}`);
+    const chain = e.entities.find((x) => x.type === 'dim_chain' && x.direction === 'vertical');
+    assert.ok(chain.at[0] < Math.min(lo, ...chain.points.map((q) => q[0])) && chain.points[0][0] <= lo, `${side}: height chain at ${chain.at[0]}`);
+  }
+});
+
+test('section: the room is the space the cut stands in, its name clear of what is seen beyond', () => {
+  // cut along x = 800 through the front leg, the stairwell and the back leg of the hall; its label point is beside the
+  // stairwell, out of sight from both legs
+  const cut = { from: [800, -1000], to: [800, 11000], look: 'right' };
+  const plain = buildSection(HALL, cut);
+  assert.deepEqual(plain.rooms, ['SẢNH', 'SẢNH']);
+  // a ceiling at 2700 brings the name down to the door (900 x 2400) seen beyond in the front leg: it moves beside it
+  const s = buildSection(HALL, { ...cut, ceilings: [{ 'SẢNH': { level: 2700 } }] });
+  const names = s.entities.filter((e) => e.type === 'text' && e.text === 'SẢNH');
+  assert.equal(names.length, 2);
+  const lines = s.entities.filter((e) => e.type === 'line');
+  assert.ok(lines.some((l) => Math.abs(l.from[1] - 2400) < 1 && Math.abs(l.to[1] - 2400) < 1 && Math.abs(Math.abs(l.from[0] - l.to[0]) - 900) < 1), 'the door seen beyond');
+  for (const e of names) {
+    const bx = textBox(e);
+    assert.ok(!lines.some((l) => segHits(l.from, l.to, bx)), `SẢNH at ${e.at} on a line`);
+    assert.ok(e.at[1] + e.height / 2 < 2700 && e.at[1] - e.height / 2 > 0, 'between the floor and the ceiling');
+  }
+});
+
+test('stair detail: cells as large as what each plan takes, the figures of every storey', () => {
+  const r = stairDetail({ spec: TOWN });
+  // plans of floor 1, floor 2, the tower and the section: no cell runs into another
+  assert.deepEqual(r.layout.map((c) => c.view), ['MẶT BẰNG THANG TẦNG 1', 'MẶT BẰNG THANG TẦNG 2', 'MẶT BẰNG THANG TUM', 'MẶT CẮT 1-1']);
+  r.layout.forEach((a, i) => r.layout.slice(i + 1).forEach((b) => assert.ok(!boxesHit(a.box, b.box), `${a.view} x ${b.view}`)));
+  // every grid bubble, level mark and dimension of a plan lies in its cell
+  const cells = r.layout.map((c) => c.box);
+  for (const e of r.main) {
+    if (e.type !== 'dimension' && !(e.type === 'block' && e.box)) continue;
+    const q = e.type === 'dimension' ? e.at : [(e.box[0] + e.box[2]) / 2, (e.box[1] + e.box[3]) / 2];
+    assert.equal(cells.filter((c) => q[0] >= c[0] - 1 && q[0] <= c[2] + 1 && q[1] >= c[1] - 1 && q[1] <= c[3] + 1).length, 1, `${e.type} ${e.name ?? ''} at ${q}`);
+  }
+  // storeys of 3600 and 3300: other risers and goings, both in the notes; the tread detail says which it shows
+  assert.deepEqual(r.stair.storeys.map((x) => [x.floors.join(), x.risers, x.riser, x.going]), [['TẦNG 1', 21, 171.43, 257.5], ['TẦNG 2', 19, 173.68, 286.11]]);
+  const notes = r.main.find((e) => e.type === 'mtext').text;
+  assert.ok(notes.includes('TẦNG 1: 21 bậc, h = 171,4, b = 257,5, 2h + b = 600') && notes.includes('TẦNG 2: 19 bậc, h = 173,7, b = 286,1, 2h + b = 633'), notes);
+  assert.ok(notes.includes('Chi tiết bậc thang vẽ cho TẦNG 1'));
+  // equal storeys: one line of figures as before, the plain title
+  const even = stairDetail({ spec: { ...TOWN, floors: TOWN.floors.map((f, i) => (i === 1 ? { ...f, height: 3600 } : f)) } });
+  assert.equal(even.stair.storeys.length, 1);
+  assert.ok(even.detail.some((e) => e.type === 'text' && e.text === 'CHI TIẾT BẬC THANG'));
+  assert.ok(even.main.find((e) => e.type === 'mtext').text.includes('Chiều cao bậc h = 171,4, bề rộng bậc b = 257,5: 2h + b = 600'));
+});
+
+test('door schedule: a single door by what it serves (a toilet, the outside, dry rooms)', () => {
+  const spec = {
+    walls: [
+      { id: 'W1', points: [[100, 100], [4900, 100], [4900, 9900], [100, 9900]], closed: true, thickness: 200 },
+      { id: 'P1', points: [[100, 5000], [4900, 5000]], thickness: 100 },
+      { id: 'P2', points: [[2500, 5000], [2500, 9900]], thickness: 100 },
+    ],
+    openings: [
+      { wall: 'W1', segment: 0, at: [2500, 100], width: 900, type: 'door', tag: 'D1' },
+      { wall: 'P1', at: [3700, 5000], width: 800, type: 'door', tag: 'D2' },
+      { wall: 'P1', at: [1300, 5000], width: 700, type: 'door', tag: 'D3' },
+    ],
+    rooms: [{ name: 'PHÒNG KHÁCH', at: [2500, 2500] }, { name: 'WC', at: [1300, 7500] }, { name: 'PHÒNG NGỦ', at: [3700, 7500] }],
+  };
+  const r = doorSchedule({ spec });
+  assert.deepEqual(r.rows.map((x) => [x.tag, x.use]), [['D1', 'outside'], ['D2', 'inside'], ['D3', 'wet']]);
+  const desc = Object.fromEntries(r.entities.find((e) => e.type === 'table').rows.slice(1).map((row) => [row[0], row[6]]));
+  assert.ok(/gỗ công nghiệp/.test(desc.D2) && !/gỗ/.test(desc.D1) && !/gỗ/.test(desc.D3) && /vệ sinh/.test(desc.D3), JSON.stringify(desc));
+  // a description given for a tag wins; rooms not named: the use is unknown, the default stays
+  assert.equal(doorSchedule({ spec, materials: { D3: 'Cửa nhựa lõi thép' } }).entities.find((e) => e.type === 'table').rows[3][6], 'Cửa nhựa lõi thép');
+  const blind = doorSchedule({ spec: { ...spec, rooms: [] } });
+  assert.ok(blind.rows.every((x) => x.use === undefined) && /gỗ công nghiệp/.test(blind.entities.find((e) => e.type === 'table').rows[3][6]));
+});
+
+// ---- structural set after the audit: true loads for shear and column loads, point loads, beam on beam, balconies,
+// designed columns, footings, slabs and stairs, the beam schedule pitch, the live workbook
+import { buckling } from '../src/calc.mjs';
+
+test('continuous beam with point loads and hinged ends: statics by hand', () => {
+  // one span, hinged ends, P = 10 at 1 m of 4: reactions 7.5 / 2.5, M = 7.5 under the load
+  const a = analyseBeam([4], [0], [0], [{ i: 0, a: 1, P: 10 }], [0, 0]);
+  assert.ok(near(a.reactions[0], 7.5, 1e-9) && near(a.reactions[1], 2.5, 1e-9) && near(a.span[0].M, 7.5, 1e-9) && near(a.span[0].V, 7.5, 1e-9), JSON.stringify(a));
+  // two spans of 4 m, P = 32 at the middle of the first: -3PL/32 = -12 over the middle support, reactions in balance
+  assert.ok(near(supportMoments([4, 4], [0, 0], 0, 0, [[{ a: 2, P: 32 }], []])[1], -12, 1e-9));
+  const b = analyseBeam([4, 4], [5, 5], [0, 0], [{ i: 0, a: 2, P: 32 }], [0, 0]);
+  assert.ok(near(b.sup[1], -12 - 5 * 16 / 8, 1e-9) && near(b.reactions.reduce((s, x) => s + x, 0), 32 + 40, 1e-9), JSON.stringify(b));
+  // buckling factor by l0/h (TCVN 5574:2018): 0.92 at 6, 0.90 at 10, 0.83 at 15, 0.70 at 20
+  assert.ok(near(buckling(4), 0.92) && near(buckling(12.5), 0.865, 1e-9) && near(buckling(20), 0.7, 1e-9) && buckling(25) < 0.7);
+});
+
+test('structural calculation: bending from equivalent loads, shear and column loads from the loads really carried', () => {
+  const R = structuralCalc({ spec: TOWN });
+  const sum = (xs) => xs.reduce((s, x) => s + x, 0);
+  // everything the beams carry and the columns weigh arrives at the footings (the tower columns stand on beams: point loads)
+  const beams = sum(R.slabs.flatMap((S) => S.members.flatMap((m) => m.true.map((ld, i) => (ld.g + ld.p) * m.span[i]))));
+  const cols = sum(R.columns.map((c) => (c.size[0] / 1000) * (c.size[1] / 1000) * 25 * 1.1 * c.H));
+  const lost = sum(R.columns.filter((c) => c.on && !R.slabs.some((S) => S.members.some((m) => (m.points.length || m.extra.some((x) => x > 0))))).map((c) => c.N));
+  const footings = sum(R.columns.filter((c) => !c.on).map((c) => c.N));
+  // the two tower columns at x = 2650 stand on no beam (the calculation warns): their load is not in the footings
+  const off = sum(R.columns.filter((c) => c.on && Math.abs(c.at[0] - 2650) < 1).map((c) => c.N));
+  assert.ok(R.warnings.filter((w) => /neither a column nor a beam/.test(w)).length === 2 && lost === 0);
+  assert.ok(near(beams + cols - off, footings, 0.5), `${beams} + ${cols} - ${off} vs ${footings}`);
+  // the panel 4.8 x 9.8 spans one way (l2/l1 > 2): its long beams take half of it each, in both sets of loads
+  const S = R.slabs[1], long = S.members.find((m) => Math.abs(m.d[1]) > 0.9);
+  assert.ok(near(long.load[0].p, long.true[0].p, 1e-9) && long.true[0].p > 1.5 * 1.3 * 2.4 && long.true[0].p < 3 * 1.2 * 2.4, 'rooms 1.5 kPa with the stairwell (3 kPa) in the panel');
+  // the true loads share out the whole panel on its beams
+  const cell = S.loads.cells[0], A = ((cell.x1 - cell.x0) * (cell.y1 - cell.y0)) / 1e6;
+  const self = sum(S.members.map((m) => (m.b / 1000) * ((m.h - 120) / 1000) * 25 * 1.1 * m.span[0] + 2 * ((m.h - 120) / 1000) * 0.015 * 18 * 1.3 * m.span[0]));
+  const walls = sum(S.loads.wallLoads.map((w) => w.q * S.members.find((m) => m.name === w.member).span[0]));
+  const bal = S.loads.balconies[0];
+  const slabLoad = sum(S.members.map((m) => (m.true[0].g + m.true[0].p) * m.span[0])) - self - (bal.gLine + bal.pLine) * 4.8;
+  assert.ok(Math.abs(slabLoad - walls - (cell.g + cell.p) * A) < 0.02 * slabLoad, `${slabLoad} - ${walls} vs ${(cell.g + cell.p) * A}`);
+  // the balcony of floor 2: a cantilever of 1.3 m to the axis of the front beam, its load on that beam, top bars designed
+  assert.ok(near(bal.d, 1.3) && bal.host === S.members.find((m) => Math.abs(m.A[1] - 100) < 1 && Math.abs(m.B[1] - 100) < 1).name);
+  assert.ok(near(bal.pLine, 4 * 0.8 * 1.2 * 5 / 4.8, 1e-6), 'the strip load 4 kPa x 0.8 m governs, the whole 5 m of balcony on the 4.8 m beam');
+  assert.ok(S.balconyDesign[0].top.d >= 10 && R.warnings.some((w) => /balcony of TẦNG 2: cantilever 1.3 m/.test(w)));
+  // slabs and stairs designed: the one-way panel spans 4.8 m between the long beams (q L² / 8), distribution bars the
+  // other way; the stair as a simply supported strip
+  assert.ok(near(S.design.M.x, (cell.g + cell.p) * 4.8 ** 2 / 8, 1e-6) && S.design.M.y === 0 && S.design.x.A > S.design.y.A && S.design.y.d === 8, JSON.stringify(S.design));
+  assert.ok(R.stairs.length === 2 && R.stairs[0].main.d >= 10 && near(R.stairs[0].q, 6 * 1.15 + 3 * 1.2, 0.01) && near(R.stairs[0].M, R.stairs[0].q * R.stairs[0].L ** 2 / 8, 0.2));
+  const tables = calcSheet(R).entities.filter((e) => e.type === 'table');
+  assert.ok(tables.some((t) => t.title.startsWith('SÀN, CẦU THANG, BAN CÔNG')) && tables.some((t) => t.title.startsWith('CỘT VÀ MÓNG ĐƠN')), tables.map((t) => t.title).join(' | '));
+});
+
+test('structural calculation: columns and pad footings sized for their loads, strip footings advised when pads crowd the plan', () => {
+  const R = structuralCalc({ spec: TOWN });
+  const footed = R.columns.filter((c) => !c.on);
+  // every column and footing passes with the sizes the calculation chose; the pads cover the area needed
+  assert.ok(footed.every((c) => c.colOk && c.footOk && c.A >= c.Areq && c.foot.B % 100 === 0 && c.foot.B >= 1200), JSON.stringify(footed.map((c) => [c.N, c.cap, c.Areq, c.A])));
+  assert.ok(footed.every((c) => near(c.Areq, c.N / 1.15 / (100 - 20 * 1.5), 0.01) && near(c.phi, buckling(0.7 * 4050 / 220), 1e-3)));
+  assert.equal(R.footings.reduce((s, f) => s + f.count, 0), 4);
+  // 100 kPa under a 9.8 m span: the pads take over half the plan -> strip footings or a raft, said in the warnings and on the sheet
+  assert.ok(R.foundation.strip && R.foundation.ratio > 0.5 && R.warnings.some((w) => /strip footings or a raft/.test(w)));
+  assert.ok(calcSheet(R).entities.some((e) => e.type === 'mtext' && /móng băng hoặc móng bè/.test(e.text)) && calcCsv(R).includes('móng băng hoặc móng bè'));
+  assert.ok(R.foundation.edge === 4 && R.warnings.some((w) => /eccentric/.test(w)), 'pads on the outline are eccentric on a boundary');
+  // better ground: smaller pads, no such advice
+  const R3 = structuralCalc({ spec: TOWN, soil: 300 });
+  assert.ok(!R3.foundation.strip && R3.footings[0].B < R.footings[0].B && !R3.warnings.some((w) => /strip footings/.test(w)));
+  // a column too small for its load goes up to the size that passes, and the result says so
+  const Rs = structuralCalc({ spec: TOWN, column: { size: [150, 150] } });
+  const up = Rs.columns.filter((c) => c.first);
+  assert.ok(up.length >= 4 && up.every((c) => c.colOk && c.size[0] * c.size[1] > 150 * 150 && c.N <= c.cap) && Rs.warnings.some((w) => /designed \d+x\d+ with/.test(w)), JSON.stringify(Rs.columns.map((c) => [c.name, c.size, c.N, c.cap])));
+  // the plans take the designed sizes: columns and pads by mark
+  const F = floorsOf(TOWN);
+  const fd = framingPlan({ spec: F[0].spec, level: -450, name: 'MÓNG', prefix: 'GM.', beam: { h: 400 }, column: { sizes: Rs.design.columns }, foundation: { depth: 1500, sizes: Rs.design.footings } });
+  assert.deepEqual(fd.footings.map((f) => [f.name, f.size, f.count]), Rs.footings.map((f) => [f.mark, `${f.B}x${f.L}`, f.count]));
+  assert.deepEqual(fd.columns.map((c) => c.size).sort(), [...new Set(footed.map((c) => Rs.columns.find((x) => x.name === c.name).size.join('x')))].sort());
+  assert.ok(fd.entities.some((e) => e.type === 'text' && /^\d\. CỘT: C\d \(/.test(e.text)) && fd.notes.some((n) => /MÓNG BIÊN/.test(n)));
+  assert.ok(fd.beams.every((b) => b.slab === 0), 'ground beams carry no slab');
+});
+
+test('beam on beam: the reaction of a beam that ends on another beam is a point load on it, nothing is lost', () => {
+  // a load-bearing wall across the house at mid length, and one from it to the front wall: its beam ends on two beams
+  const spec = JSON.parse(JSON.stringify(TOWN));
+  for (const k of [0, 1]) {
+    spec.floors[k].walls = [...(spec.floors[k].walls ?? TOWN.floors[0].walls), { id: 'X0', points: [[100, 5000], [4900, 5000]], thickness: 200 }, { id: 'X1', points: [[2500, 100], [2500, 5000]], thickness: 200 }];
+  }
+  spec.floors[1].stairs = [];
+  spec.floors[0].stairs = [];
+  spec.floors.length = 2;
+  const R = structuralCalc({ spec });
+  const sum = (xs) => xs.reduce((s, x) => s + x, 0);
+  const S = R.slabs[1];
+  const carried = S.members.find((m) => Math.abs(m.A[0] - 2500) < 1 && Math.abs(m.B[0] - 2500) < 1);
+  // it rests at both ends (no column there), and the beams it meets keep their single span with a point load at 2.4 m
+  assert.equal(carried.rests.length, 2);
+  assert.deepEqual(carried.supports.map(Math.round), [0, 4900]);
+  const front = S.members.find((m) => Math.abs(m.A[1] - 100) < 1 && Math.abs(m.B[1] - 100) < 1);
+  assert.deepEqual(front.supports.map(Math.round), [0, 4800]);
+  assert.ok(front.points.length === 1 && near(front.points[0].a, 2.4, 1e-6) && near(front.points[0].P, carried.reactions[0], 1e-9), JSON.stringify(front.points));
+  // the cross beam at y = 5000 rests on the two long beams in the same way: four ends carried in all
+  assert.ok(S.carried.length === 4 && S.carried.every((c) => c.on) && R.warnings.some((w) => /rests on beam .*point load/.test(w)), JSON.stringify(S.carried));
+  // the square panel behind it spans two ways: its beams bend under the equivalent load, heavier than the load they carry
+  const back = S.members.find((m) => Math.abs(m.A[1] - 9900) < 1 && Math.abs(m.B[1] - 9900) < 1);
+  assert.ok(back.load[0].p > back.true[0].p * 1.15 && near(back.true[0].p, 1.5 * 1.3 * 4.8 / 4, 0.05), JSON.stringify([back.load, back.true]));
+  assert.ok(!S.fp.columnPoints.some((p) => Math.abs(p[0] - 2500) < 5), 'no column appears under the ends');
+  // the building in balance: beam loads + column weights = footing loads
+  const beams = sum(R.slabs.flatMap((s) => s.members.flatMap((m) => m.true.map((ld, i) => (ld.g + ld.p) * m.span[i]))));
+  const cols = sum(R.columns.map((c) => (c.size[0] / 1000) * (c.size[1] / 1000) * 25 * 1.1 * c.H));
+  assert.ok(near(beams + cols, sum(R.columns.map((c) => c.N)), 0.5), `${beams + cols} vs ${sum(R.columns.map((c) => c.N))}`);
+  // a wall that stops in the room: its beam ends on nothing, and the calculation says how much is not carried
+  const free = JSON.parse(JSON.stringify(spec));
+  for (const k of [0, 1]) free.floors[k].walls = free.floors[k].walls.filter((w) => w.id !== 'X0');
+  const Rf = structuralCalc({ spec: free });
+  assert.ok(Rf.warnings.some((w) => /ends on nothing at .* kN is not carried down/.test(w)));
+});
+
+test('beam schedule: the pitch follows the real width of the sections, ground beams have no slab flange', () => {
+  const sc = 25;
+  const beams = [
+    { name: 'D2.1', b: 200, h: 500, count: 2, level: 3600, slab: 120, bars: { support: [{ face: 'bottom', d: 20, n: 2 }, { face: 'top', d: 22, n: 2 }], span: [{ face: 'bottom', d: 20, n: 2 }, { face: 'top', d: 12, n: 2 }] }, stirrup: { d: 6, support: 100, span: 200 } },
+    { name: 'D2.2', b: 300, h: 700, count: 6, level: 10200, slab: 120, bars: { support: [{ face: 'bottom', d: 25, n: 3, mark: '1' }, { face: 'top', d: 25, n: 4, mark: '2+3' }], span: [{ face: 'bottom', d: 25, n: 4, mark: '1' }, { face: 'top', d: 14, n: 2, mark: '4' }] }, stirrup: { d: 8, support: 100, span: 200, mark: '5' } },
+    { name: 'GM.1', b: 200, h: 400, count: 2, level: -450, slab: 0 },
+  ];
+  const bs = beamSchedule({ beams, scale: sc });
+  noNaN(bs.entities);
+  // what a section takes: the level mark and its text on the left, the callouts (leader, text, bar marks) on the right
+  const tags = bs.entities.filter((e) => e.name === 'MCP_COTE_TRAI').map((e) => ({ x: e.at[0], left: e.at[0] - (2.1 + [...e.attributes.COTE].length * 0.72 * 2.5) * sc, y: e.at[1] }));
+  assert.equal(tags.length, 6);
+  const rects = bs.entities.filter((e) => e.type === 'rectangle').sort((a, b) => a.from[0] - b.from[0]);
+  assert.equal(rects.length, 6);
+  const marks = bs.entities.filter((e) => e.name === 'MCP_SO_HIEU').map((e) => e.at[0] + 2.5 * sc);
+  const ends = [...bs.entities.filter((e) => e.type === 'polyline' && e.layer === 'S-ANNO-TEXT' && e.points.length === 3).map((e) => e.points[2][0]), ...marks];
+  for (let i = 0; i < 6; i++) {
+    const x0 = rects[i].from[0], next = rects[i + 1]?.from[0] ?? Infinity;
+    const right = Math.max(...ends.filter((x) => x > x0 && x < next));
+    const tagNext = tags.map((t) => t.left).filter((x) => x > x0).sort((a, b) => a - b)[0] ?? Infinity;
+    assert.ok(right + 2 * sc <= tagNext, `section ${i}: callouts end at ${right}, the next level mark starts at ${tagNext}`);
+  }
+  assert.ok(near(rects[1].from[0] - rects[0].from[0], bs.pitch.section) && near(rects[2].from[0] - rects[0].from[0], bs.pitch.beam));
+  // longer callouts and bar marks widen the pitch (it was 72 and 110 mm whatever the content)
+  const plain = beamSchedule({ beams: [beams[0]], scale: sc });
+  assert.ok(bs.pitch.section > plain.pitch.section && bs.pitch.beam > plain.pitch.beam && plain.pitch.section >= 50 * sc);
+  // the slab flange on both sides of the floor beams (six lines a section), none on the ground beams
+  const conc = (i) => bs.entities.filter((e) => e.type === 'line' && e.layer === 'S-CONC' && e.from[0] > rects[i].from[0] - 10 * sc && e.to[0] < rects[i].to[0] + 10 * sc).length;
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map(conc), [6, 6, 6, 6, 0, 0]);
+  // the level mark of a ground beam stands on the beam itself
+  assert.ok(tags.filter((t) => t.x > rects[4].from[0]).every((t) => t.x <= rects[5].to[0] && bs.entities.some((e) => e.name === 'MCP_COTE_TRAI' && e.attributes.COTE === 'FL-0.450')));
+});
+
+test('framing plan: balcony slab, labels clear of lines, dimension chains clear of the grid bubbles', () => {
+  const F = floorsOf(TOWN);
+  const rooms = { 'PHÒNG NGỦ': [[200, 200], [4800, 200], [4800, 2900], [2650, 2900], [2650, 6800], [4800, 6800], [4800, 9800], [200, 9800], [200, 6800], [200, 2900]], 'CẦU THANG': [[200, 3000], [2550, 3000], [2550, 6700], [200, 6700]] };
+  const r = framingPlan({ spec: F[0].spec, level: F[1].level, slab: 120, name: F[1].name, prefix: 'D2.', scale: 100, rooms, balconies: F[1].spec.balconies });
+  noNaN(r.entities);
+  // the cantilever balcony: outlined, hatched as a lowered slab, named
+  assert.ok(r.entities.some((e) => e.type === 'polyline' && e.closed && e.layer === 'S-CONC' && e.points.some((p) => p[1] === -1200)));
+  assert.ok(r.entities.some((e) => e.type === 'text' && /^BC - BAN CÔNG/.test(e.text)) && r.assumed.some((a) => a.item === 'lowered_slab'));
+  // the stair opening's name between its diagonals, not on their crossing
+  const st = r.entities.find((e) => e.text === 'Ô THANG');
+  assert.ok(st && Math.abs(st.at[1] - (3000 + 6700) / 2) > 0.25 * 3700, JSON.stringify(st.at));
+  // no label across a line: every text box against every line drawn (beam faces, columns, diagonals, balcony, grids)
+  const lines = [];
+  for (const e of r.entities) {
+    if (e.type === 'line') lines.push([e.from, e.to]);
+    else if (e.type === 'polyline') e.points.forEach((q, i) => { if (i + 1 < e.points.length || e.closed) lines.push([q, e.points[(i + 1) % e.points.length]]); });
+  }
+  const cut = ([p, q], [x0, y0, x1, y1]) => {
+    let t0 = 0, t1 = 1;
+    for (const [u, v] of [[p[0] - q[0], p[0] - x0], [q[0] - p[0], x1 - p[0]], [p[1] - q[1], p[1] - y0], [q[1] - p[1], y1 - p[1]]]) {
+      if (Math.abs(u) < 1e-12) { if (v < 0) return false; continue; }
+      const k = v / u;
+      if (u < 0) { if (k > t1) return false; t0 = Math.max(t0, k); } else { if (k < t0) return false; t1 = Math.min(t1, k); }
+    }
+    return t1 - t0 > 1e-9;
+  };
+  const labels = r.entities.filter((e) => e.type === 'text' && e.layer === 'S-ANNO-TEXT' && !/^(MẶT BẰNG|TỶ LỆ|CỘT:)/.test(e.text));
+  for (const e of labels) {
+    const w = [...e.text].length * 0.7 * e.height, h = e.height, up = Math.abs(Math.abs(e.rotation ?? 0) - 90) < 1;
+    const mid = /middle/.test(e.align ?? '');
+    const x0 = up ? e.at[0] - h / 2 : /left/.test(e.align ?? 'left') ? e.at[0] : /right/.test(e.align) ? e.at[0] - w : e.at[0] - w / 2;
+    const y0 = up ? e.at[1] - w / 2 : mid ? e.at[1] - h / 2 : e.at[1];
+    const box = [x0 + 25, y0 + 25, x0 + (up ? h : w) - 25, y0 + (up ? w : h) - 25];
+    assert.ok(!lines.some((l) => cut(l, box)), `"${e.text}" at ${e.at} lies across a line`);
+  }
+  // the chain 8 mm off the plan, the overall dimension 8 mm further with its text (3.1 mm) beyond it, the bubbles from 20 mm
+  const chain = r.entities.find((e) => e.type === 'dim_chain' && e.direction === 'vertical');
+  const bubbleX = Math.max(...r.entities.filter((e) => e.name === 'MCP_TRUC' && e.at[0] < 0).map((e) => e.at[0] + 450));
+  assert.ok(chain.total !== undefined && chain.at[0] - 800 - 310 > bubbleX, `overall dimension at ${chain.at[0] - 800}, bubbles up to ${bubbleX}`);
+  // a plan with one grid each way still gets its overall sizes (the tower roof)
+  const roof = framingPlan({ spec: F[2].spec, level: 9820, name: 'MÁI', prefix: 'DM.', scale: 100 });
+  assert.equal(roof.entities.filter((e) => e.type === 'dim_chain').length, 2);
+  // the column marks as the calculation gives them, the sizes in the legend under the title
+  assert.ok(r.entities.some((e) => e.type === 'text' && e.text === 'C1') && r.entities.some((e) => e.type === 'text' && e.text === 'CỘT: C1 (220x220)'));
+});
+
+test('bar schedule and bill after the calculation: designed sizes and bars, balconies, steel grades as the notes', () => {
+  const R = structuralCalc({ spec: TOWN, soil: 300 });
+  const B = boqSheets(R);
+  const Q = B.quantities, q = (re) => Q.rows.find((r) => !r.head && re.test(r.item));
+  // footings by type, columns by the marks of the plans
+  for (const ft of R.footings) assert.ok(B.groups.some((g) => g.title === `MÓNG ${ft.mark} (${ft.B}x${ft.L})`));
+  assert.ok(B.groups.some((g) => g.title === 'CỘT C1 (220x220)') && B.groups.find((g) => g.title === 'CỘT C1 (220x220)').rows.some((r) => /Ø6a150/.test(r.shape)));
+  // the slab bars are the designed ones; the balcony's top bars run as far into the slab as they cantilever
+  const slab = B.groups.find((g) => g.title === 'SÀN TẦNG 2'), D = R.slabs[1].design;
+  assert.ok(slab.rows[0].shape.endsWith(`Ø${D.x.d}a${D.x.s}`) && slab.rows[1].shape.endsWith(`Ø${D.y.d}a${D.y.s}`), slab.rows.map((r) => r.shape).join(' | '));
+  const top = slab.rows.find((r) => /^BC/.test(r.mark));
+  assert.ok(top && top.length >= 2 * 1300 && near(q(/^Bê tông ban công TẦNG 2/).q, 5 * 1.2 * 0.12, 1e-6) && q(/^Ván khuôn ban công TẦNG 2/).q > 6);
+  // the stairs with the designed bars; their formwork counted
+  assert.ok(B.groups.find((g) => g.title === 'CẦU THANG').rows[0].shape.endsWith(`Ø${R.stairs[0].main.d}a${R.stairs[0].main.s}`) && q(/^Ván khuôn cầu thang/).q > 0);
+  // Ø10 is ribbed steel (CB300-V), as in the general notes and the calculation
+  const d10 = Q.steel.byD[10] ?? 0;
+  assert.ok(d10 > 0 && near(Q.steel.small, Object.entries(Q.steel.byD).filter(([d]) => Number(d) < 10).reduce((s, [, kg]) => s + kg, 0), 0.05));
+  assert.ok(q(/Ø < 10$/) && q(/Ø ≥ 10$/) && near(q(/Ø ≥ 10$/).q, Q.steel.large / 1000, 1e-3));
+  // the tower's low wall along its own full-height wall is one wall: 200 mm walls of the tower floor
+  const sn = structureNotes({});
+  assert.equal(sn.entities.find((e) => e.type === 'table' && e.title.startsWith('LỚP BÊ TÔNG')).rows[1][1], 50, 'footing cover 50 as the detail and the bill');
+  assert.ok(footingDetail({ B: 1200, H: 400, depth: 1500 }).entities.some((e) => e.type === 'text' && e.text === 'Ø6a150'), 'column ties as the bar schedule');
+  // the live workbook opens as a zip and carries the q of a beam as a formula of the Loads sheet
+  const kc = kcWorkbook(R, B);
+  assert.ok(kc.subarray(0, 2).toString() === 'PK' && kc.length > 5000);
+});
+
+import { minWidth, stairSpots } from '../src/interior.mjs';
+
+// the back of a floor: a WC (door D3 swinging in) and a store behind one wall, and a stairwell with a U stair
+const NT_R4 = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+const NT_STAIR = { type: 'u', region: [[200, 7650], [2550, 11350]], direction: 'up', turn: 'right', gap: 100 };
+const NT_BACK = {
+  walls: [{ id: 'W', points: [[100, 15700], [4900, 15700], [4900, 17900], [100, 17900]], closed: true, thickness: 200 },
+    { id: 'I6', points: [[2500, 15700], [2500, 17900]], thickness: 100 }],
+  openings: [{ wall: 'W', segment: 0, at: [1300, 15700], width: 700, type: 'door', toward: [1300, 16800], tag: 'D3' },
+    { wall: 'W', segment: 0, at: [3700, 15700], width: 800, type: 'door', toward: [3700, 16800], tag: 'D4' }],
+  rooms: [{ name: 'WC', at: [1300, 16800] }, { name: 'KHO', at: [3700, 16800] }],
+};
+const NT_BACK_ROOMS = { WC: NT_R4(200, 15800, 2450, 17800), KHO: NT_R4(2550, 15800, 4800, 17800) };
+const NT_HALL = [[200, 6050], [4800, 6050], [4800, 11350], [2650, 11350], [2650, 7550], [200, 7550]];
+const ntHit = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+
+test('material schedule: the arrival floor of a stair counts its landing only, a narrow room is finished to its flat ceiling', () => {
+  const walls = [{ id: 'T', points: [[100, 6000], [2600, 6000], [2600, 11400], [100, 11400]], closed: true, thickness: 200 }];
+  const rooms = { 'CẦU THANG': NT_R4(200, 6100, 2500, 11300) };
+  const finishes = { 'CẦU THANG': resolveFinish('CẦU THANG') };
+  const q = (ms, code) => ms.rows.find((r) => r.code === code)?.qty;
+  // the tower: the stair arrives from below, the floor is the landing 2300 x 1550, the skirting runs along it
+  const top = materialSchedule({ spec: { walls, heights: { top: 2800 }, stairs_below: [NT_STAIR] }, rooms, finishes });
+  assert.ok(Math.abs(q(top, 'FL-04') - 3.57) < 0.011, `landing ${q(top, 'FL-04')}`);
+  assert.ok(Math.abs(q(top, 'SK-02') - 5.4) < 0.011, `skirting ${q(top, 'SK-02')}`);
+  assert.ok(!top.rows.find((r) => r.code === 'FL-04').field, 'the landing is not the area of the whole room outline');
+  // the same room on a floor where the stair starts: the landing in front of the flights as a floor (3.57 m², 5.4 m of
+  // skirting) and the stair on its real surfaces, not on the plan of the stairwell: 19 risers of 173.7 and 17 goings
+  // of 286.1 on flights 1125 wide, a half landing 1125 x 2350: treads and landing 8.12 m², risers 3.71 m², skirting
+  // stepped along the flights and around the landing 12.76 m
+  const start = materialSchedule({ spec: { walls, heights: { top: 3300 }, stairs: [NT_STAIR] }, rooms, finishes });
+  assert.ok(Math.abs(q(start, 'FL-04') - (3.57 + 8.12 + 3.71)) < 0.02 && Math.abs(q(start, 'SK-02') - (5.4 + 12.76)) < 0.02, `${q(start, 'FL-04')} ${q(start, 'SK-02')}`);
+  // a store 2250 wide: too narrow for the drop band, flat at +3.000, painted up to it (8.4 m of walls)
+  const kho = materialSchedule({ spec: null, rooms: { KHO: NT_R4(0, 0, 2250, 1950) }, finishes: { KHO: resolveFinish('KHO') } });
+  assert.ok(Math.abs(q(kho, 'WL-01') - 25.2) < 0.011, `paint ${q(kho, 'WL-01')}`);
+  // a room wide enough keeps the band: painted to +2.850
+  const big = materialSchedule({ spec: null, rooms: { 'PHÒNG NGỦ': NT_R4(0, 0, 4000, 3000) }, finishes: { 'PHÒNG NGỦ': resolveFinish('PHÒNG NGỦ') } });
+  assert.ok(Math.abs(q(big, 'WL-01') - 14 * 2.85) < 0.011, `paint ${q(big, 'WL-01')}`);
+});
+
+test('ceiling plan: a hall with an arm too narrow for the drop band stays flat; the stairwell name on its half landing', () => {
+  assert.equal(Math.round(minWidth(NT_HALL)), 1500);
+  const hall = ceilingPlan({ rooms: { 'SẢNH': NT_HALL }, finishes: { 'SẢNH': resolveFinish('SẢNH', {}, [], 3300) }, scale: 50, mode: 'lighting' });
+  assert.ok(hall.warnings.some((w) => /only 1500 wide/.test(w)), JSON.stringify(hall.warnings));
+  assert.ok(!hall.lights.some((l) => l.kind === 'strip' || l.kind === 'ceiling_lamp') && hall.lights.find((l) => l.kind === 'downlight').qty === 10, JSON.stringify(hall.lights));
+  // an L-shaped living room whose arm is 2150 wide keeps its band (the field there is 950 wide)
+  const living = [[200, 200], [4800, 200], [4800, 11350], [2650, 11350], [2650, 7550], [200, 7550]];
+  const lv = ceilingPlan({ rooms: { 'PHÒNG KHÁCH': living }, finishes: { 'PHÒNG KHÁCH': resolveFinish('PHÒNG KHÁCH', {}, [], 3600) }, scale: 50, mode: 'lighting' });
+  assert.ok(lv.lights.some((l) => l.kind === 'strip') && !lv.warnings.length, JSON.stringify(lv.warnings));
+  // the stairwell: its two lines on the far half of the half landing (y 10787.5 .. 11350) when the plan is given
+  const rooms = { 'CẦU THANG': NT_R4(200, 7650, 2550, 11350) }, finishes = { 'CẦU THANG': resolveFinish('CẦU THANG') };
+  const spot = stairSpots({ stairs: [NT_STAIR] })[0];
+  assert.deepEqual(spot.far.map(Math.round), [200, 10788, 2550, 11350]);
+  const withPlan = ceilingPlan({ rooms, finishes, scale: 50, mode: 'finish', spec: { stairs: [NT_STAIR] } });
+  for (const t of withPlan.entities.filter((e) => e.type === 'text')) assert.ok(t.at[1] > spot.far[1] + 50 && t.at[1] < spot.far[3] - 50, `${t.text} at ${t.at}`);
+  const bare = ceilingPlan({ rooms, finishes, scale: 50, mode: 'finish' });
+  assert.ok(Math.abs(bare.entities.find((e) => e.text === 'CẦU THANG').at[1] - 9500) < 1, 'no plan: the middle of the room');
+});
+
+test('floor and wall finish plans: tags and notes clear of the door swings and inside the room, the stairwell tags on its landing', () => {
+  const finishes = { WC: resolveFinish('WC', {}, [], 3300), KHO: resolveFinish('KHO', {}, [], 3300) };
+  const labels = { WC: [1300, 16800], KHO: [3700, 16800] };
+  const doors = buildPlan({ ...NT_BACK, scale: 50 }).entities.filter((e) => e.type === 'block' && e.box && e.layer === ROLE.door).map((e) => e.box);
+  assert.equal(doors.length, 2);
+  const inRoom = (b, poly) => b[0] >= poly[0][0] && b[2] <= poly[2][0] && b[1] >= poly[0][1] && b[3] <= poly[2][1];
+  const textBox = (e) => [e.at[0] - e.text.length * 0.35 * e.height, e.at[1] - e.height / 2, e.at[0] + e.text.length * 0.35 * e.height, e.at[1] + e.height / 2];
+  // floor: the WC tag FL-02 and its note are off the door swing, inside the room, and the joints stop at them
+  const fl = floorFinishPlan({ rooms: NT_BACK_ROOMS, finishes, labels, scale: 50, spec: NT_BACK });
+  const fTag = fl.entities.find((e) => e.type === 'block' && e.attributes?.MA === 'FL-02');
+  const fNote = fl.entities.find((e) => e.type === 'text' && e.text.includes('HẠ 20'));
+  for (const b of [fTag.box, textBox(fNote)]) {
+    assert.ok(!doors.some((d) => ntHit(d, b)), `on a door swing: ${b}`);
+    assert.ok(inRoom(b, NT_BACK_ROOMS.WC), `outside the WC: ${b}`);
+  }
+  const drain = fl.entities.find((e) => e.name === 'MCP_PHEU_THU' && e.at[0] < 2450);
+  assert.ok(!ntHit(fTag.box, [drain.at[0] - 75, drain.at[1] - 75, drain.at[0] + 75, drain.at[1] + 75]), 'the tag is off the floor drain');
+  // wall: the WC tag WL-02 with ỐP ĐẾN TRẦN wholly inside the room, off the bands along the walls and the swing
+  const wl = wallFinishPlan({ spec: NT_BACK, rooms: NT_BACK_ROOMS, finishes, labels, scale: 50 });
+  const wTag = wl.entities.find((e) => e.type === 'block' && e.attributes?.MA === 'WL-02');
+  const wNote = wl.entities.find((e) => e.type === 'text' && e.text.startsWith('ỐP'));
+  const inner = [[330, 15930], [0, 0], [2320, 17670]];
+  for (const b of [wTag.box, textBox(wNote)]) {
+    assert.ok(!doors.some((d) => ntHit(d, b)), `on a door swing: ${b}`);
+    assert.ok(inRoom(b, inner), `on the wall bands of the WC: ${b}`);
+  }
+  // the stairwell: its floor and wall tags on the near half of the half landing (y 10225 .. 10787.5), off the treads
+  const spec = { walls: [{ id: 'S', points: [[100, 7600], [2600, 7600], [2600, 11400], [100, 11400]], closed: true, thickness: 100 }], stairs: [NT_STAIR], rooms: [{ name: 'CẦU THANG', at: [1375, 9500] }] };
+  const rooms = { 'CẦU THANG': NT_R4(200, 7650, 2550, 11350) }, fin = { 'CẦU THANG': resolveFinish('CẦU THANG') };
+  const f2 = floorFinishPlan({ rooms, finishes: fin, labels: { 'CẦU THANG': [1375, 9500] }, scale: 50, spec });
+  const w2 = wallFinishPlan({ spec, rooms, finishes: fin, labels: { 'CẦU THANG': [1375, 9500] }, scale: 50 });
+  for (const [e, code] of [[f2.entities.find((x) => x.attributes?.MA === 'FL-04'), 'FL-04'], [w2.entities.find((x) => x.attributes?.MA === 'WL-01'), 'WL-01']]) {
+    assert.ok(e && e.box[1] > 10225 && e.box[3] < 10788, `${code} at ${e?.at}`);
+  }
+});
+
+test('review fixes: a door onto an unnamed corridor is an inside door, the open air is outside', async () => {
+  const { isOutside, buildModel } = await import('../src/elevation.mjs');
+  // two rooms and a corridor with no name between them; a door from each room to the corridor, one door to the open air
+  const spec = {
+    walls: [
+      { id: 'W', points: [[100, 100], [6100, 100], [6100, 8100], [100, 8100]], closed: true, thickness: 200 },
+      { id: 'A', points: [[100, 3000], [6100, 3000]], thickness: 100 }, { id: 'B', points: [[100, 5000], [6100, 5000]], thickness: 100 },
+    ],
+    openings: [
+      { wall: 'A', at: [3000, 3000], width: 800, type: 'door', tag: 'D1' }, { wall: 'B', at: [3000, 5000], width: 800, type: 'door', tag: 'D1' },
+      { wall: 'W', segment: 0, at: [3000, 100], width: 900, type: 'door', tag: 'D2' },
+    ],
+    rooms: [{ name: 'PHÒNG 1', at: [3000, 1500] }, { name: 'PHÒNG 2', at: [3000, 6500] }],
+  };
+  const r = doorSchedule({ spec });
+  assert.equal(r.rows.find((x) => x.tag === 'D1').use, 'inside', JSON.stringify(r.rows));
+  assert.equal(r.rows.find((x) => x.tag === 'D2').use, 'outside');
+  const M = buildModel(spec);
+  assert.equal(isOutside(M, [3000, 4000]), false);
+  assert.equal(isOutside(M, [3000, -1000]), true);
+  // English: the kinds and the materials of the schedule
+  const en = doorSchedule({ spec, lang: 'en' }).entities.find((e) => e.type === 'table').rows;
+  assert.ok(en.slice(1).every((row) => !/[ửăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừữựỳỵỷỹ]/i.test(row.join(' '))), JSON.stringify(en.slice(1, 3)));
+});
+
+test('review fixes: structural notes in English, view titles follow the language of the call', async () => {
+  const { setDrawingLanguage, viewTitle } = await import('../src/standards.mjs');
+  const notes = structureNotes({ lang: 'en' });
+  const texts = notes.entities.flatMap((e) => (e.type === 'table' ? e.rows.flat().map(String) : e.type === 'text' || e.type === 'mtext' ? [String(e.text)] : []));
+  assert.ok(!texts.some((t) => /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừữựỳỵỷỹ]/i.test(t)), texts.filter((t) => /[ăâđêôơư]/i.test(t)).slice(0, 3).join(' | '));
+  assert.ok(texts.includes('MEMBER') && texts.some((t) => /^Concrete B20/.test(t)));
+  setDrawingLanguage('en');
+  assert.ok(viewTitle('PLAN', 0, 0, 100, 'L').some((e) => e.text === 'SCALE: 1/100'));
+  setDrawingLanguage('vi');
+  assert.ok(viewTitle('MẶT BẰNG', 0, 0, 100, 'L').some((e) => e.text === 'TỶ LỆ: 1/100'));
+});
+
+test('review fixes: a text crossed by a line goes behind a mask, stair labels can be switched off', async () => {
+  const { maskTexts } = await import('../src/mep.mjs');
+  const crossed = { type: 'text', text: 'L1', at: [1000, 1000], height: 200, align: 'middle_center', layer: 'T' };
+  const free = { type: 'text', text: 'L2', at: [5000, 5000], height: 200, align: 'middle_center', layer: 'T' };
+  const out = maskTexts([crossed, { type: 'line', from: [0, 1000], to: [3000, 1000], layer: 'W' }, free]);
+  assert.deepEqual(out.map((e) => e.type), ['line', 'text', 'wipeout', 'text']);
+  assert.equal(out[1], free);
+  assert.equal(out[3], crossed);
+  // an arc (bulge) that passes over a text is found too
+  const arc = { type: 'polyline', points: [[0, 0], [2000, 0]], bulges: [0.5, 0], layer: 'W' };
+  const on = { type: 'text', text: 'X', at: [1000, -500], height: 200, align: 'middle_center', layer: 'T' };
+  assert.equal(maskTexts([arc, on]).filter((e) => e.type === 'wipeout').length, 1);
+  const f = floorsOf(TOWN)[0];
+  const words = (sp) => buildPlan({ ...sp, scale: 100 }).entities.filter((e) => e.type === 'text' && /^(LÊN|XUỐNG)$/.test(e.text)).length;
+  assert.ok(words(f.spec) > 0);
+  assert.equal(words({ ...f.spec, stair_labels: false }), 0);
+});
+
+// ---------------------------------------------------------------- phase 2: the solid model of the structural bill
+import { quantities as p2Quantities, steelTotals as p2SteelTotals } from '../src/boq.mjs';
+import { solidModel as p2Model, structurePrisms as p2Prisms, unionVolume as p2Union } from '../src/solids.mjs';
+
+// one bay: four columns 200x200 on the corners of a 4,0 x 5,0 m grid, 3,0 m to the top of the slab; a beam 200x400 on
+// each side; a slab 100 thick. floor: a floor of walls for the model (the frame alone without it); voids: holes of the slab
+const P2_BEAMS = [
+  { name: 'D1', A: [0, 0], B: [4000, 0], d: [1, 0], L: 4000, b: 200, h: 400 }, { name: 'D2', A: [4000, 0], B: [4000, 5000], d: [0, 1], L: 5000, b: 200, h: 400 },
+  { name: 'D1', A: [4000, 5000], B: [0, 5000], d: [-1, 0], L: 4000, b: 200, h: 400 }, { name: 'D2', A: [0, 5000], B: [0, 0], d: [0, -1], L: 5000, b: 200, h: 400 },
+];
+const p2Frame = ({ floor = null, voids = [] } = {}) => ({
+  depth: 1500, ground: 0, cover: 25, names: { concrete: 'B20', steel: 'CB300-V', stirrupSteel: 'CB240-T' }, footings: [], stairs: [],
+  floors: floor ? [{ name: 'TẦNG 1', level: 0, height: 3000, slab: 100, spec: floor }] : [],
+  columns: [[0, 0], [4000, 0], [4000, 5000], [0, 5000]].map((at, i) => ({ name: `K${i + 1}`, mark: 'C1', size: [200, 200], at, bottom: 0, top: 3000, foot: null, on: null })),
+  slabs: [
+    { name: 'MÓNG', kind: 'foundation', level: 0, slab: 0, members: [] },
+    { name: 'MÁI', kind: 'roof', level: 3000, slab: 100, members: P2_BEAMS, stairs: voids, balconyDesign: [], loads: { cells: [{ x0: 0, x1: 4000, y0: 0, y1: 5000, e: { bottom: P2_BEAMS[0], right: P2_BEAMS[1], top: P2_BEAMS[2], left: P2_BEAMS[3] } }] } },
+  ],
+});
+
+test('solid model: one bay frame, the node to the beam, the slab thickness to the slab, sum of the nets = the union', () => {
+  const R = p2Frame(), M = p2Model(R);
+  const s = (id) => M.solids.find((x) => x.id === id);
+  // the slab runs to the outer faces of the edge beams: 4,2 x 5,2 x 0,1 = 2,184 m³, nothing taken from it
+  assert.ok(near(s('S/MÁI').net, 2.184, 1e-9) && s('S/MÁI').cuts.length === 0, `slab ${s('S/MÁI').net}`);
+  assert.equal(s('S/MÁI').how, '4,20 x 5,20 x 0,10');
+  // a beam runs through its end nodes: D1 0,2 x 0,4 x 4,2 = 0,336, D2 0,2 x 0,4 x 5,2 = 0,416; the slab takes the top
+  // 0,1 of each (0,084 and 0,104); where two beams cross at a corner (0,2 x 0,2 x 0,3 = 0,012) the first keeps it:
+  // D1#1 0,336 - 0,084 = 0,252; D2#2 0,416 - 0,104 - 0,012 = 0,300; D1#3 0,336 - 0,084 - 0,012 = 0,240;
+  // D2#4 0,416 - 0,104 - 2 x 0,012 = 0,288; together the ring of webs (4,2 x 5,2 - 3,8 x 4,8) x 0,3 = 1,080
+  for (const [id, v] of [['D1#1', 0.252], ['D2#2', 0.300], ['D1#3', 0.240], ['D2#4', 0.288]]) assert.ok(near(s(id).net, v, 1e-9), `${id} ${s(id).net}`);
+  assert.ok(near(s('D1#1').gross, 0.336, 1e-9) && s('D1#1').cuts.length === 1 && s('D1#1').cuts[0].rule === 'slab' && near(s('D1#1').cuts[0].volume, 0.084, 1e-9));
+  // a column: 0,2 x 0,2 x 3,0 = 0,120; the slab takes 0,2 x 0,2 x 0,1 = 0,004, the beams the node 0,2 x 0,2 x 0,3 =
+  // 0,012: 0,104 = 0,2 x 0,2 x 2,6 (the column stops under the beams)
+  const col = M.solids.filter((x) => x.kind === 'column');
+  assert.equal(col.length, 4);
+  for (const c of col) {
+    assert.ok(near(c.net, 0.104, 1e-9) && near(c.gross, 0.12, 1e-9) && c.count === 4, `${c.id} ${c.net}`);
+    const by = (rule) => c.cuts.filter((x) => x.rule === rule).reduce((a, x) => a + x.volume, 0);
+    assert.ok(near(by('slab'), 0.004, 1e-9) && near(by('beam'), 0.012, 1e-9), JSON.stringify(c.cuts));
+    assert.equal(c.how, '4 x (0,20 x 0,20 x 3,00 - 0,004 - 0,012)');
+    // formwork: four faces under the beams, 4 x 0,2 x 2,6 = 2,08 m²
+    assert.ok(near(c.formwork.total, 2.08, 1e-9), `column formwork ${c.formwork.total}`);
+  }
+  // the union: 2,184 + 1,080 + 4 x 0,104 = 3,680 m³ = the sum of the nets; gross 2,184 + 2 x 0,336 + 2 x 0,416 +
+  // 4 x 0,120 = 4,168, the contact volumes 0,376 (slab from beams) + 0,048 (beam from beam) + 0,064 (from columns) = 0,488
+  assert.ok(near(M.sumNet, 3.68, 1e-9) && near(M.union, 3.68, 1e-9) && near(M.sumGross, 4.168, 1e-9) && near(M.sumCuts, 0.488, 1e-9), `${M.sumNet} ${M.union} ${M.sumGross} ${M.sumCuts}`);
+  assert.ok(M.checks.every((x) => x.ok), M.checks.filter((x) => !x.ok).map((x) => x.id).join(', '));
+  // the prisms for an independent union (AutoCAD): nine members, the same volume by the sweep
+  const prisms = p2Prisms(R);
+  assert.ok(prisms.length === 9 && prisms.every((p) => p.exact && p.profile.length === 4) && near(p2Union(prisms), 3.68, 1e-9));
+  // formwork of the beams: outer faces 2 x (4,2 + 5,2) x 0,3 = 5,64, inner faces 2 x (3,8 + 4,8) x 0,3 = 5,16,
+  // soffits (the ring 3,6 m² less the four columns 0,16) = 3,44: 14,24 m²; the slab: soffit 3,8 x 4,8 = 18,24 and
+  // its edge 18,8 x 0,1 = 1,88: 20,12 m²
+  const fw = (kind) => M.solids.filter((x) => x.kind === kind).reduce((a, x) => a + x.formwork.total, 0);
+  assert.ok(near(fw('beam'), 14.24, 1e-9) && near(fw('slab'), 20.12, 1e-9), `${fw('beam')} ${fw('slab')}`);
+  // the bill carries the model: columns 0,416, beams 1,080, slab 2,184 m³; formwork of beams and slab 34,36 m²
+  const Q = p2Quantities(R, []), q = (key) => Q.rows.find((r) => r.key === key);
+  assert.ok(near(q('column:MÁI').q, 0.416, 1e-9) && q('column:MÁI').count === 4 && near(q('beam:MÁI').q, 1.08, 1e-9) && near(q('slab:MÁI').q, 2.184, 1e-9) && near(q('fw_slab:MÁI').q, 34.36, 1e-9) && near(q('fw_column:MÁI').q, 8.32, 1e-9));
+  // (earthwork, the ground floor slab and the stair steps are measured now: what is left not counted is shorter)
+  assert.ok(Q.checks.every((x) => x.ok) && Q.notCounted.length >= 1 && Q.rules.void.masonry === 0.25);
+  // another order of the junction (the column first): the columns keep their full 0,120, the union is the same
+  const M2 = p2Model(R, { rules: { junction: ['column', 'beam', 'slab'] } });
+  assert.ok(M2.solids.filter((x) => x.kind === 'column').every((c) => near(c.net, 0.12, 1e-9)) && near(M2.sumNet, 3.68, 1e-9) && near(M2.union, 3.68, 1e-9));
+  // beams before the slab: the beams keep their top (3,44 x 0,4 = 1,376 with the columns first), the slab 2,184 - 0,344 - 0,016 = 1,824
+  assert.ok(near(M2.solids.find((x) => x.kind === 'slab').net, 1.824, 1e-9));
+});
+
+test('solid model: a hole in a slab, deducted or not by the thresholds of the rule set (0,1 m³ concrete, 1 m² formwork)', () => {
+  // a hole 0,8 x 1,0 m in the slab of the bay: 0,8 m² and 0,08 m³, under both thresholds of Phụ lục VI
+  const R = p2Frame({ voids: [[1000, 1000, 1800, 2000]] });
+  const Q = p2Quantities(R, []), q = (key) => Q.rows.find((r) => r.key === key);
+  // concrete: geometric (4,2 x 5,2 - 0,8 x 1,0) x 0,1 = 2,104; measured 2,184 (the hole is not deducted)
+  assert.ok(near(q('slab:MÁI').geo, 2.104, 1e-9) && near(q('slab:MÁI').q, 2.184, 1e-9), `${q('slab:MÁI').geo} ${q('slab:MÁI').q}`);
+  assert.equal(q('slab:MÁI').parts[0].expr, '(4.20*5.20-0.80*1.00)*0.10');
+  // formwork: soffit 18,24 - 0,8 = 17,44, edges 1,88 + 2 x (0,8 + 1,0) x 0,1 = 2,24, beams 14,24: geometric 33,92;
+  // measured 33,92 + 0,8 = 34,72 (a hole under 1 m² is not deducted)
+  assert.ok(near(q('fw_slab:MÁI').geo, 33.92, 1e-9) && near(q('fw_slab:MÁI').q, 34.72, 1e-9), `${q('fw_slab:MÁI').geo} ${q('fw_slab:MÁI').q}`);
+  assert.ok(Q.checks.every((x) => x.ok), Q.checks.filter((x) => !x.ok).map((x) => x.id).join(', '));
+  // the geometric rule set deducts everything
+  const N = p2Quantities(R, [], 'vi', 'NET');
+  assert.ok(near(N.rows.find((r) => r.key === 'slab:MÁI').q, 2.104, 1e-9) && near(N.rows.find((r) => r.key === 'fw_slab:MÁI').q, 33.92, 1e-9));
+  // a hole 1,0 x 1,2 m (1,2 m², 0,12 m³) is over both thresholds: deducted by Phụ lục VI too
+  const B = p2Quantities(p2Frame({ voids: [[1000, 1000, 2000, 2200]] }), []), b = (key) => B.rows.find((r) => r.key === key);
+  // (21,84 - 1,2) x 0,1 = 2,064; formwork 18,24 - 1,2 + 1,88 + 2 x 2,2 x 0,1 + 14,24 = 33,60
+  assert.ok(near(b('slab:MÁI').q, 2.064, 1e-9) && near(b('slab:MÁI').geo, 2.064, 1e-9) && near(b('fw_slab:MÁI').q, 33.6, 1e-9));
+  // the plate with its hole as one prism for the union
+  const pr = p2Prisms(R).find((p) => p.kind === 'slab');
+  assert.ok(pr.holes.length === 1 && pr.holes[0].length === 4);
+});
+
+test('solid model: masonry and plaster of a wall with a small and a large opening (the 0,25 m² rule), lintels', () => {
+  // the bay closed by 200 walls on its axes; in the south wall a door 0,9 x 2,1 m and a window 0,4 x 0,5 m (0,2 m²)
+  const R = p2Frame({ floor: {
+    walls: [{ id: 'W', points: [[0, 0], [4000, 0], [4000, 5000], [0, 5000]], closed: true, thickness: 200 }],
+    openings: [{ wall: 'W', segment: 0, at: [1000, 0], width: 900, type: 'door', sill: 0, head: 2100 }, { wall: 'W', segment: 0, at: [3000, 0], width: 400, type: 'window', sill: 1200, head: 1700 }],
+    heights: { top: 3000 },
+  } });
+  const M = p2Model(R), Q = p2Quantities(R, [], 'vi', null, M), q = (key) => Q.rows.find((r) => r.key === key);
+  assert.ok(M.checks.every((x) => x.ok) && M.warnings.length === 0, JSON.stringify(M.checks.filter((x) => !x.ok)));
+  // lintels by the typical table (span up to 1200: 150 deep, 200 bearing): door 1,3 x 0,2 x 0,15 = 0,039 m³,
+  // window 0,8 x 0,2 x 0,15 = 0,024 m³; formwork: two sides and the soffit over the opening:
+  // 2 x 1,3 x 0,15 + 0,9 x 0,2 = 0,57 and 2 x 0,8 x 0,15 + 0,4 x 0,2 = 0,32 m²
+  assert.ok(near(q('lintel').q, 0.063, 1e-9) && q('lintel').count === 2 && near(q('fw_lintel').q, 0.89, 1e-9), `${q('lintel').q} ${q('fw_lintel').q}`);
+  // masonry: the walls between the columns and under the beams, 2 x (3,8 + 4,8) x 0,2 x 2,6 = 8,944 m³ (the walls up to
+  // the slab 18 x 0,2 x 2,9 = 10,44 less the concrete in them: columns 4 x 0,04 x 2,6 = 0,416, beams 3,6 x 0,3 = 1,08),
+  // less the openings 0,9 x 2,1 x 0,2 + 0,4 x 0,5 x 0,2 = 0,418 and the lintels 0,063: 8,463 m³ = 42,315 m²;
+  // measured by Phụ lục VI the window (0,2 m² < 0,25) is not deducted: 42,515 m²
+  const w = M.walls.reduce((a, x) => ({ gross: a.gross + x.gross, concrete: a.concrete + x.concrete, openings: a.openings + x.openings, net: a.net + x.net }), { gross: 0, concrete: 0, openings: 0, net: 0 });
+  assert.ok(near(w.gross, 10.44, 1e-9) && near(w.concrete, 1.559, 1e-9) && near(w.openings, 0.418, 1e-9) && near(w.net, 8.463, 1e-9), JSON.stringify(w));
+  assert.ok(near(q('masonry:200').geo, 42.315, 1e-9) && near(q('masonry:200').q, 42.515, 1e-9) && near(q('masonry:200').volume, 8.503, 1e-9), `${q('masonry:200').geo} ${q('masonry:200').q}`);
+  const door = M.openings.find((o) => o.type === 'door'), win = M.openings.find((o) => o.type === 'window');
+  assert.ok(near(door.area, 1.89, 1e-9) && near(win.area, 0.2, 1e-9) && door.lintel && win.lintel);
+  // reveals: the door 2 x 2,1 x 0,2 (jambs) + 0,9 x 0,2 (head) = 1,02; the window 2 x 0,5 x 0,2 + 2 x 0,4 x 0,2 (head, sill) = 0,36; half inside
+  assert.ok(near(door.reveal, 1.02, 1e-9) && near(win.reveal, 0.36, 1e-9) && near(door.revealIn, 0.51, 1e-9) && near(win.revealOut, 0.18, 1e-9));
+  // plaster inside, up to the soffit of the beams: 2 x (3,8 + 4,8) x 2,6 = 44,72 less the openings 1,89 + 0,2 = 42,63
+  // (of which the lintel faces 1,3 x 0,15 + 0,8 x 0,15 = 0,315), plus the reveals 0,51 + 0,18: 43,32 m²; measured:
+  // the window is not deducted and has no reveals: + 0,2 - 0,18 = 43,34 m²
+  assert.ok(near(M.plaster.inside.wall, 42.315, 1e-9) && near(M.plaster.inside.concrete, 0.315, 1e-9) && near(M.plaster.inside.reveal, 0.69, 1e-9), JSON.stringify(M.plaster.inside));
+  assert.ok(near(q('plaster_in').geo, 43.32, 1e-9) && near(q('plaster_in').q, 43.34, 1e-9), `${q('plaster_in').geo} ${q('plaster_in').q}`);
+  // plaster outside: walls 2 x (3,8 + 4,8) x 2,6 - 2,09 - 0,315 = 42,315; concrete: column faces 4 x 0,4 x 2,6 = 4,16,
+  // beams 18,8 x 0,3 = 5,64, slab edge 18,8 x 0,1 = 1,88, lintels 0,315 = 11,995; reveals 0,69: 55,00; measured 55,02 m²
+  assert.ok(near(M.plaster.outside.wall, 42.315, 1e-9) && near(M.plaster.outside.concrete, 11.995, 1e-9), JSON.stringify(M.plaster.outside));
+  assert.ok(near(q('plaster_out').geo, 55, 1e-9) && near(q('plaster_out').q, 55.02, 1e-9), `${q('plaster_out').geo} ${q('plaster_out').q}`);
+  // soffits: the slab 3,8 x 4,8 = 18,24 and the inner sides of the beams 17,2 x 0,3 = 5,16 (their soffits stand on the walls): 23,40 m²
+  assert.ok(near(q('plaster_soffit').q, 23.4, 1e-9), `${q('plaster_soffit').q}`);
+  // the geometric rule set deducts the window everywhere
+  const N = p2Quantities(R, [], 'vi', 'NET');
+  assert.ok(near(N.rows.find((r) => r.key === 'masonry:200').q, 42.315, 1e-9) && near(N.rows.find((r) => r.key === 'plaster_in').q, 43.32, 1e-9));
+  // the frame does not change with the walls: columns formed on four faces (the walls are built after them)
+  assert.ok(near(q('fw_column:MÁI').q, 8.32, 1e-9) && near(q('fw_slab:MÁI').q, 34.36, 1e-9));
+});
+
+test('steel of the bill: the diameter groups of Phụ lục VI (Ø ≤ 10, ≤ 18, > 18), laps counted, the checks of the sample', () => {
+  // 162 bars of 1 m of each diameter weigh d² kg (d²/162 kg/m): Ø8 64, Ø10 100, Ø12 144, Ø18 324, Ø20 400, Ø25 625
+  const rows = [8, 10, 12, 18, 20, 25].map((d, i) => ({ mark: `T${i + 1}`, shape: '', d, length: 1000, n: 162, members: 1 }));
+  const st = p2SteelTotals([{ title: 'T', rows, sched: rebarSchedule(rows) }], { names: { steel: 'CB300-V', stirrupSteel: 'CB240-T' } });
+  // Ø ≤ 10: 64 + 100 = 164; 10 < Ø ≤ 18: 144 + 324 = 468; Ø > 18: 400 + 625 = 1025; by grade: Ø < 10 64, Ø ≥ 10 1593
+  assert.deepEqual(st.groups.map((g) => g.kg), [164, 468, 1025]);
+  assert.ok(st.small === 64 && st.large === 1593 && st.total === 1657 && st.groups.map((g) => g.label).join('|') === 'Ø ≤ 10|10 < Ø ≤ 18|Ø > 18');
+  // the town house: the column bars are lapped 40d at every floor above the first and anchored 300 + 30d at the ends
+  const R = structuralCalc({ spec: TOWN }), B = boqSheets(R);
+  const g = B.groups.find((x) => x.title.startsWith('CỘT C1')), c = R.columns.filter((x) => x.mark === 'C1').sort((a, b) => (b.top - b.bottom) - (a.top - a.bottom))[0];
+  assert.equal(g.rows[0].length, Math.round(c.top - c.bottom + (c.on ? 30 * c.bars.d : 300) + 30 * c.bars.d + Math.max(0, c.storeys - 1) * 40 * c.bars.d));
+  // lintels over the openings in the schedule and in the bill; the groups add up; every cross-check passes
+  const Q = B.quantities, q = (re) => Q.rows.find((r) => !r.head && re.test(r.item));
+  assert.ok(B.groups.some((x) => x.title === 'LANH TÔ') && q(/^Bê tông lanh tô/).q > 0 && q(/^Ván khuôn lanh tô/).q > 0);
+  assert.ok(near(Q.steel.groups.reduce((a, x) => a + x.kg, 0), Q.steel.total, 0.05));
+  for (const id of ['prism', 'union', 'contact', 'columns', 'formwork:footing', 'envelope', 'bill', 'formwork', 'steel', 'steel:groups']) assert.ok(B.checks.some((x) => x.id === id), id);
+  assert.ok(B.checks.every((x) => x.ok && Number.isFinite(x.lhs) && Number.isFinite(x.rhs)), B.checks.filter((x) => !x.ok).map((x) => `${x.id} ${x.lhs} ${x.rhs} ${x.where}`).join('; '));
+  assert.ok(near(B.model.sumNet, B.model.union, 1e-6) && B.model.sumGross > B.model.sumNet, `${B.model.sumNet} ${B.model.union}`);
+  // every line has both quantities, its like parts and its calculation; the parts add up to the line
+  for (const r of Q.rows.filter((x) => !x.head)) {
+    assert.ok(Number.isFinite(r.q) && Number.isFinite(r.geo) && r.count >= 1 && r.how && r.parts.length, r.item);
+    assert.ok(near(r.parts.reduce((a, p) => a + p.n * p.one, 0), r.q, 5.01e-4), r.item);
+  }
+  // the workbook: the quantity sheet made of the parts as formulas, and a checks sheet (7 sheets); the CSV with both
+  const kc = kcWorkbook(R, B);
+  assert.ok(kc.includes(Buffer.from('xl/worksheets/sheet7.xml')) && !kc.includes(Buffer.from('xl/worksheets/sheet8.xml')));
+  const csv = boqCsv(B.groups, Q);
+  assert.ok(csv.includes('KHỐI LƯỢNG HÌNH HỌC') && csv.includes('KIỂM TRA CHÉO') && csv.includes('CHƯA GỒM') && csv.includes('Nhóm Ø ≤ 10'));
+});
+
+// ---- the earthwork of the foundations, the slab on grade and the fill under it, the brick steps of the stairs
+// (solids.mjs, boq.mjs); every answer calculated by hand
+
+import { lintelRows as p2LintelRows } from '../src/solids.mjs';
+import { uStairGeom as p2StairGeom } from '../src/plan.mjs';
+import { structureNotes as p2Notes } from '../src/structure.mjs';
+
+// the bay on pad footings (pad x pad x 0,4 m, their underside 1,5 m below the floor, lean concrete 100 thick and 100
+// wider on every side), the ground at -0,45, ground beams 200x400 with their top at the ground
+const p2Found = ({ pad = 1000, beams = P2_BEAMS, floor = null } = {}) => {
+  const R = p2Frame({ floor });
+  return {
+    ...R, ground: -450, footings: [{ mark: 'M1', B: pad, L: pad, H: 400, count: 4 }],
+    columns: R.columns.map((c) => ({ ...c, bottom: -1100, foot: { mark: 'M1', B: pad, L: pad, H: 400 } })),
+    slabs: [{ name: 'MÓNG', kind: 'foundation', level: -450, slab: 0, members: beams }, R.slabs[1]],
+  };
+};
+
+test('earthwork: pits and trenches counted once, what is buried in them, backfill and surplus soil; sloped sides', () => {
+  const R = p2Found(), M = p2Model(R), Q = p2Quantities(R, [], 'vi', null, M), q = (key) => Q.rows.find((r) => r.key === key);
+  // pits: the lean concrete 1,2 x 1,2 and 0,3 of working space on every side, from -1,60 up to the ground at -0,45:
+  // 4 x 1,8 x 1,8 x 1,15 = 14,904 m³. Trenches under the ground beams (lean concrete 0,4 wide, 4,2 and 5,2 long, its
+  // underside at -0,95): 1,0 x 4,8 x 0,5 = 2,4 and 1,0 x 5,8 x 0,5 = 2,9, of which 1,3 m at each end lies in a pit
+  // (2 x 1,3 x 1,0 x 0,5 = 1,3 m³): 1,1 and 1,6 m³. Together 14,904 + 2 x 1,1 + 2 x 1,6 = 20,304 m³
+  assert.ok(near(q('excavation').q, 20.304, 1e-9) && q('excavation').count === 8, `${q('excavation').q}`);
+  assert.equal(q('excavation').how, '4 x 1,80 x 1,80 x 1,15 + 2 x (1,00 x 4,80 x 0,50 - 1,3) + 2 x (1,00 x 5,80 x 0,50 - 1,3)');
+  assert.ok(near(M.earth.total, 20.304, 1e-9) && near(M.earth.sum, 14.904 + 2 * 2.4 + 2 * 2.9, 1e-9) && M.earth.items.length === 8);
+  // buried: the lean concrete of the pads 4 x 1,2 x 1,2 x 0,1 = 0,576; the pads 4 x 0,4 = 1,6; the ground beams, a
+  // ring (4,2 x 5,2 - 3,8 x 4,8) x 0,4 = 1,44; their lean concrete (2 x 1,68 + 2 x 2,08 - 4 x 0,09 at the corners -
+  // 4 x 0,04 where the stubs pass) x 0,1 = 0,700; the stubs under the ground beams 4 x 0,2 x 0,2 x 0,25 = 0,04: 4,356 m³
+  assert.ok(near(q('lean_footing').q, 0.576, 1e-9) && near(q('lean_ground_beam').q, 0.7, 1e-9) && near(q('footing').q, 1.6, 1e-9) && near(q('ground_beam').q, 1.44, 1e-9));
+  assert.ok(near(M.earth.buried.total, 4.356, 1e-9) && near(M.earth.backfill, 15.948, 1e-9));
+  assert.ok(near(q('backfill').q, 15.948, 1e-9) && near(q('surplus').q, 4.356, 1e-9), `${q('backfill').q} ${q('surplus').q}`);
+  // the backfill is made of the lines above it (a whole line where all of it lies under the ground) and of the stubs
+  // up to the ground: 0,2 x 0,2 x 0,65 less the 0,016 the ground beams took of each
+  assert.deepEqual(q('backfill').parts.filter((x) => x.from).map((x) => `${x.from.k}:${x.from.key}`), ['1:excavation', '-1:lean_footing', '-1:lean_ground_beam', '-1:footing', '-1:ground_beam']);
+  const stub = q('backfill').parts.find((x) => !x.from);
+  assert.ok(stub.n === 4 && stub.expr === '-(0.20*0.20*0.65-0.016)' && near(stub.one, -0.01, 1e-9), JSON.stringify(stub));
+  for (const id of ['earth:union', 'earth:buried', 'earth:inside', 'earth:bill', 'earth:balance']) assert.ok(Q.checks.find((x) => x.id === id)?.ok, id);
+  assert.ok(Q.checks.every((x) => x.ok), Q.checks.filter((x) => !x.ok).map((x) => x.id).join(', '));
+  // the working space and the vertical sides are assumptions of the bill; earth is not a concrete line: the lines
+  // flagged concrete still add up to the solid model
+  assert.ok(Q.assumed.some((a) => a.item === 'earth' && /300/.test(a.note)) && !Q.notCounted.some((x) => /Đào/.test(x.item)));
+  assert.ok(!q('excavation').concrete && near(Q.rows.filter((r) => r.concrete).reduce((a, r) => a + r.parts.reduce((b, x) => b + x.n * x.one, 0), 0), M.sumNet, 2e-3));
+  // sides sloped 0,5 horizontal for 1 vertical, no ground beams: each pit is 1,8 x 1,8 at the bottom, 2,95 x 2,95 at
+  // the ground, 1,15 deep: 1,15 / 6 x (1,8² + 4 x 2,375² + 2,95²) = 6,613458 m³; buried 0,576 + 1,6 + the stubs up to
+  // the ground 4 x 0,2 x 0,2 x 0,65 = 0,104: 2,28 m³
+  const S = p2Quantities(p2Found({ beams: [] }), [], 'vi', null, null, { earth: { space: 300, slope: 0.5 } }), sl = (key) => S.rows.find((r) => r.key === key);
+  assert.ok(sl('excavation').parts.length === 1 && sl('excavation').parts[0].n === 4 && near(sl('excavation').parts[0].one, 6.613458, 1e-6));
+  assert.equal(sl('excavation').parts[0].expr, '1.15/6*(1.80*1.80+4*2.375*2.375+2.95*2.95)');
+  assert.ok(near(sl('excavation').q, 26.454, 1e-9) && near(sl('backfill').q, 24.174, 1e-9) && near(sl('surplus').q, 2.28, 1e-9) && /1:0,5/.test(sl('excavation').item));
+  // given by the caller they are not assumed; earth: false leaves the earthwork out
+  assert.ok(S.checks.every((x) => x.ok) && !S.assumed.some((a) => a.item === 'earth'));
+  const N = p2Quantities(R, [], 'vi', null, null, { earth: false });
+  assert.ok(!N.rows.some((r) => ['excavation', 'backfill', 'surplus'].includes(r.key)) && N.checks.every((x) => x.ok));
+});
+
+test('footings that touch or overlap are cast as one: no formwork between them, the check follows their outline', () => {
+  const row = (Q, key) => Q.rows.find((r) => r.key === key);
+  // pads 4,0 x 4,0 x 0,4 under columns 4,0 m apart one way (5,0 the other): two pairs that touch along a side.
+  // Formwork 4 x (2 x (4 + 4) x 0,4 - 4 x 0,4) = 19,2 m² = the outline of the two pairs, 2 x 24 x 0,4
+  const T = p2Found({ pad: 4000, beams: [] }), MT = p2Model(T), QT = p2Quantities(T, [], 'vi', null, MT);
+  assert.ok(near(row(QT, 'fw_footing').q, 19.2, 1e-9) && near(row(QT, 'footing').q, 25.6, 1e-9), `${row(QT, 'fw_footing').q}`);
+  assert.equal(row(QT, 'fw_footing').how, '4 x (2 x (4,00 + 4,00) x 0,40 - 1,6)');
+  const ct = MT.checks.find((x) => x.id === 'formwork:footing');
+  assert.ok(ct.ok && near(ct.lhs, 19.2, 1e-9) && near(ct.rhs, 19.2, 1e-9) && QT.checks.every((x) => x.ok), JSON.stringify(ct));
+  // pads 4,4 x 4,4: each pair overlaps by 0,4 x 4,4 x 0,4 = 0,704 m³, counted once: 4 x 7,744 - 2 x 0,704 = 29,568 m³;
+  // formwork = the outline of the two pairs 2 x 2 x (8,4 + 4,4) x 0,4 = 20,48 m² (5,28 for the pad that keeps the
+  // overlap, 4,96 for the other)
+  const O = p2Found({ pad: 4400, beams: [] }), MO = p2Model(O), QO = p2Quantities(O, [], 'vi', null, MO);
+  assert.ok(near(row(QO, 'footing').q, 29.568, 1e-9) && near(row(QO, 'fw_footing').q, 20.48, 1e-9), `${row(QO, 'footing').q} ${row(QO, 'fw_footing').q}`);
+  const co = MO.checks.find((x) => x.id === 'formwork:footing');
+  assert.ok(co.ok && near(co.lhs, 20.48, 1e-9) && near(co.rhs, 20.48, 1e-9) && QO.checks.every((x) => x.ok), JSON.stringify(co));
+  // the town house on weak soil (50 kPa): pads of about 5 m under columns 4,8 m apart overlap; the bill is right
+  // (less formwork than 2 x (B + L) x H of every pad) and every check passes
+  const R = structuralCalc({ spec: TOWN, soil: 50 }), B = boqSheets(R);
+  const pads = B.model.solids.filter((x) => x.kind === 'footing');
+  assert.ok(row(B.quantities, 'fw_footing').q < pads.reduce((a, x) => a + x.formwork.gross, 0) - 1 && pads.some((x) => x.cuts.length));
+  assert.ok(B.checks.every((x) => x.ok), B.checks.filter((x) => !x.ok).map((x) => `${x.id} ${x.lhs} ${x.rhs}`).join('; '));
+  assert.ok(near(B.model.sumNet, B.model.union, 1e-6));
+});
+
+test('ground floor: the slab on grade inside the walls and the fill under it, in the solid model and in the prisms', () => {
+  // the bay closed by 200 walls on its axes, the ground at -0,45: inside the walls 3,8 x 4,8 = 18,24 m²; the slab 100
+  // thick 1,824 m³, the fill from the ground up to its underside 18,24 x 0,35 = 6,384 m³
+  const floor = { walls: [{ id: 'W', points: [[0, 0], [4000, 0], [4000, 5000], [0, 5000]], closed: true, thickness: 200 }], openings: [], heights: { top: 3000 } };
+  const R = { ...p2Frame({ floor }), ground: -450 }, M = p2Model(R), Q = p2Quantities(R, [], 'vi', null, M), q = (key) => Q.rows.find((r) => r.key === key);
+  assert.ok(near(q('ground_slab').q, 1.824, 1e-9) && q('ground_slab').concrete === true && q('ground_slab').how === '3,80 x 4,80 x 0,10', `${q('ground_slab').q} ${q('ground_slab').how}`);
+  assert.ok(near(q('ground_fill').q, 6.384, 1e-9) && !q('ground_fill').concrete && q('ground_fill').how === '3,80 x 4,80 x 0,35', `${q('ground_fill').q} ${q('ground_fill').how}`);
+  // the slab is one more solid: the sum of the nets is still the union (3,68 + 1,824), and the prisms for AutoCAD have it
+  assert.ok(near(M.sumNet, 5.504, 1e-9) && near(M.union, 5.504, 1e-9), `${M.sumNet} ${M.union}`);
+  const prisms = p2Prisms(R, M.options);
+  assert.ok(prisms.length === 10 && near(p2Union(prisms), 5.504, 1e-9) && near(p2Union(p2Prisms(R)), 5.504, 1e-9));
+  for (const id of ['ground:plate', 'ground:fill']) assert.ok(M.checks.find((x) => x.id === id)?.ok, id);
+  assert.ok(Q.checks.every((x) => x.ok) && Q.assumed.some((a) => a.item === 'ground_slab' && /100/.test(a.note)));
+  // cast last, between the walls: without it the frame, its formwork, the masonry and the plaster are the same
+  const N = p2Model(R, { groundSlab: false }), QN = p2Quantities(R, [], 'vi', null, N);
+  assert.ok(near(N.sumNet, 3.68, 1e-9) && p2Prisms(R, N.options).length === 9 && !QN.rows.some((r) => /^ground_/.test(r.key)) && !QN.assumed.length);
+  for (const key of ['column:MÁI', 'fw_column:MÁI', 'fw_slab:MÁI', 'masonry:200', 'plaster_in', 'plaster_out', 'plaster_soffit']) assert.ok(near(q(key).q, QN.rows.find((r) => r.key === key).q, 1e-9), key);
+  // another thickness: 150 -> 2,736 m³ on 0,30 of fill 5,472 m³; given by the caller, it is not assumed
+  const T = p2Quantities(R, [], 'vi', null, null, { groundSlab: { thickness: 150 } }), t = (key) => T.rows.find((r) => r.key === key);
+  assert.ok(near(t('ground_slab').q, 2.736, 1e-9) && near(t('ground_fill').q, 5.472, 1e-9) && !T.assumed.some((a) => a.item === 'ground_slab') && T.checks.every((x) => x.ok));
+});
+
+test('brick steps of the stairs, one lintel table for the notes and the bill, the new lines of the sample in the workbook', () => {
+  const R = structuralCalc({ spec: TOWN }), B = boqSheets(R), Q = B.quantities, q = (key) => Q.rows.find((r) => r.key === key);
+  // a step: a triangle going x riser / 2 under every tread of a flight (n - 1 treads for n risers), as wide as the flight
+  let steps = 0, vol = 0;
+  for (const f of R.floors) {
+    for (const st of (f.spec.stairs || []).filter((x) => x.type === 'u')) {
+      const g = p2StairGeom(st, f.height), n = g.n1 - 1 + g.n2 - 1;
+      steps += n;
+      vol += (((n * g.going * g.riser) / 2) * g.w) / 1e9;
+    }
+  }
+  assert.ok(steps > 0 && q('stair_steps').count === steps && q('stair_steps').unit === 'm³' && near(q('stair_steps').geo, vol, 2e-3), `${q('stair_steps').geo} ${vol} ${steps}`);
+  assert.ok(B.checks.find((x) => x.id === 'steps')?.ok && B.assumed.some((a) => a.item === 'stair_steps'));
+  // one table of typical lintels: the rows of the general notes are the table the bill measures its lintels by
+  assert.deepEqual(p2LintelRows('vi'), [
+    ['L ≤ 1200', '220x150', '2Ø10', '2Ø10', 'Ø6a200', '200'], ['1200 < L ≤ 2000', '220x200', '2Ø12', '2Ø10', 'Ø6a200', '250'],
+    ['2000 < L ≤ 3000', '220x300', '2Ø14', '2Ø12', 'Ø6a150', '300'], ['L > 3000', 'Theo thiết kế dầm', '', '', '', ''],
+  ]);
+  const notes = JSON.stringify(p2Notes({ lang: 'en' }));
+  assert.ok(notes.includes('2000 < L ≤ 3000') && notes.includes('As a designed beam') && notes.includes('2Ø14') && notes.includes('Ø6a150'));
+  // the sample: excavation, backfill, surplus soil, the fill and the slab of the ground floor are lines of the bill
+  // (backfill + surplus = excavation); what is left not counted no longer lists them
+  for (const key of ['excavation', 'backfill', 'surplus', 'ground_fill', 'ground_slab']) assert.ok(q(key)?.q > 0 && q(key).parts.length, key);
+  assert.ok(near(q('backfill').q + q('surplus').q, q('excavation').q, 2e-3) && q('ground_slab').concrete && !q('ground_fill').concrete);
+  assert.ok(B.notCounted.length >= 1 && B.notCounted.every((x) => !/Bậc thang|Nền tầng 1|Đào/.test(x.item)) && B.assumed.map((a) => a.item).join() === 'earth,ground_slab,stair_steps');
+  // the workbook: the backfill is a formula of the lines above it; the CSV lists what was assumed
+  const kc = kcWorkbook(R, B).toString('utf8');
+  assert.ok(/<f>I\d+<\/f>/.test(kc) && /<f>-I\d+<\/f>/.test(kc) && kc.includes('GIẢ ĐỊNH'));
+  const csv = boqCsv(B.groups, Q);
+  assert.ok(csv.includes('GIẢ ĐỊNH') && csv.includes('Đào hố móng') && csv.includes('Bê tông nền tầng 1') && csv.includes('Xây bậc thang'));
+  // the prisms for AutoCAD with the options of the model: the same union as the bill
+  assert.ok(near(p2Union(p2Prisms(R, B.model.options)), B.model.sumNet, 1e-6) && near(p2Union(p2Prisms(R)), B.model.sumNet, 1e-6));
+});
+
+// ---- the surface model of the finishes (surfaces.mjs): faces with their ledger, the measured and the geometric
+// quantity, the cross-checks; every answer calculated by hand
+
+import { floorPlate, floorSurfaces, revealFaces } from '../src/surfaces.mjs';
+import { finishCsv as surfCsv, finishSheet as surfSheet } from '../src/archboq.mjs';
+import { buildModel as surfModel } from '../src/elevation.mjs';
+
+const SURF_R4 = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+const surfFinishes = (rooms, h) => Object.fromEntries(Object.keys(rooms).map((name) => [name, resolveFinish(name, {}, [], h)]));
+// a room 5.0 x 4.0 m inside walls 200 thick, storey 3300: a door D2 800 x 2400, a window S1 1200 x 1500 (sill 900), a
+// small window S9 400 x 500 (0.20 m²: under the 0.25 m² of Phụ lục VI)
+const SURF_BOX = {
+  walls: [{ id: 'W', points: [[-100, -100], [5100, -100], [5100, 4100], [-100, 4100]], closed: true, thickness: 200 }], heights: { top: 3300 },
+  openings: [{ wall: 'W', segment: 0, at: [1000, -100], width: 800, type: 'door', tag: 'D2' }, { wall: 'W', segment: 2, at: [2500, 4100], width: 1200, type: 'window', tag: 'S1' },
+    { wall: 'W', segment: 1, at: [5100, 2000], width: 400, type: 'window', sill: 2000, head: 2500, tag: 'S9' }],
+  rooms: [{ name: 'PHÒNG NGỦ', at: [2500, 2000] }],
+};
+const SURF_ROOMS = { 'PHÒNG NGỦ': SURF_R4(0, 0, 5000, 4000) };
+
+test('surfaces: a room with a door, a window and a small opening: wall faces, reveals, skirting, the 0,25 m² rule', () => {
+  // the ceiling of a 3300 storey is at +2.800 with a drop band 600 x 150: the walls are painted up to +2.650
+  const finishes = surfFinishes(SURF_ROOMS, 3300);
+  const S = floorSurfaces({ spec: SURF_BOX, rooms: SURF_ROOMS, finishes, floor: 'T1', ground: 450 });
+  const wall = S.faces.filter((f) => f.kind === 'wall');
+  assert.equal(wall.length, 4);
+  // south: 5.00 x 2.65 = 13.25, less the door 0.80 x 2.40 = 1.92, plus its reveals 75 deep (half the 200 wall less half
+  // a 50 frame): (2 x 2.40 + 0.80) x 0.075 = 0.42: 11.75 m²
+  assert.ok(near(wall[0].measured, 13.25 - 1.92 + 0.42, 1e-9) && near(wall[0].net, 11.75, 1e-9), wall[0].how);
+  assert.equal(wall[0].how, '5,00 x 2,65 - 0,80 x 2,40 (D2) + má cửa D2 5,60 x 0,075');
+  // east: 4.00 x 2.65 = 10.60; S9 0.40 x 0.50 = 0.20 m² is not taken off by the rule (it is by the geometry); its
+  // reveals (2 x 0.50 + 0.40 head + 0.40 sill) x 0.075 = 0.135 count in both: 10.735 measured, 10.535 geometric
+  assert.ok(near(wall[1].measured, 10.6 + 0.135, 1e-9) && near(wall[1].net, 10.6 - 0.2 + 0.135, 1e-9), wall[1].how);
+  assert.ok(wall[1].deductions[0].off === false && wall[1].how.includes('không trừ, nhỏ hơn 0,25 m²: S9 0,40 x 0,50'), wall[1].how);
+  // north: 13.25 less the window 1.20 x 1.50 = 1.80, plus (2 x 1.50 + 1.20 + 1.20) x 0.075 = 0.405: 11.855; west: 10.60
+  assert.ok(near(wall[2].measured, 13.25 - 1.8 + 0.405, 1e-9) && near(wall[3].measured, 10.6, 1e-9));
+  // the reveals one by one: three openings, each on its two faces; the door 5.60 m of jambs and head x 0.075
+  const rv = revealFaces(S.faces);
+  assert.ok(rv.length === 6 && rv[0].of === wall[0].id && near(rv[0].L, 5.6, 1e-9) && near(rv[0].H, 0.075, 1e-9) && near(rv[0].measured, 0.42, 1e-9), JSON.stringify(rv[0]));
+  // skirting: a run per edge, the door off its edge: 4.20 + 4.00 + 5.00 + 4.00 = 17.20 m
+  assert.deepEqual(S.faces.filter((f) => f.kind === 'skirting').map((f) => Math.round(f.measured * 1000) / 1000), [4.2, 4, 5, 4]);
+  // the outer faces: 5.40 and 4.40 long (to the corners), 3.30 + 0.45 of plinth high, the same openings, the outside
+  // half of their reveals
+  const out = S.faces.filter((f) => f.kind === 'exterior');
+  assert.ok(near(out[0].measured, 5.4 * 3.75 - 1.92 + 0.42, 1e-9) && near(out[1].measured, 4.4 * 3.75 + 0.135, 1e-9) && near(out[1].net, 4.4 * 3.75 - 0.2 + 0.135, 1e-9));
+  // the schedule: paint 11.75 + 10.735 + 11.855 + 10.60 = 44.94 m² by the rule, 44.74 m² geometric; with the geometric
+  // rule set every opening is deducted
+  const ms = materialSchedule({ spec: SURF_BOX, rooms: SURF_ROOMS, finishes });
+  const row = (m, code) => m.rows.find((r) => r.code === code);
+  assert.ok(near(row(ms, 'WL-01').qty, 44.94, 1e-9) && near(row(ms, 'WL-01').geo, 44.74, 1e-9) && row(ms, 'WL-01').faces.length === 4, JSON.stringify(row(ms, 'WL-01')));
+  // the floor: the outline 20 m² and what lies under the door D2, 0.80 x half the 200 wall (the inner half only: there
+  // is no room outside)
+  assert.ok(near(row(ms, 'SK-01').qty, 17.2, 1e-9) && row(ms, 'FL-01').qty === 20.08);
+  assert.ok(near(row(materialSchedule({ spec: SURF_BOX, rooms: SURF_ROOMS, finishes, rules: 'NET' }), 'WL-01').qty, 44.74, 1e-9));
+  // the bill: the same paint with both numbers; outer paint 18.75 + 16.635 + 18.855 + 16.50 = 70.74 (70.54 geometric);
+  // the gable roof the plan assumes (30°, 500 overhang) on its slope: (5.4 + 1.0) x (4.4 + 1.0) / cos 30° = 39.906 m²
+  const Q = finishQuantities({ floors: [{ name: 'TẦNG 1', spec: SURF_BOX, height: 3300, rooms: SURF_ROOMS, finishes }], spec: SURF_BOX });
+  const q = (key) => Q.rows.find((r) => r.key === key);
+  assert.ok(q('paint|PUT').q === 44.94 && q('paint|PUT').geo === 44.74 && q('paint|IN|WL-01').q === 44.94 && q('paint|PUT').faces.length === 4, JSON.stringify(q('paint|PUT')));
+  assert.ok(q('paint|OUT').q === 70.74 && q('paint|OUT').geo === 70.54, JSON.stringify(q('paint|OUT')));
+  assert.ok(near(q('water|PITCH').q, (6.4 * 5.4) / Math.cos(Math.PI / 6), 0.0006), JSON.stringify(q('water|PITCH')));
+  // the checks: every opening on two faces (the room and the outside) by the same area, the reveals as perimeter x
+  // depth, the bill against the schedule code by code (FL, SK, WL, CL)
+  assert.ok(Q.checks.length >= 10 && Q.checks.every((c) => c.ok), JSON.stringify(Q.checks.filter((c) => !c.ok)));
+  assert.equal(Q.checks.filter((c) => c.id === 'openings').length, 3);
+  assert.ok(Q.checks.some((c) => c.id === 'reveals') && Q.checks.filter((c) => c.id === 'bill').length === 4);
+  assert.ok(Q.rules.void === 0.25 && Q.rules.decimals === 3);
+  // where the two numbers differ the drawn table and the CSV show both
+  assert.ok(surfSheet(Q).entities.find((e) => e.type === 'table').rows[0].includes('KL HÌNH HỌC'));
+  assert.equal(surfCsv(Q).split('\r\n')[1].split(';')[4], 'KL HÌNH HỌC');
+  const net = finishQuantities({ floors: [{ name: 'TẦNG 1', spec: SURF_BOX, height: 3300, rooms: SURF_ROOMS, finishes }], spec: SURF_BOX, rules: 'NET' });
+  assert.ok(net.rows.find((r) => r.key === 'paint|PUT').q === 44.74 && !surfSheet(net).entities.find((e) => e.type === 'table').rows[0].includes('KL HÌNH HỌC'));
+});
+
+test('surfaces: an L-shaped room with a dropped ceiling: the vertical face of the drop band', () => {
+  // 6.0 x 3.0 + 3.0 x 2.0 = 24 m², perimeter 22 m. The band is 600 wide and 150 deep: its inner edge is the outline
+  // moved in by 600, 22 - 8 x 0.6 = 17.2 m long (a rectilinear outline loses 8 widths), so the drop face is
+  // 17.2 x 0.15 = 2.58 m²
+  const rooms = { 'PHÒNG KHÁCH': [[0, 0], [6000, 0], [6000, 3000], [3000, 3000], [3000, 5000], [0, 5000]] };
+  const finishes = { 'PHÒNG KHÁCH': resolveFinish('PHÒNG KHÁCH') };
+  const S = floorSurfaces({ spec: null, rooms, finishes });
+  const drop = S.faces.find((f) => f.kind === 'ceiling_drop');
+  assert.ok(near(drop.L, 17.2, 1e-9) && near(drop.H, 0.15, 1e-9) && near(drop.measured, 2.58, 1e-9) && drop.code === 'CL-01', JSON.stringify(drop));
+  // six wall faces, each to the underside of the band (+2.850): 22 x 2.85 = 62.7 m²
+  const wall = S.faces.filter((f) => f.kind === 'wall');
+  assert.deepEqual(wall.map((f) => f.L), [6, 3, 3, 2, 3, 5]);
+  assert.ok(wall.every((f) => near(f.H, 2.85, 1e-9)));
+  // the ceiling: the flat part 24 (the field and the underside of the band make up the plan) + the drop face 2.58
+  const ms = materialSchedule({ spec: null, rooms, finishes });
+  const qty = (code) => ms.rows.find((r) => r.code === code).qty;
+  assert.ok(qty('CL-01') === 26.58 && qty('FL-01') === 24 && qty('SK-01') === 22 && near(qty('WL-01'), 62.7, 1e-9), JSON.stringify(ms.rows));
+  // a room too narrow for the band keeps a flat ceiling: no drop face
+  const kho = floorSurfaces({ spec: null, rooms: { KHO: SURF_R4(0, 0, 2250, 1950) }, finishes: { KHO: resolveFinish('KHO') } });
+  assert.ok(!kho.faces.some((f) => f.kind === 'ceiling_drop') && kho.faces.some((f) => f.kind === 'ceiling'));
+});
+
+// a stairwell 2.40 x 4.00 m inside walls 200 thick, storey 3200: 20 risers of 160 (10 + 10), goings of 300 (the flights
+// run 2700, the half landing is 1300 deep), flights 1150 wide beside a 100 well
+const SURF_STAIR = { type: 'u', region: [[0, 0], [2400, 4000]], direction: 'up', turn: 'right', gap: 100, risers: 20, landing: 1300 };
+const SURF_WELL = { walls: [{ id: 'T', points: [[-100, -100], [2500, -100], [2500, 4100], [-100, 4100]], closed: true, thickness: 200 }], heights: { top: 3200 }, stairs: [SURF_STAIR] };
+
+test('surfaces: a stairwell on its real surfaces: treads, risers, stepped skirting, handrail and soffits on the slope', () => {
+  const rooms = { 'CẦU THANG': SURF_R4(0, 0, 2400, 4000) }, finishes = surfFinishes(rooms, 3200);
+  const S = floorSurfaces({ spec: SURF_WELL, rooms, finishes });
+  const sumOf = (kind, T = S) => T.faces.filter((f) => f.kind === kind).reduce((a, f) => a + f.measured, 0);
+  // treads: 9 goings x 0.30 x 1.15 = 3.105 a flight; the half landing 2.40 x 1.30 = 3.12
+  assert.deepEqual(S.faces.filter((f) => f.kind === 'tread').map((f) => [f.n, f.L, f.H]), [[9, 0.3, 1.15], [9, 0.3, 1.15]]);
+  assert.ok(near(sumOf('tread'), 6.21, 1e-9) && near(sumOf('landing'), 3.12, 1e-9));
+  // risers: 20 x 0.16 x 1.15 = 3.68
+  assert.ok(near(sumOf('riser'), 3.68, 1e-9));
+  // skirting stepped along the wall beside each flight: 9 x 0.30 + 10 x 0.16 = 4.30, and around the landing 2 x 1.30 +
+  // 2.40 = 5.00: 13.60 m; none on the plan of the room (every edge of it lies along the well)
+  assert.ok(near(sumOf('stair_skirting'), 13.6, 1e-9) && !S.faces.some((f) => f.kind === 'skirting'));
+  // handrail on the slope of each flight hypot(2.70, 1.60) = 3.138 and across the well 0.10: 6.377 m
+  const slope = Math.hypot(2.7, 1.6);
+  assert.ok(near(sumOf('handrail'), 2 * slope + 0.1, 1e-9));
+  // soffits: both flights on the slope 3.138 x 1.15 and the landing 3.12: 10.338 m², not the plan of the stairwell 9.60
+  assert.ok(near(sumOf('soffit'), 2 * slope * 1.15 + 3.12, 1e-9));
+  // the walls of the stairwell: 12.8 m x the storey 3.20 (no ceiling)
+  assert.ok(near(sumOf('wall'), 12.8 * 3.2, 1e-9));
+  // the schedule and the bill: granite 6.21 + 3.12 + 3.68 = 13.01 m², skirting 13.60 m
+  const ms = materialSchedule({ spec: SURF_WELL, rooms, finishes });
+  const qty = (code) => ms.rows.find((r) => r.code === code).qty;
+  assert.ok(qty('FL-04') === 13.01 && qty('SK-02') === 13.6, JSON.stringify(ms.rows));
+  const Q = finishQuantities({ floors: [{ name: 'TẦNG 1', spec: SURF_WELL, height: 3200, rooms, finishes }], spec: SURF_WELL });
+  const q = (key) => Q.rows.find((r) => r.key === key).q;
+  assert.ok(q('stair|TREAD') === 9.33 && q('stair|RISER') === 3.68 && q('stair|SKIRT') === 13.6 && q('stair|RAIL') === 6.377 && q('paint|SLAB') === 10.338, JSON.stringify(Q.rows.filter((r) => r.section === 'stair')));
+  // 20 risers x 0.16 = the storey 3.20, 9 treads a flight, the faces add up to the formulas of the stair
+  for (const id of ['stair_rise', 'stair_treads', 'stair_tread', 'stair_riser', 'stair_skirting', 'stair_rail']) assert.ok(Q.checks.find((c) => c.id === id)?.ok, id);
+  assert.ok(Q.checks.every((c) => c.ok), JSON.stringify(Q.checks.filter((c) => !c.ok)));
+  assert.ok(Q.stairs[0].n1 === 10 && Q.stairs[0].n2 === 10 && Q.stairs[0].riser === 0.16 && Q.stairs[0].going === 0.3 && Q.stairs[0].c1 === 1 && Q.stairs[0].wall === 5);
+  // the same stair open to a room, a wall beside flight 1 only: the skirting steps along that wall 4.30 m and runs
+  // along its side of the landing 1.30 m
+  const open = floorSurfaces({ spec: { walls: [{ id: 'A', points: [[-100, -100], [-100, 4100]], thickness: 200 }], heights: { top: 3200 }, stairs: [SURF_STAIR] }, rooms: {}, finishes: {} });
+  assert.ok(near(sumOf('stair_skirting', open), 5.6, 1e-9) && near(sumOf('tread', open), 6.21, 1e-9));
+  // a straight flight beside a wall, 14 treads of 250, 1.20 wide, 15 risers of 200 to +3.000: treads 14 x 0.25 x 1.2 =
+  // 4.2, risers 15 x 0.2 x 1.2 = 3.6, skirting 14 x 0.25 + 15 x 0.2 = 6.5, handrail and soffit on hypot(3.5, 3.0) = 4.61
+  const straight = floorSurfaces({ spec: { walls: [{ id: 'A', points: [[-100, -100], [-100, 6100]], thickness: 200 }], heights: { top: 3000 }, stairs: [{ start: [600, 1000], direction: 90, width: 1200, treads: 14, going: 250 }] }, rooms: {}, finishes: {} });
+  assert.ok(near(sumOf('tread', straight), 4.2, 1e-9) && near(sumOf('riser', straight), 3.6, 1e-9) && near(sumOf('stair_skirting', straight), 6.5, 1e-9));
+  assert.ok(near(sumOf('handrail', straight), Math.hypot(3.5, 3), 1e-9) && near(sumOf('soffit', straight), Math.hypot(3.5, 3) * 1.2, 1e-9));
+});
+
+test('surfaces: the floor plate check: room areas + wall footprints = the plate inside the outer faces', () => {
+  // TWO: outer walls 200 about an 8.0 x 4.0 axis rectangle, a partition 100 at x = 6000. The plate to the outer faces
+  // is 8.2 x 4.2 = 34.44 m²; the walls: the ring 34.44 - 7.8 x 3.8 = 4.80 and the partition 0.1 x 3.8 = 0.38: 5.18 m²;
+  // the rooms 5.85 x 3.8 = 22.23 and 1.85 x 3.8 = 7.03: 29.26 m²; 29.26 + 5.18 = 34.44
+  const M = surfModel(TWO);
+  const bed = SURF_R4(100, 100, 5950, 3900), wc = SURF_R4(6050, 100, 7900, 3900);
+  const p = floorPlate(M, { 'PHÒNG NGỦ': bed, WC: wc });
+  assert.ok(p.exact && near(p.rooms, 29.26e6, 1) && near(p.walls, 5.18e6, 1) && near(p.plate, 34.44e6, 1) && p.void === 0 && p.overlap === 0, JSON.stringify(p));
+  // a room left out: 7.03 m² enclosed with no room; an outline drawn to the axis of the partition: 0.05 x 3.8 = 0.19 m²
+  // of it lies over the wall
+  assert.ok(near(floorPlate(M, { 'PHÒNG NGỦ': bed }).void, 7.03e6, 1));
+  assert.ok(near(floorPlate(M, { 'PHÒNG NGỦ': SURF_R4(100, 100, 6000, 3900), WC: wc }).overlap, 0.19e6, 1));
+  // walls off the axes: a quadrilateral of 200 walls, its plate about the axis area 41.5 m² + 0.1 x the perimeter 26.15 m
+  // (within 1 %)
+  const skew = floorPlate(surfModel({ walls: [{ points: [[0, 0], [8000, 0], [8000, 5000], [1000, 6000]], closed: true, thickness: 200 }] }), {});
+  assert.ok(!skew.exact && near(skew.plate / 1e6, 41.5 + 2.615, 0.45), JSON.stringify(skew));
+  // in the checks of the bill: the plate, each room's perimeter and skirting, the door D2 (700 x 2400 = 1.68 m²) off its
+  // two faces, one in each room
+  const rooms = { 'PHÒNG NGỦ': bed, WC: wc };
+  const floors = (r) => [{ name: 'TẦNG 1', spec: TWO, height: 3600, rooms: r, finishes: surfFinishes(r, 3600) }];
+  const Q = finishQuantities({ floors: floors(rooms), spec: TWO });
+  const plate = Q.checks.find((c) => c.id === 'plate');
+  assert.ok(plate.ok && near(plate.lhs, 34.44, 1e-6) && near(plate.rhs, 34.44, 1e-6), JSON.stringify(plate));
+  const d2 = Q.checks.find((c) => c.id === 'openings');
+  assert.ok(d2.ok && d2.lhs === 1.68 && d2.rhs === 1.68 && d2.faces.length === 2 && d2.faces[0] !== d2.faces[1], JSON.stringify(d2));
+  assert.equal(Q.checks.filter((c) => c.id === 'perimeter' && c.ok).length, 2);
+  assert.ok(Q.checks.every((c) => c.ok), JSON.stringify(Q.checks.filter((c) => !c.ok)));
+  // the WC left out: the plate check fails by its 7.03 m²
+  const lost = finishQuantities({ floors: floors({ 'PHÒNG NGỦ': bed }), spec: TWO }).checks.find((c) => c.id === 'plate');
+  assert.ok(!lost.ok && near(lost.rhs - lost.lhs, 7.03, 1e-6), JSON.stringify(lost));
+});
+
+// ---- the surface model, second part: what the first left out
+import { plateOutlines as surfOutlines, storeyStructure as surfStorey } from '../src/surfaces.mjs';
+
+test('surfaces: the floor under the doors (half the wall each side), the waterproofing up the walls only, not across a door', () => {
+  // TWO: a bedroom 5.85 x 3.8 and a WC 1.85 x 3.8 either side of a 100 partition with the door D2 700 wide
+  const rooms = { 'PHÒNG NGỦ': SURF_R4(100, 100, 5950, 3900), WC: SURF_R4(6050, 100, 7900, 3900) };
+  const finishes = surfFinishes(rooms, 3600);
+  const S = floorSurfaces({ spec: TWO, rooms, finishes, floor: 'T1' });
+  const of = (room, kind) => S.faces.find((f) => f.room === room && f.kind === kind);
+  // the floor of each room runs on under the door to the middle of the wall: 0.70 x 0.05 = 0.035 m² each side
+  const bed = of('PHÒNG NGỦ', 'floor'), wc = of('WC', 'floor');
+  assert.ok(near(bed.gross, 22.23, 1e-9) && near(bed.measured, 22.265, 1e-9) && near(wc.measured, 7.03 + 0.035, 1e-9), `${bed.measured} ${wc.measured}`);
+  assert.equal(bed.how, '22,23 (theo đường bao) + ngưỡng D2 0,70 x 0,05');
+  // the strip in plan (for whoever redraws it): from the face of the room to the axis of the partition, the door wide
+  const strip = bed.additions[0].poly, xs = strip.map((q) => Math.round(q[0])), ys = strip.map((q) => Math.round(q[1]));
+  assert.deepEqual([Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)], [5950, 6000, 650, 1350]);
+  // the skirting stops at the door as before: 19.3 - 0.7
+  assert.ok(near(S.faces.filter((f) => f.room === 'PHÒNG NGỦ' && f.kind === 'skirting').reduce((a, f) => a + f.measured, 0), 18.6, 1e-9));
+  // the waterproofing of the WC: its floor 7.03, up the walls 300 along the perimeter less the door (11.30 - 0.70) x
+  // 0.30 = 3.18, and under the door 0.035: 10.245 m² (it was 7.03 + 11.30 x 0.30 = 10.42 with the door counted as wall)
+  const wp = of('WC', 'waterproof');
+  assert.ok(near(wp.measured, 7.03 + 10.6 * 0.3 + 0.035, 1e-9), wp.how);
+  assert.equal(wp.how, '7,03 (theo đường bao) + quét lên tường 300 (chu vi 11,30 - cửa 0,70) 10,60 x 0,30 + ngưỡng D2 0,70 x 0,05');
+  // the bill, the schedule and the checks: the strips counted from the rooms = from the door, side by side (2 x 0.035)
+  const Q = finishQuantities({ floors: [{ name: 'TẦNG 1', spec: TWO, height: 3600, rooms, finishes }], spec: TWO });
+  const q = (key) => Q.rows.find((r) => r.key === key).q;
+  assert.ok(q('floor|FL-01') === 22.265 && q('floor|FL-02') === 7.065 && q('water|WET') === 10.245, JSON.stringify(Q.rows.filter((r) => !r.head).map((r) => [r.key, r.q])));
+  const th = Q.checks.find((c) => c.id === 'thresholds'), up = Q.checks.find((c) => c.id === 'upturn');
+  assert.ok(th.ok && near(th.lhs, 0.07, 1e-9) && near(th.rhs, 0.07, 1e-9) && up.ok && near(up.lhs, 11.3, 1e-9), JSON.stringify([th, up]));
+  assert.ok(Q.checks.every((c) => c.ok), JSON.stringify(Q.checks.filter((c) => !c.ok)));
+  const ms = materialSchedule({ spec: TWO, rooms, finishes });
+  assert.ok(near(ms.rows.find((r) => r.code === 'FL-01').qty, 22.265, 0.0051) && near(ms.rows.find((r) => r.code === 'FL-02').qty, 7.065, 0.0051));
+  // the workbook: the upturn and the strip as their arithmetic
+  const xml = finishWorkbook(Q, ['TẦNG 1']).toString('utf8');
+  assert.ok(xml.includes('<f>(11.3-0.7)*0.3+0.7*0.05</f>') && xml.includes('<f>0.7*0.05</f>'));
+  // a door to the outside (SURF_BOX: D2 800 in a 200 wall): the inner half only, one side in the check
+  const box = finishQuantities({ floors: [{ name: 'TẦNG 1', spec: SURF_BOX, height: 3300, rooms: SURF_ROOMS, finishes: surfFinishes(SURF_ROOMS, 3300) }], spec: SURF_BOX });
+  const one = box.checks.find((c) => c.id === 'thresholds');
+  assert.ok(one.ok && near(one.lhs, 0.08, 1e-9) && one.note === '1 phía cửa', JSON.stringify(one));
+  // a balcony 5.0 x 1.2 with a sliding door D5 1600 wide onto it: its floor 6 + 1.6 x 0.1 (the outer half of the wall
+  // under the door); waterproofing 6 + (12.4 - 1.6) x 0.3 + 0.16 = 9.40
+  const BALC = {
+    walls: [{ id: 'W', points: [[0, 0], [5000, 0], [5000, 4000], [0, 4000]], closed: true, thickness: 200 }], heights: { top: 3300 },
+    openings: [{ wall: 'W', segment: 0, at: [2500, 0], width: 1600, type: 'door', tag: 'D5' }], balconies: [{ region: [[0, -1300], [5000, -100]] }],
+  };
+  const B = floorSurfaces({ spec: BALC, rooms: {}, finishes: {} });
+  const bal = (kind) => B.faces.find((f) => f.balcony === 0 && f.kind === kind);
+  assert.ok(near(bal('floor').measured, 6.16, 1e-9) && near(bal('waterproof').measured, 9.4, 1e-9), `${bal('floor').how} | ${bal('waterproof').how}`);
+});
+
+test('surfaces: with no suspended ceiling the wall finish goes up to the slab soffit; along a stairwell open above, the full storey', () => {
+  // a drying yard (no ceiling, exterior paint) in the box of SURF_BOX, storey 3300
+  const rooms = { 'SÂN PHƠI': SURF_R4(0, 0, 5000, 4000) }, finishes = surfFinishes(rooms, 3300);
+  const heights = (o) => floorSurfaces({ spec: SURF_BOX, rooms, finishes, ...o }).faces.filter((f) => f.kind === 'wall').map((f) => f.H);
+  // the last floor, under the sky: the height of its walls
+  assert.deepEqual(heights({}), [3.3, 3.3, 3.3, 3.3]);
+  // a floor with a floor above it: up to the soffit of that slab, 3.30 - 0.12 (the default slab), or as given
+  const under = floorSurfaces({ spec: SURF_BOX, rooms, finishes, top: false });
+  const wall = under.faces.filter((f) => f.kind === 'wall');
+  assert.ok(wall.every((f) => near(f.H, 3.18, 1e-9) && f.hnote === 'cao đến đáy sàn 3,30 - 0,12'), JSON.stringify(wall.map((f) => [f.H, f.hnote])));
+  assert.equal(wall[0].how, '5,00 x 3,18 - 0,80 x 2,40 (D2) + má cửa D2 5,60 x 0,075 [cao đến đáy sàn 3,30 - 0,12]');
+  assert.ok(heights({ top: false, slab: 150 }).every((h) => near(h, 3.15, 1e-9)));
+  // a plan whose roofs are an empty list is a floor of a building with a floor above (floorsOf): the same, with no top
+  assert.ok(floorSurfaces({ spec: { ...SURF_BOX, roofs: [] }, rooms, finishes }).faces.filter((f) => f.kind === 'wall').every((f) => near(f.H, 3.18, 1e-9)));
+  // with the structure: the soffit it gives
+  assert.ok(heights({ top: false, structure: { soffit: 3050 } }).every((h) => near(h, 3.05, 1e-9)));
+  // a room with a ceiling is finished to its ceiling as before, whatever is above
+  const bed = floorSurfaces({ spec: SURF_BOX, rooms: SURF_ROOMS, finishes: surfFinishes(SURF_ROOMS, 3300), top: false });
+  assert.ok(bed.faces.filter((f) => f.kind === 'wall').every((f) => near(f.H, 2.65, 1e-9) && f.hnote === undefined));
+  // a stair room 2.40 x 6.00 whose stairwell takes the first 4.00 m, storey 3200, a floor above: the wall at the foot
+  // of the well runs the full storey (the well is open through the slab), the two long walls go to the soffit 3.08
+  // and run on through the slab along the well (4.00 x 0.12 more), the far wall to the soffit
+  const WELL6 = { walls: [{ id: 'T', points: [[-100, -100], [2500, -100], [2500, 6100], [-100, 6100]], closed: true, thickness: 200 }], heights: { top: 3200 }, stairs: [SURF_STAIR] };
+  const sr = { 'CẦU THANG': SURF_R4(0, 0, 2400, 6000) }, sf = surfFinishes(sr, 3200);
+  const st = floorSurfaces({ spec: WELL6, rooms: sr, finishes: sf, top: false }).faces.filter((f) => f.kind === 'wall');
+  assert.deepEqual(st.map((f) => [f.L, f.H]), [[2.4, 3.2], [6, 3.08], [2.4, 3.08], [6, 3.08]]);
+  assert.ok(st[0].hnote === 'ô thang thông tầng, cao tầng 3,20' && near(st[1].additions[0].area, 4 * 0.12, 1e-9) && st[2].additions.length === 0, JSON.stringify(st.map((f) => f.how)));
+  assert.equal(st[1].how, '6,00 x 3,08 + qua chiều dày sàn tại ô thang 4,00 x 0,12 [cao đến đáy sàn 3,20 - 0,12]');
+  assert.ok(near(st.reduce((a, f) => a + f.measured, 0), 16.8 * 3.08 + 10.4 * 0.12, 1e-9));
+  // the same stair room on the last floor (a roof slab on the walls): the storey height all round
+  const last = floorSurfaces({ spec: WELL6, rooms: sr, finishes: sf }).faces.filter((f) => f.kind === 'wall');
+  assert.ok(last.every((f) => near(f.H, 3.2, 1e-9)) && last[2].hnote === 'cao đến đáy mái 3,20');
+  // the bill and the schedule agree floor by floor (a ground floor under a slab, the yard on the last floor)
+  const two = { floors: [{ ...SURF_BOX, heights: undefined, height: 3300 }, { height: 3300 }] };
+  const F = floorsOf(two);
+  const Q = finishQuantities({ floors: F.map((f) => ({ name: f.name, spec: f.spec, height: f.height, rooms, finishes })), spec: two });
+  const paint = Q.rows.find((r) => r.key === 'paint|OUT');
+  assert.ok(Q.checks.every((c) => c.ok), JSON.stringify(Q.checks.filter((c) => !c.ok)));
+  const inner = (name) => Q.faces.filter((f) => f.floor === name && f.kind === 'wall').map((f) => f.H);
+  assert.ok(inner('TẦNG 1').every((h) => near(h, 3.18, 1e-9)) && inner('TẦNG 2').every((h) => near(h, 3.3, 1e-9)) && paint.q > 0);
+});
+
+test('surfaces: a straight flight takes its footprint off the floor of the room it stands in, the skirting steps along it', () => {
+  // a living room 5.0 x 6.0, storey 3000; a flight 1.20 wide against the left wall, 14 treads of 250 from y = 1000
+  const LIV = {
+    walls: [{ id: 'W', points: [[-100, -100], [5100, -100], [5100, 6100], [-100, 6100]], closed: true, thickness: 200 }], heights: { top: 3000 },
+    stairs: [{ start: [600, 1000], direction: 90, width: 1200, treads: 14, going: 250 }],
+  };
+  const rooms = { 'PHÒNG KHÁCH': SURF_R4(0, 0, 5000, 6000) }, finishes = surfFinishes(rooms, 3000);
+  const S = floorSurfaces({ spec: LIV, rooms, finishes });
+  const floor = S.faces.find((f) => f.kind === 'floor');
+  // the floor: 30 m² less the footprint of the flight 1.20 x 3.50 (whatever the rule set: it is not a small opening)
+  assert.ok(near(floor.measured, 30 - 4.2, 1e-9) && floor.deductions[0].always && floor.how === '30,00 (theo đường bao) - 4,20 (chân thang)', floor.how);
+  assert.deepEqual(floor.deductions[0].poly.map((q) => q.map(Math.round)), [[0, 1000], [1200, 1000], [1200, 4500], [0, 4500]]);
+  // the skirting of the room stops along the flight (22 - 3.5 m); there it steps with the treads: 14 x 0.25 + 15 x 0.2
+  const sum = (kind) => S.faces.filter((f) => f.kind === kind).reduce((a, f) => a + f.measured, 0);
+  assert.ok(near(sum('skirting'), 18.5, 1e-9) && near(sum('stair_skirting'), 6.5, 1e-9) && near(sum('tread'), 4.2, 1e-9) && near(sum('riser'), 3.6, 1e-9));
+  const Q = finishQuantities({ floors: [{ name: 'TẦNG 1', spec: LIV, height: 3000, rooms, finishes }], spec: LIV });
+  assert.ok(Q.rows.find((r) => r.key === 'floor|FL-01').q === 25.8 && Q.checks.every((c) => c.ok), JSON.stringify(Q.checks.filter((c) => !c.ok)));
+});
+
+test('surfaces: with the structure: the sides of a beam under a painted soffit, the faces of columns in the wall finish', () => {
+  // a store 6.0 x 4.0 with no ceiling under a 120 slab (soffit +3.180). A beam D1 200 x 400 crosses it at x = 3000, a
+  // beam D2 runs over the south wall. Columns: C2 300 deep in the west wall (50 into the room, 220 wide), C2 220 x 300
+  // free under D1, C1 in the north-east corner (60 into each wall line), C1 in the west wall 10 into the room (flush)
+  const KHO = { walls: [{ id: 'W', points: [[-100, -100], [6100, -100], [6100, 4100], [-100, 4100]], closed: true, thickness: 200 }], heights: { top: 3300 }, roofs: [], rooms: [{ name: 'KHO', at: [3000, 2000] }] };
+  const rooms = { KHO: SURF_R4(0, 0, 6000, 4000) }, finishes = { KHO: resolveFinish('KHO', { ceiling: null }, [], 3300) };
+  const structure = {
+    soffit: 3180, slab: 120,
+    beams: [{ name: 'D1', A: [3000, -100], B: [3000, 4100], b: 200, h: 400 }, { name: 'D2', A: [-100, -100], B: [6100, -100], b: 200, h: 400 }],
+    columns: [{ name: '1-A', mark: 'C2', box: [-250, 1890, 50, 2110] }, { name: '2-A', mark: 'C2', box: [2890, 1850, 3110, 2150] }, { name: '3-B', mark: 'C1', box: [5940, 3940, 6160, 4160] },
+      { name: '1-B', mark: 'C1', box: [-210, 900, 10, 1120] }],
+  };
+  const S = floorSurfaces({ spec: KHO, rooms, finishes, floor: 'T1', structure });
+  // the soffit: the plan 24 m² and the two sides of D1 below the slab, 0.28 deep, over its 4.00 m in the room less the
+  // 0.30 of the column under it: 2 x 3.70 x 0.28 = 2.072; D2 over the wall shows no side
+  const sof = S.faces.find((f) => f.kind === 'soffit');
+  assert.ok(near(sof.measured, 24 + 2.072, 1e-9) && sof.additions.length === 1 && sof.how.includes('thành dầm D1 2 x 3,70 x 0,28'), sof.how);
+  // the columns: 2 x 0.05 x 3.18 for the one in the wall, the girth 1.04 x 3.18 of the free one; the corner column only
+  // moves the corner in (no face), the flush one is under the plaster
+  const col = S.faces.filter((f) => f.kind === 'column');
+  assert.deepEqual(col.map((f) => [f.n, Math.round(f.L * 1e6) / 1e6, f.H, f.code]), [[2, 0.05, 3.18, 'WL-01'], [1, 1.04, 3.18, 'WL-01']]);
+  assert.ok(col[0].how === 'cột nhô khỏi tường C2 (1-A): 2 x 0,05 x 3,18' && col[1].how === 'cột giữa phòng C2 (2-A): 1,04 x 3,18', JSON.stringify(col.map((f) => f.how)));
+  // their footprints on the floor (and the soffit): small openings, off the geometric net only (0.011 + 0.066 + 0.0036)
+  const floor = S.faces.find((f) => f.kind === 'floor');
+  assert.ok(floor.measured === 24 && near(floor.net, 24 - 0.0806, 1e-9) && floor.deductions.length === 3 && floor.deductions.every((d) => d.poly.length === 4 && !d.off), floor.how);
+  // the bill with and without the structure; the schedule takes the column faces as well
+  const fl = [{ name: 'T1', spec: KHO, height: 3300, rooms, finishes }];
+  const Q = finishQuantities({ floors: fl, spec: KHO, structure }), Q0 = finishQuantities({ floors: fl, spec: KHO });
+  const row = (X, key) => X.rows.find((r) => r.key === key);
+  assert.ok(row(Q, 'paint|PUT').q === 67.225 && row(Q, 'paint|SLAB').q === 26.072 && row(Q, 'paint|SLAB').geo === 25.991 && row(Q, 'floor|FL-01').geo === 23.919, JSON.stringify(Q.rows.filter((r) => !r.head).map((r) => [r.key, r.q, r.geo])));
+  assert.ok(row(Q0, 'paint|PUT').q === 63.6 && row(Q0, 'paint|SLAB').q === 24 && row(Q0, 'floor|FL-01').geo === 24);
+  assert.ok(Q.warnings.length === 0 && Q0.warnings.length === 1 && /structural_calc/.test(Q0.warnings[0]), JSON.stringify(Q0.warnings));
+  assert.ok(Q.checks.every((c) => c.ok) && Q0.checks.every((c) => c.ok), JSON.stringify(Q.checks.filter((c) => !c.ok)));
+  assert.ok(near(materialSchedule({ spec: KHO, rooms, finishes, structure }).rows.find((r) => r.code === 'WL-01').qty, 67.23, 1e-9));
+  assert.ok(finishWorkbook(Q, ['T1']).toString('utf8').includes('<f>2*3.7*0.28</f>'));
+  // from a calculation result: the storey by its name or its place, the soffit under a floor slab (storey - slab) and
+  // under the roof slab that sits on the walls of the last floor (the storey)
+  const R = structuralCalc({ spec: TOWN });
+  const g = surfStorey(R, { floor: 'TẦNG 1' }), t = surfStorey(R, { index: 2 });
+  assert.ok(g.soffit === 3600 - g.slab && g.beams.length > 0 && g.columns.length > 0 && g.beams.every((b) => b.h > g.slab) && t.soffit === 2800, JSON.stringify([g.soffit, g.slab, t.soffit]));
+  assert.equal(surfStorey(null), null);
+});
+
+test('surfaces: for whoever measures the faces again: the floor models, the plate outlines, the shapes of the deductions', () => {
+  // the bill returns the surface model of every floor
+  const rooms = { 'PHÒNG NGỦ': SURF_R4(100, 100, 5950, 3900), WC: SURF_R4(6050, 100, 7900, 3900) };
+  const Q = finishQuantities({ floors: [{ name: 'TẦNG 1', spec: TWO, height: 3600, rooms, finishes: surfFinishes(rooms, 3600) }], spec: TWO });
+  assert.ok(Q.floors.length === 1 && Q.floors[0].name === 'TẦNG 1' && Q.floors[0].rooms === rooms && Q.floors[0].S.faces.every((f) => Q.faces.includes(f)) && Q.floors[0].S.M.walls.length === 2);
+  // the outlines the plate counts: the four walls of the ring run on into their corners and the partition, the rooms
+  const O = surfOutlines(surfModel(TWO), rooms);
+  assert.ok(O.walls.length === 5 && O.columns.length === 0 && O.rooms.length === 2 && O.walls.every((w) => w.length === 4));
+  const xs = O.walls.flat().map((q) => q[0]), ys = O.walls.flat().map((q) => q[1]);
+  assert.deepEqual([Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)], [-100, 8100, -100, 4100]);
+  // a deduction with a shape carries it: the stairwell on the floor of its room (plan mm), an opening on its wall face
+  // (u from the left end of the face, z above the floor, with its w and h, in m)
+  const sr = { 'CẦU THANG': SURF_R4(0, 0, 2400, 4000) };
+  const well = floorSurfaces({ spec: SURF_WELL, rooms: sr, finishes: surfFinishes(sr, 3200) });
+  assert.equal(well.faces.find((f) => f.kind === 'landing' && f.outline), undefined, 'the whole room is the stairwell: no floor face');
+  const lobby = { 'CẦU THANG': SURF_R4(0, 0, 2400, 6000) };
+  const W6 = { walls: [{ id: 'T', points: [[-100, -100], [2500, -100], [2500, 6100], [-100, 6100]], closed: true, thickness: 200 }], heights: { top: 3200 }, stairs: [SURF_STAIR] };
+  const land = floorSurfaces({ spec: W6, rooms: lobby, finishes: surfFinishes(lobby, 3200) }).faces.find((f) => f.kind === 'landing' && f.outline);
+  assert.ok(near(land.measured, 14.4 - 9.6, 1e-9));
+  assert.deepEqual(land.deductions[0].poly.map((q) => q.map(Math.round)), [[0, 0], [2400, 0], [2400, 4000], [0, 4000]]);
+  const wall = floorSurfaces({ spec: SURF_BOX, rooms: SURF_ROOMS, finishes: surfFinishes(SURF_ROOMS, 3300) }).faces.filter((f) => f.kind === 'wall');
+  const d = (k) => wall[k].deductions[0];
+  assert.ok(near(d(0).u, 3.6, 1e-9) && d(0).z === 0 && d(0).w === 0.8 && d(0).h === 2.4, JSON.stringify(d(0)));
+  assert.ok(d(1).z === 2 && near(d(1).u, 1.8, 1e-9) && d(2).z === 0.9 && near(d(2).u, 1.9, 1e-9), JSON.stringify([d(1), d(2)]));
+  // the kitchen splashback on its wall: 300 from the left end of the face, above the base units
+  const kr = { 'BẾP': SURF_R4(0, 0, 4000, 3000) };
+  const items = resolveItems([{ type: 'kitchen_base', room: 'BẾP', wall: 'A', width: 2400, offset: 300 }, { type: 'kitchen_wall', room: 'BẾP', wall: 'A', width: 2400, offset: 300 }], kr).items;
+  const kit = floorSurfaces({ spec: null, rooms: kr, finishes: { 'BẾP': resolveFinish('BẾP') }, items });
+  const sp = kit.faces.filter((f) => f.kind === 'wall').flatMap((f) => f.deductions).find((x) => x.always);
+  assert.ok(sp && near(sp.u, 0.3, 1e-9) && near(sp.z, items[0].h / 1000, 1e-9) && near(sp.w, 2.4, 1e-9) && near(sp.h, (items[1].opts.z0 - items[0].h) / 1000, 1e-9), JSON.stringify(sp));
+});
+
+// a small house for the electrical and plumbing sets: living room in front, WC and kitchen at the back, two floors
+const MEP_WALLS = [
+  { id: 'W1', points: [[100, 100], [5900, 100], [5900, 8900], [100, 8900]], closed: true, thickness: 200 },
+  { id: 'I1', points: [[100, 6000], [5900, 6000]], thickness: 100 }, { id: 'I2', points: [[2500, 6000], [2500, 8900]], thickness: 100 },
+];
+const MEP_HOUSE = {
+  floors: [
+    { walls: MEP_WALLS, openings: [{ wall: 'W1', segment: 0, at: [3000, 100], width: 1200, type: 'double_door', toward: [3000, 1000] },
+      { wall: 'I1', at: [4000, 6000], width: 900, type: 'door', toward: [4000, 7000] }, { wall: 'I2', at: [2500, 7500], width: 700, type: 'door', toward: [3200, 7500] }],
+    rooms: [{ name: 'PHÒNG KHÁCH', at: [3000, 3000] }, { name: 'BẾP', at: [4200, 7500] }, { name: 'WC', at: [1300, 7500] }] },
+    { openings: [{ wall: 'I1', at: [4000, 6000], width: 900, type: 'door', toward: [4000, 5000] }, { wall: 'I2', at: [2500, 7500], width: 700, type: 'door', toward: [1800, 7500] }],
+      rooms: [{ name: 'PHÒNG NGỦ', at: [3000, 3000] }, { name: 'SẢNH', at: [4200, 7500] }, { name: 'WC', at: [1300, 7500] }] },
+  ],
+};
+const MEP_ROOMS = [
+  { 'PHÒNG KHÁCH': [[200, 200], [5800, 200], [5800, 5950], [200, 5950]], 'BẾP': [[2550, 6050], [5800, 6050], [5800, 8800], [2550, 8800]], WC: [[200, 6050], [2450, 6050], [2450, 8800], [200, 8800]] },
+  { 'PHÒNG NGỦ': [[200, 200], [5800, 200], [5800, 5950], [200, 5950]], 'SẢNH': [[2550, 6050], [5800, 6050], [5800, 8800], [2550, 8800]], WC: [[200, 6050], [2450, 6050], [2450, 8800], [200, 8800]] },
+];
+const mepFloorsOf = () => floorsOf(MEP_HOUSE).map((f, i) => {
+  const rooms = MEP_ROOMS[i];
+  const items = resolveItems(defaultFixtures(rooms, f.spec, []).items, rooms).items;
+  return { name: f.name, level: f.level, height: f.height, spec: f.spec, rooms, items };
+});
+
+test('measurement rules: the sets, the thresholds, a company set over the default, rounding as a spreadsheet does', async () => {
+  const { DEFAULT_RULES, measured, net, roundQ, ruleSet, RULE_SETS } = await import('../src/rules.mjs');
+  assert.equal(DEFAULT_RULES, 'PL6');
+  assert.equal(ruleSet(), RULE_SETS.PL6);
+  assert.equal(ruleSet('net'), RULE_SETS.NET);
+  assert.throws(() => ruleSet('XYZ'), /unknown rule set/);
+  // Phụ lục VI: 0,25 m² for masonry and finishes, 1 m² for formwork, 0,1 m³ for concrete; slab > beam > wall > column
+  assert.deepEqual(RULE_SETS.PL6.void, { finish: 0.25, masonry: 0.25, formwork: 1, concrete: 0.1 });
+  assert.deepEqual(RULE_SETS.PL6.junction, ['slab', 'beam', 'wall', 'column']);
+  // a company set: one threshold changed, the rest of the base kept
+  const own = ruleSet({ base: 'PL6', void: { finish: 0.5 } });
+  assert.equal(own.void.finish, 0.5);
+  assert.equal(own.void.formwork, 1);
+  assert.equal(own.decimals, 3);
+  // a wall of 10 m² with a door of 1,92 m², a vent of 0,2 m² and reveals of 0,3 m²
+  const ded = [{ area: 1.92 }, { area: 0.2 }], add = [{ area: 0.3 }];
+  assert.ok(near(net(10, ded, add), 8.18));
+  assert.ok(near(measured(10, ded, add, 0.25), 8.38)); // the vent is under the threshold: not taken off
+  assert.ok(near(measured(10, ded, add, 0), 8.18)); // the geometric set takes everything off
+  assert.ok(near(measured(10, [{ area: 0.25 }], [], 0.25), 9.75)); // at the threshold: taken off
+  assert.equal(measured(1, [{ area: 2 }], [], 0), 0); // never negative
+  assert.ok(near(measured(5, [{ volume: 0.05 }, { volume: 0.2 }], [], 0.1, 'volume'), 4.8));
+  // 16,6275 as a sum of binary fractions sits a hair under the half: a spreadsheet shows 16,628
+  assert.equal(roundQ(16.6275), 16.628);
+  assert.equal(roundQ(1.0005), 1.001);
+  assert.equal(roundQ(2.34549), 2.345);
+  assert.equal(roundQ(7), 7);
+});
+
+test('electrical set: boards, switches by the doors, sockets, air conditioners, circuits, breakers and cables', () => {
+  const floors = mepFloorsOf();
+  // lights by the ceiling rules of the interior set
+  for (const f of floors) {
+    const finishes = Object.fromEntries(Object.keys(f.rooms).map((n) => [n, resolveFinish(n, {}, [], f.height)]));
+    f.lights = ceilingPlan({ rooms: f.rooms, finishes, items: f.items, mode: 'lighting', scale: 100 }).entities
+      .filter((e) => e.type === 'block' && /^MCP_DEN_/.test(e.name)).map((e) => ({ kind: e.name === 'MCP_DEN_DOWNLIGHT' ? 'downlight' : 'ceiling_lamp', at: e.at }));
+  }
+  const D = electricalDesign({ floors });
+  assert.deepEqual(D.boards.map((b) => b.id), ['TĐ-1', 'TĐ-2']);
+  const F1 = D.floors[0];
+  assert.ok(F1.board.main && F1.board.meter && F1.board.network, 'main board, meter and data cabinet on the ground floor');
+  assert.ok(F1.board.meter.at[1] < 100, 'the meter outside the front wall');
+  // every light has a switch; the WC switch is outside the WC
+  for (const F of D.floors) for (const d of F.devices.filter((x) => ['downlight', 'ceiling_lamp', 'fan'].includes(x.kind))) assert.ok(d.switch, `${F.name} ${d.kind} has a switch`);
+  const wcFan = F1.devices.find((d) => d.kind === 'fan' && d.room === 'WC');
+  assert.ok(wcFan && wcFan.switch.room !== 'WC', 'WC switch outside the WC');
+  // air conditioner of the living room: 32 m² x 600 BTU -> 24000
+  const ac = F1.devices.find((d) => d.kind === 'ac' && d.room === 'PHÒNG KHÁCH');
+  assert.equal(ac.btu, 24000);
+  assert.ok(F1.devices.some((d) => d.kind === 'hob') && F1.devices.filter((d) => d.kind === 'counter').length === 3, 'kitchen outlets');
+  const B1 = D.boards[0];
+  for (const C of B1.circuits) {
+    if (C.kind === 'light') assert.ok(C.devices.filter((d) => !d.kind.startsWith('switch')).length <= 10);
+    if (C.kind === 'socket') assert.ok(C.devices.length <= 8 && C.breaker.startsWith('RCBO'));
+  }
+  assert.equal(B1.circuits.find((c) => c.kind === 'hob').cable, '2x4+E4');
+  assert.ok(D.main.rating >= 63 && /^Cu\/XLPE\/PVC 2x16/.test(D.main.cable), D.main.cable);
+  const plan = electricalPlan(D, 0, { mode: 'power', legendAt: [8000, 9000] });
+  assert.ok(plan.entities.some((e) => e.name === 'MCP_E_DH') && plan.entities.some((e) => e.type === 'polyline' && e.layer === 'E-POWR-WIRE'));
+  assert.ok(electricalPlan(D, 1, { mode: 'lighting' }).entities.some((e) => /^MCP_E_CT_[1-4]$/.test(e.name ?? '')));
+  assert.ok(singleLineDiagram(D).entities.filter((e) => e.type === 'table').length === 3);
+  const Q = electricalQuantities(D);
+  assert.ok(Q.rows.some((r) => /^Dây Cu\/PVC 2x2,5\+E2,5$/.test(r.item ?? '')));
+  const wb = electricalWorkbook(D, Q);
+  assert.ok(wb.subarray(0, 2).toString() === 'PK' && (wb.toString('latin1').match(/<f>/g) || []).length > 50, 'live formulas');
+  for (const n of ['MCP_E_CT_3', 'MCP_E_CT_2C', 'MCP_E_CT_2C_2', 'MCP_E_OC_CN', 'MCP_E_TD', 'MCP_DEN_TUONG']) assert.ok(symbolDef(n)?.entities?.length, n);
+  // a floor without rooms does not break the design; the defaults stay as they are
+  electricalDesign({ floors: [...floors, { name: 'MÁI', level: 6900, height: 2800, spec: {}, rooms: {}, items: [], lights: [] }], options: { heights: { socket: 300 } } });
+  assert.equal(electricalDesign({ floors }).options.heights.socket, 400);
+  assert.ok(Q.rows.some((r) => /^MCB 2P 32A$/.test(r.item ?? '') && r.plus === 1), 'the spare way of the main board is counted');
+});
+
+test('plumbing set: shaft and stacks, fixtures, supply and drainage runs, septic tank, calculation, quantities', () => {
+  const floors = mepFloorsOf();
+  const D = plumbingDesign({ floors, roofDrains: [{ at: [400, 400] }, { at: [5600, 8600] }] });
+  assert.equal(D.shafts.length, 1, 'the WCs are stacked: one shaft');
+  const g = D.shafts[0];
+  for (const p of Object.values(g.stacks)) assert.ok(inside(p, MEP_ROOMS[0].WC), 'stacks in the WC');
+  const F1 = D.floors[0];
+  assert.deepEqual(F1.fixtures.map((x) => x.kind).sort(), ['shower', 'sink', 'toilet', 'vanity']);
+  assert.equal(F1.heaters.length, 1);
+  const soil = F1.runs.find((r) => r.sys === 'soil' && r.from === 'toilet');
+  assert.deepEqual(soil.pts[soil.pts.length - 1], g.stacks.soil, 'the toilet drains to the soil stack');
+  // the heater hangs over the shower mixer: hot water runs on to the basin; one cold branch per floor with one valve
+  assert.ok(F1.runs.some((r) => r.sys === 'hot' && r.to === 'vanity') && F1.runs.some((r) => r.sys === 'cold' && r.to === 'sink'));
+  assert.equal(F1.runs.filter((r) => r.sys === 'cold' && r.trunk).length, 1);
+  assert.equal(F1.valves.length, 1);
+  assert.ok(!inside(F1.valves[0].at, g.poly), 'the valve stands outside the shaft');
+  assert.ok(D.equipment.septic.V >= 3 && D.equipment.hg1 && D.equipment.hg2 && D.equipment.meter);
+  // TCVN 4513:1988, dwellings: q = 0.2 N^(1/a) + K N; N = 2 x (0.5 + 0.33 + 0.67) + 1 = 4, a = 2.15 for 150 l/person/day
+  assert.equal(D.calc.N, 4);
+  assert.ok(near(D.calc.q, 0.2 * 4 ** (1 / 2.15) + 0.002 * 4, 1e-3), `q = ${D.calc.q}`);
+  assert.ok(near(supplyFlow(7.5, 2.15, 0.002), 0.526, 1e-3) && aForNorm(200) === 2.14 && kForN(400) === 0.003);
+  assert.equal(supplyFlow(100, 2.15, 0.002, 0.5), 0.5, 'never more than all the fixtures together');
+  assert.equal(D.calc.riser, 32, 'the riser keeps the assumed D32 when the flow needs less');
+  // TCVN 4474:1987: Q = K F q5 / 10000 with K = 2, shared out to the two downpipes
+  assert.ok(near(D.calc.rainQ, (2 * (D.calc.roofArea / 2) * 496) / 10000, 0.01), `rain ${D.calc.rainQ}`);
+  assert.equal(D.floors[1].downpipes.length, 2);
+  // the design never changes the defaults of the next one
+  plumbingDesign({ floors, options: { pipes: { rain: 110 }, people: 40 } });
+  assert.equal(plumbingDesign({ floors }).options.pipes.rain, 90);
+  // the septic tank of the plan and of the detail are the same: two baffles between three compartments
+  const S = D.equipment.septic;
+  assert.equal(S.L, S.inner[0] + 2 * S.wall + 2 * S.baffle);
+  assert.ok((S.inner[0] * S.inner[1] * S.inner[2]) / 1e9 >= S.V, 'useful volume as stated');
+  const dims = septicDetail(D).entities.filter((e) => e.type === 'dim').map((e) => Math.round(Math.hypot(e.to[0] - e.from[0], e.to[1] - e.from[1])));
+  assert.ok(dims.includes(S.L) && dims.includes(S.inner[0] / 2) && dims.includes(S.inner[0] / 4), dims.join(','));
+  const sp = plumbingPlan(D, 0, { mode: 'supply', legendAt: [8000, 9000] });
+  assert.ok(sp.entities.some((e) => e.name === 'MCP_P_VAN') && sp.entities.some((e) => e.layer === 'P-DOMW-HWTR'));
+  // short codes at the equipment, explained in the legend
+  const dp = plumbingPlan(D, 0, { mode: 'drainage', legendAt: [8000, 9000] });
+  const texts = dp.entities.filter((e) => e.type === 'text').map((e) => e.text);
+  assert.ok(texts.includes('BTH') && texts.includes('HG1') && texts.some((t) => /^Bể tự hoại 3 ngăn/.test(t)) && dp.entities.some((e) => e.layer === 'P-SANR-SOIL'), texts.join('|'));
+  assert.ok(septicDetail(D).entities.filter((e) => e.type === 'dim').length >= 8);
+  assert.ok(plumbingRisers(D).entities.length > 50);
+  assert.ok(plumbingBasis(D, 'vi').every((l) => !/\b(the|of|and)\b/.test(l)), 'the sheet notes are in the language of the sheet');
+  // a roof drain over the shaft: its downpipe is one of the stacks of the shaft
+  const D2 = plumbingDesign({ floors, roofDrains: [{ at: [450, 6300] }, { at: [5600, 400] }] });
+  assert.ok(D2.shafts[0].stacks.rain && D2.floors[0].downpipes.some((d) => d.shaft) && D2.shafts[0].d >= 380);
+  const Q = plumbingQuantities(D);
+  assert.ok(Q.rows.some((r) => /^Ống thoát xí uPVC D110$/.test(r.item ?? '')) && Q.rows.some((r) => /^Bể tự hoại 3 ngăn/.test(r.item ?? '')));
+  const wb = plumbingWorkbook(D, Q);
+  assert.ok(wb.subarray(0, 2).toString() === 'PK' && (wb.toString('latin1').match(/<f>/g) || []).length > 20, 'live formulas');
+  assert.ok(!wb.toString('utf8').includes('>NaN<'), 'every measured length is a number');
 });
 
 // ---- smoke test: the bundled server starts, lists its tools and reports a clear error without AutoCAD
@@ -858,8 +2297,8 @@ async function smoke() {
     const list = await rpc('tools/list', {});
     assert.ok(list.result, list.error?.message);
     const names = list.result.tools.map((t) => t.name);
-    assert.equal(names.length, 53, names.join(','));
-    for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff']) assert.ok(names.includes(t));
+    assert.equal(names.length, 62, names.join(','));
+    for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff', 'draw_electrical_plan', 'draw_plumbing_plan', 'plumbing_calc', 'measure_model', 'verify_quantities']) assert.ok(names.includes(t));
     const ping = await rpc('tools/call', { name: 'ping', arguments: {} });
     assert.equal(ping.result.isError, true);
     assert.match(ping.result.content[0].text, /Cannot connect to AutoCAD/);

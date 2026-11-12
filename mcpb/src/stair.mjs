@@ -338,7 +338,7 @@ function stairSection({ S, sc, lang, waist, landingT, rail, mark }) {
 }
 
 /** Two steps with their build-up and the handrail, true size (drawn at the detail scale). */
-function treadDetail({ g, sc, lang, waist, rail, finish }) {
+function treadDetail({ g, sc, lang, waist, rail, finish, of = null }) {
   const out = [];
   const r = g.riser, b = g.going, n = 2, s = r / b;
   const L = (pts, layer = ROLE.detail) => out.push({ type: 'polyline', points: pts.map(P), layer });
@@ -406,7 +406,7 @@ function treadDetail({ g, sc, lang, waist, rail, finish }) {
     const y = yTop - order * 7 * sc;
     out.push({ type: 'leader', points: [P(p), P([xT - 3 * sc, y]), P([xT, y])], text: SH[i], height: r2(2 * sc), leader_style: DS, layer: ROLE.note });
   });
-  out.push(...viewTitle(T[lang].detail, (x0 + xb) / 2 + 20 * sc, wTop(xa) - tw - 20 * sc, sc, ROLE.text, lang));
+  out.push(...viewTitle(of ? `${T[lang].detail} (${of})` : T[lang].detail, (x0 + xb) / 2 + 20 * sc, wTop(xa) - tw - 20 * sc, sc, ROLE.text, lang));
   return { entities: out };
 }
 
@@ -454,33 +454,64 @@ export function stairDetail({ spec, stair = 0, scale = 50, detailScale = 20, wai
       : `${t.plan} ${kd.names.join(', ')}`;
     return stairPlan({ ...kd, level: kd.levels.map(fmtLevel).join('; '), landingLevel: kd.landings.map(fmtLevel).join('; '), title, sc, lang, mark: '1', grids });
   });
-  // the plans in a grid of two columns, the bottom row on 0; a cell: the box, its dimensions and bubbles, its title
-  const padL = 26 * sc, padR = 14 * sc, padB = 46 * sc, padT = 30 * sc;
-  const cw = Math.max(...plans.map((p) => p.box[2] - p.box[0])) + padL + padR;
-  const ch = Math.max(...plans.map((p) => p.box[3] - p.box[1])) + padB + padT;
+  // The plans in a grid of two columns, the bottom row on 0. A cell is as large as what its plan really takes (its
+  // dimension chains with their texts, grid bubbles, section marks, level marks and title), so that neighbours never
+  // run into each other; the titles of a row stand on one line.
+  const gap = 6 * sc, titleH = 16 * sc;
+  const cells = plans.map((p) => {
+    const b = boundsOf(p.entities, sc), cx = (p.box[0] + p.box[2]) / 2;
+    const tb = boundsOf(viewTitle(p.title, cx, 0, sc, ROLE.text, lang), sc);
+    return { p, cx, b: [Math.min(b[0], tb[0]), b[1], Math.max(b[2], tb[2]), b[3]] };
+  });
   const cols = Math.min(2, plans.length), rows = Math.ceil(plans.length / cols);
-  plans.forEach((p, i) => {
+  const colW = Array.from({ length: cols }, (_, c) => Math.max(...cells.filter((_, i) => i % cols === c).map((k) => k.b[2] - k.b[0])) + gap);
+  const rowH = Array.from({ length: rows }, (_, r) => Math.max(...cells.filter((_, i) => Math.floor(i / cols) === r).map((k) => k.b[3] - k.b[1])) + titleH + gap);
+  const colX = colW.map((_, c) => colW.slice(0, c).reduce((a, w) => a + w, 0));
+  const rowY = rowH.map((_, r) => rowH.slice(r + 1).reduce((a, h) => a + h, 0));
+  const layout = [];
+  cells.forEach(({ p, cx, b }, i) => {
     const col = i % cols, row = Math.floor(i / cols);
-    const x0 = col * cw, y0 = (rows - 1 - row) * ch;
-    const dx = x0 + padL - p.box[0], dy = y0 + padB - p.box[1];
+    const dx = colX[col] - b[0], dy = rowY[row] + titleH - b[1];
     parts.push(...p.entities.map((e) => shiftEnt(e, dx, dy)));
-    parts.push(...viewTitle(p.title, (p.box[0] + p.box[2]) / 2 + dx, y0 + 8 * sc, sc, ROLE.text, lang));
+    parts.push(...viewTitle(p.title, cx + dx, rowY[row] + 8 * sc, sc, ROLE.text, lang));
+    layout.push({ view: p.title, box: [colX[col], rowY[row], colX[col] + b[2] - b[0], rowY[row] + titleH + b[3] - b[1]].map(r2) });
   });
   // the section to the right of the plans, its title on the line of the bottom row's titles
   const sec = stairSection({ S, sc, lang, waist, landingT: landing, rail, mark: '1' });
-  const sdx = cols * cw - sec.bounds[0], sdy = -sec.bounds[1];
+  const sb = boundsOf(sec.entities, sc);
+  const secBox = [Math.min(sec.bounds[0], sb[0]), sec.bounds[1], Math.max(sec.bounds[2], sb[2]), Math.max(sec.bounds[3], sb[3])];
+  const sdx = colX[cols - 1] + colW[cols - 1] - secBox[0], sdy = -sec.bounds[1];
   parts.push(...sec.entities.map((e) => shiftEnt(e, sdx, sdy)));
-  const secRight = sec.bounds[2] + sdx;
+  const secRight = secBox[2] + sdx;
+  layout.push({ view: `${t.section} 1-1`, box: [secBox[0] + sdx, secBox[1] + sdy, secRight, secBox[3] + sdy].map(r2) });
   // the notes in the free cell of the grid, else right of the section
-  const free = plans.length % cols !== 0;
-  const notesAt = free ? [(plans.length % cols) * cw + padL, ch - padT] : [secRight + 12 * sc, sec.bounds[3] + sdy];
-  const notesW = free ? (cw - padL - 4 * sc) / sc : 110;
-  // notes: build-up of the treads and landing, the stair's figures
+  const fc = plans.length % cols, free = fc !== 0;
+  const notesAt = free ? [colX[fc] + 4 * sc, rowH[rows - 1] - gap - 4 * sc] : [secRight + 12 * sc, secBox[3] + sdy];
+  const notesW = free ? (colW[fc] - gap - 8 * sc) / sc : 110;
+  // notes: build-up of the treads and landing, the stair's figures: storey by storey where the storeys differ (another
+  // storey height gives other risers and goings); the tread detail is then drawn for the first of them and says so
   const g = S.up[0].g;
   const B = BUILDUP[lang] ?? BUILDUP.vi;
-  const fig = lang === 'en'
-    ? [`Risers h = ${fmt(g.riser, lang)}, goings b = ${fmt(g.going, lang)}: 2h + b = ${Math.round(2 * g.riser + g.going)} (600 to 650 recommended)`, `Flights ${Math.round(g.w)} wide, landing ${Math.round(g.landing)}, well ${Math.round(g.gap)}`]
-    : [`Chiều cao bậc h = ${fmt(g.riser, lang)}, bề rộng bậc b = ${fmt(g.going, lang)}: 2h + b = ${Math.round(2 * g.riser + g.going)} (nên 600 ÷ 650)`, `Vế thang rộng ${Math.round(g.w)}, chiếu nghỉ rộng ${Math.round(g.landing)}, khe giữa 2 vế ${Math.round(g.gap)}`];
+  const storeys = [];
+  for (const { f, g: q } of S.up) {
+    const same = storeys.find((x) => x.g.risers === q.risers && Math.abs(x.g.riser - q.riser) < 0.05 && Math.abs(x.g.going - q.going) < 0.05 && Math.abs(x.g.landing - q.landing) < 0.5);
+    if (same) same.names.push(f.name);
+    else storeys.push({ g: q, names: [f.name] });
+  }
+  const many = storeys.length > 1;
+  const en = lang === 'en';
+  const hb = (q) => `h = ${fmt(q.riser, lang)}, b = ${fmt(q.going, lang)}, 2h + b = ${Math.round(2 * q.riser + q.going)}`;
+  const fig = many
+    ? [
+      `${en ? 'Risers h and goings b (2h + b = 600 to 650 recommended)' : 'Chiều cao bậc h, bề rộng bậc b (nên 2h + b = 600 ÷ 650)'}: ${storeys.map((x) => `${x.names.join(', ')}: ${x.g.risers} ${en ? 'risers' : 'bậc'}, ${hb(x.g)}`).join('; ')}`,
+      `${en ? `Flights ${Math.round(g.w)} wide, well ${Math.round(g.gap)}, landing` : `Vế thang rộng ${Math.round(g.w)}, khe giữa 2 vế ${Math.round(g.gap)}, chiếu nghỉ rộng`} ${
+        new Set(storeys.map((x) => Math.round(x.g.landing))).size === 1 ? Math.round(g.landing) : storeys.map((x) => `${Math.round(x.g.landing)} (${x.names.join(', ')})`).join(', ')}`,
+      en ? `The tread detail is drawn for ${storeys[0].names.join(', ')}; the other storeys have the same build-up with their own h and b`
+        : `Chi tiết bậc thang vẽ cho ${storeys[0].names.join(', ')}; các tầng khác cùng cấu tạo, h và b theo ghi chú trên`,
+    ]
+    : en
+      ? [`Risers h = ${fmt(g.riser, lang)}, goings b = ${fmt(g.going, lang)}: 2h + b = ${Math.round(2 * g.riser + g.going)} (600 to 650 recommended)`, `Flights ${Math.round(g.w)} wide, landing ${Math.round(g.landing)}, well ${Math.round(g.gap)}`]
+      : [`Chiều cao bậc h = ${fmt(g.riser, lang)}, bề rộng bậc b = ${fmt(g.going, lang)}: 2h + b = ${Math.round(2 * g.riser + g.going)} (nên 600 ÷ 650)`, `Vế thang rộng ${Math.round(g.w)}, chiếu nghỉ rộng ${Math.round(g.landing)}, khe giữa 2 vế ${Math.round(g.gap)}`];
   const lines = [
     `${t.tread} ${B.tread.map((l) => l.replace('{w}', waist)).join('; ')}.`,
     `${t.land} ${B.land.map((l) => l.replace('{w}', landing)).join('; ')}.`,
@@ -488,11 +519,48 @@ export function stairDetail({ spec, stair = 0, scale = 50, detailScale = 20, wai
     ...fig.map((l) => `${l}.`),
   ];
   parts.push(...notesBlock(lines, notesAt, sc, lang, notesW));
-  const detail = treadDetail({ g, sc: detailScale, lang, waist, rail, finish });
+  const detail = treadDetail({ g, sc: detailScale, lang, waist, rail, finish, of: many ? storeys[0].names.join(', ') : null });
   return {
-    main: parts, detail: detail.entities, assumed,
-    stair: { risers: g.risers, riser: r2(g.riser), going: r2(g.going), width: Math.round(g.w), landing: Math.round(g.landing), plans: kinds.map((k) => ({ floors: k.names, mode: k.mode })) },
+    main: parts, detail: detail.entities, assumed, layout,
+    stair: {
+      risers: g.risers, riser: r2(g.riser), going: r2(g.going), width: Math.round(g.w), landing: Math.round(g.landing), plans: kinds.map((k) => ({ floors: k.names, mode: k.mode })),
+      storeys: storeys.map((x) => ({ floors: x.names, risers: x.g.risers, riser: r2(x.g.riser), going: r2(x.g.going), landing: Math.round(x.g.landing) })),
+    },
   };
+}
+
+/**
+ * Bounds [x0, y0, x1, y1] of draw_entities specs with what their annotations take at the plot scale sc: texts by
+ * their length, dimension lines with their text beside them, symbols by their box (level marks by their value).
+ */
+function boundsOf(ents, sc) {
+  let b = [Infinity, Infinity, -Infinity, -Infinity];
+  const take = (x0, y0, x1, y1) => { b = [Math.min(b[0], x0), Math.min(b[1], y0), Math.max(b[2], x1), Math.max(b[3], y1)]; };
+  for (const e of ents) {
+    if (e.type === 'text') {
+      const w = [...String(e.text)].length * 0.85 * e.height, al = e.align ?? 'left';
+      const x0 = /center/.test(al) ? e.at[0] - w / 2 : /right/.test(al) ? e.at[0] - w : e.at[0];
+      const y0 = /middle/.test(al) ? e.at[1] - e.height / 2 : e.at[1];
+      take(x0, y0, x0 + w, y0 + e.height);
+    } else if (e.type === 'dimension') {
+      // the text stands beside the dimension line (3 mm of text and its gap), whichever side the style puts it
+      const pad = 4 * sc, v = e.direction === 'vertical';
+      take(Math.min(e.from[0], e.to[0], e.at[0] - (v ? pad : 0)), Math.min(e.from[1], e.to[1], e.at[1] - (v ? 0 : pad)),
+        Math.max(e.from[0], e.to[0], e.at[0] + (v ? pad : 0)), Math.max(e.from[1], e.to[1], e.at[1] + (v ? 0 : pad)));
+    } else if (e.type === 'block') {
+      const k = e.scale ?? sc;
+      if (e.box) take(...e.box);
+      else if (/^MCP_COTE/.test(e.name)) {
+        const w = Math.max(12 * k, 2.1 * k + [...String(e.attributes?.COTE ?? '')].length * 0.8 * 2.5 * k);
+        if (e.name === 'MCP_COTE') take(e.at[0] - 1.5 * k, e.at[1], e.at[0] + w, e.at[1] + 6 * k);
+        else take(e.at[0] - w, e.at[1], e.at[0] + 1.5 * k, e.at[1] + 6 * k);
+      } else take(e.at[0] - 4 * k, e.at[1] - 4 * k, e.at[0] + 4 * k, e.at[1] + 4 * k);
+    } else {
+      const r = e.radius ?? (e.width ?? 0) / 2;
+      for (const q of [e.from, e.to, e.at, e.center, ...(e.points ?? []), ...(e.boundary ?? [])]) if (Array.isArray(q)) take(q[0] - r, q[1] - r, q[0] + r, q[1] + r);
+    }
+  }
+  return b;
 }
 
 /** Shift a draw_entities spec by (dx, dy). */
