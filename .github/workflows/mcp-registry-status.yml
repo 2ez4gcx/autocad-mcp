@@ -1,15 +1,15 @@
 name: mcp-registry-status
 
 # Changes the status of versions already in the MCP Registry: active, deprecated or deleted. Run it by hand
-# (Actions > mcp-registry-status > Run workflow). The defaults deprecate io.github.2ez4gcx/autocad-mcp, the name of
-# this server up to 1.2.0; it is published as io.github.2ez4gcx/construction-autocad-mcp from 1.2.1 on.
+# (Actions > mcp-registry-status > Run workflow). The defaults deprecate io.github.2ez4gcx/construction-autocad-mcp, the
+# name of this server in 1.2.1-1.3.0; it is published as io.github.2ez4gcx/autocad-mcp again from 1.3.1 on.
 on:
   workflow_dispatch:
     inputs:
       server:
         description: Server name in the registry
         required: true
-        default: io.github.2ez4gcx/autocad-mcp
+        default: io.github.2ez4gcx/construction-autocad-mcp
       status:
         description: New status
         required: true
@@ -23,7 +23,7 @@ on:
       message:
         description: Message shown with the status
         required: false
-        default: Renamed to Construction AutoCAD MCP, io.github.2ez4gcx/construction-autocad-mcp.
+        default: Renamed back to AutoCAD MCP, io.github.2ez4gcx/autocad-mcp.
 
 permissions:
   contents: read

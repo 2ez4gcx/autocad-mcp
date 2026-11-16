@@ -1,4 +1,4 @@
-# Construction AutoCAD MCP - sample prompts / câu lệnh mẫu
+# AutoCAD MCP - sample prompts / câu lệnh mẫu
 
 ## Setup / Cài đặt
 
