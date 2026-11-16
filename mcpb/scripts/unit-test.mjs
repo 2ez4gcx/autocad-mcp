@@ -378,6 +378,7 @@ test('bar schedule weights (d²/162 kg/m)', () => {
 const ROOM = cleanPoly([[0, 0], [6000, 0], [6000, 4000], [0, 4000], [0, 0]]);
 const ROOM_SPEC = { ...BOX, openings: [{ wall: 0, segment: 2, at: [3000, 4000], width: 1200, type: 'window', tag: 'S1' }, { wall: 0, segment: 0, at: [1000, 0], width: 900, type: 'door', tag: 'D1' }], rooms: [{ name: 'PHÒNG NGỦ', at: [3000, 2000] }] };
 const noNaN = (ents) => assert.ok(!JSON.stringify(ents).includes('null'), 'no NaN coordinates');
+const r2t = (v) => Math.round(v * 100) / 100;
 
 test('polygons: clean, offset, clip, tile joints centred in the room, plank stagger', () => {
   assert.equal(ROOM.length, 4);
@@ -592,6 +593,97 @@ test('ceiling plan modes: finish without lights (step widths dimensioned), light
   assert.ok(generalNotes('floor').length >= 6 && generalNotes('lighting', 'en')[0].startsWith('Dimensions'));
   const nb = notesBlock(generalNotes('wall'), [0, 0], 50);
   assert.ok(nb[0].text === 'GHI CHÚ:' && nb[1].type === 'mtext' && nb[1].text.startsWith('1. ') && nb[1].text.includes('\n6. '));
+});
+
+test('joinery: display casework, elevation and section 1-1 at their own scales', () => {
+  const r = joineryDetail({ kind: 'display', width: 5750, bays: [{ title: 'SẢN PHẨM MỚI', subtitle: 'NEW ARRIVALS' }, {}, {}, {}, {}, { pegboard: true, picture: false }] });
+  noNaN(r.entities);
+  noNaN(r.section);
+  // six bays between seven fins of 50: (5750 - 350) / 6 = 900 each
+  assert.deepEqual(r.bays.map((b) => [b.x0, b.w]), [[50, 900], [1000, 900], [1950, 900], [2900, 900], [3850, 900], [4800, 900]]);
+  // the height chain: plinth, base, shelf, picture, niche top, header, rail, ceiling
+  const zc = r.entities.find((e) => e.type === 'dim_chain' && e.direction === 'vertical');
+  assert.deepEqual(zc.points.map((p) => p[1]), [0, 80, 450, 480, 1450, 2000, 2060, 2090, 2490, 2600, 2800]);
+  assert.equal(zc.style, 'MCP-1-30');
+  assert.equal(r.section.find((e) => e.type === 'dim_chain').style, 'MCP-1-10');
+  // one picture per bay but the pegboard one; the title of the bay on its header
+  assert.equal(r.entities.filter((e) => e.type === 'line' && e.layer === 'A-DETL' && e.linetype).length, 0);
+  assert.ok(r.entities.some((e) => e.type === 'text' && e.text === 'SẢN PHẨM MỚI') && r.entities.some((e) => e.text === 'NEW ARRIVALS'));
+  assert.ok(r.entities.some((e) => e.type === 'leader' && e.text.startsWith('JN-06')), 'the pegboard has its note');
+  assert.ok(r.section.some((e) => e.type === 'leader' && e.text.startsWith('LT-03')) && r.section.some((e) => e.text === 'MẶT CẮT 1-1'));
+  // every note once in the section
+  const texts = r.section.filter((e) => e.type === 'leader').map((e) => e.text);
+  assert.equal(new Set(texts).size, texts.length);
+  // the section stands to the right of the elevation's notes
+  assert.ok(r.section_extent.min[0] > r.extent.max[0]);
+  assert.ok(r.assumed.some((a) => a.item === 'materials.fin') && r.assumed.some((a) => a.item === 'ceiling'));
+  // a given count of bays shares the width; no ceiling, no bulkhead
+  const n = joineryDetail({ kind: 'display', width: 2900, bays: 3, ceiling: null, display: { picture: null } });
+  assert.deepEqual(n.bays.map((b) => b.w), [900, 900, 900]);
+  assert.ok(!n.entities.some((e) => e.layer === ROLE.ceiling));
+  assert.throws(() => joineryDetail({ kind: 'display', width: 1200, bays: 4 }), /bays come out/);
+  assert.throws(() => joineryDetail({ kind: 'display', width: 3000, height: 1500 }), /under 600/);
+  assert.throws(() => joineryDetail({ kind: 'display', width: 3000, display: { picture: [300, 2000] } }), /display.picture/);
+  assert.throws(() => joineryDetail({ kind: 'cupboard' }), /kitchen, wardrobe or display/);
+});
+
+test('lighting: illuminance from point sources, tasks by room name, the lights of the ceiling plan', async () => {
+  const { lightingCalc, luxTable, roomGrid, taskOf } = await import('../src/lux.mjs');
+  const sq = [[0, 0], [1000, 0], [1000, 1000], [0, 1000]];
+  const one = (f) => lightingCalc({ rooms: { A: sq }, fixtures: [{ room: 'A', at: [500, 500], z: 2750, ...f }], mf: 1, margin: 0, spacing: 1000, reflectances: { ceiling: 0, walls: 0, floor: 0 } }).rooms[0];
+  // a diffuse source of 1000 lm, 2 m above the point: I = Φ/π, E = I/h² = 79.6 lx
+  assert.equal(one({ kind: 'ceiling_lamp', lm: 1000 }).em, 80);
+  // a 60° beam: k = ln 0.5 / ln cos 30° = 4.82, I = Φ (k+1) / 2π = 927 cd, E = 232 lx
+  assert.equal(one({ kind: 'downlight', lm: 1000 }).em, 232);
+  // a pendant hangs 900 below the ceiling: h = 1.1 m
+  assert.equal(one({ kind: 'pendant', lm: 1000 }).em, Math.round(1000 / Math.PI / 1.21));
+  // a spot aimed away lights the point less than straight down
+  assert.ok(one({ kind: 'spot', lm: 1000, aim: [2500, 500] }).em < one({ kind: 'spot', lm: 1000 }).em / 2);
+  // grid: EN 12464-1 cell size for a 5 m side 0.2 x 5^log10(5) = 0.62 m, the 0.5 m band left out
+  const g = roomGrid([[0, 0], [6000, 0], [6000, 4000], [0, 4000]]);
+  assert.equal(g.points.length, 9 * 5);
+  assert.ok(g.points.every((p) => p[0] > 500 && p[0] < 5500 && p[1] > 500 && p[1] < 3500));
+  assert.deepEqual(['PHÒNG HỌP', 'HÀNH LANG', 'SẢNH LỄ TÂN', 'SHOWROOM', 'WC NAM', 'PHÒNG NGỦ 1', 'PHÒNG KHÁCH', 'KHO', 'XYZ'].map(taskOf),
+    ['meeting', 'corridor', 'reception', 'sales', 'toilet', 'bedroom', 'living', 'storage', null]);
+  // the ceiling plan keeps its lights: the band downlights hang from the band (150 lower), the lamp from the field
+  const c = ceilingPlan({ rooms: { 'PHÒNG HỌP': ROOM }, finishes: { 'PHÒNG HỌP': resolveFinish('PHÒNG NGỦ') }, scale: 50 });
+  assert.ok(c.fixtures.filter((f) => f.kind === 'downlight').every((f) => f.z === 2850 && f.room === 'PHÒNG HỌP'));
+  assert.equal(c.fixtures.find((f) => f.kind === 'ceiling_lamp').z, 3000);
+  assert.equal(c.fixtures.find((f) => f.kind === 'strip').length_m, 14.56);
+  // lights placed by hand, moved by the offset of the copy: plan coordinates kept, the room found, lm carried
+  const m = ceilingPlan({ rooms: { 'PHÒNG HỌP': ROOM }, finishes: { 'PHÒNG HỌP': resolveFinish('PHÒNG NGỦ') }, scale: 50, offset: [20000, 0], lights: [{ type: 'linear', from: [1000, 2000], to: [5000, 2000], lm: 4000 }, { type: 'access_panel', at: [5000, 600] }] });
+  assert.deepEqual(m.fixtures.filter((f) => f.kind !== 'strip').map((f) => [f.kind, f.room, f.from, f.z, f.lm]), [['linear', 'PHÒNG HỌP', [1000, 2000], 3000, 4000]]);
+  // 16 downlights of 800 lm and a lamp in 24 m²: well under the 500 lx of a meeting room, with advice
+  const r = lightingCalc({ rooms: { 'PHÒNG HỌP': ROOM }, heights: { 'PHÒNG HỌP': 3000 }, fixtures: c.fixtures });
+  const row = r.rooms[0];
+  assert.equal(row.task, 'meeting');
+  assert.equal(row.pass, false);
+  assert.ok(row.em > 100 && row.em < 500, `Em ${row.em}`);
+  assert.ok(row.advice[0].includes('lm'));
+  assert.equal(row.lights, c.fixtures.length);
+  assert.equal(row.power_w, r2t(16 * 9 + 20 + 14.56 * 8));
+  assert.ok(r.assumed.some((a) => a.item === 'photometry.LT-01') && r.assumed.some((a) => a.item === 'PHÒNG HỌP.task'));
+  // brighter downlights pass; a bedroom is a reference value (no pass or fail of the standard)
+  const ok = lightingCalc({ rooms: { 'PHÒNG HỌP': ROOM }, fixtures: c.fixtures, photometry: { 'LT-01': { lm: 2600, beam: 90 } } }).rooms[0];
+  assert.equal(ok.pass, true, JSON.stringify(ok));
+  const bed = lightingCalc({ rooms: { 'PHÒNG NGỦ': ROOM }, fixtures: c.fixtures.map((f) => ({ ...f, room: 'PHÒNG NGỦ' })) }).rooms[0];
+  assert.equal(bed.pass, null);
+  assert.equal(bed.meets, true);
+  // a corridor is measured on the floor
+  assert.equal(lightingCalc({ rooms: { 'HÀNH LANG': ROOM }, fixtures: [] }).rooms[0].plane_mm, 0);
+  assert.match(lightingCalc({ rooms: { 'HÀNH LANG': ROOM }, fixtures: [{ kind: 'downlight', code: 'LT-01', room: null, at: [9000, 0], z: 3000 }] }).warnings[0], /1 light\(s\) outside the rooms/);
+  // a display wall lit by spots aimed at it, against one lit by downlights only
+  const wall = { from: [0, 3800], to: [6000, 3800], z0: 800, z1: 2000 };
+  const spots = [1000, 3000, 5000].map((x) => ({ kind: 'spot', code: 'LT-05', room: 'R', at: [x, 3000], aim: [x, 4000], z: 3000 }));
+  const downs = [1000, 3000, 5000].map((x) => ({ kind: 'downlight', code: 'LT-01', room: 'R', at: [x, 3000], z: 3000 }));
+  const vS = lightingCalc({ rooms: { R: ROOM }, fixtures: spots, vertical: [{ ...wall, em: 150 }], reflectances: { walls: 0, ceiling: 0, floor: 0 } }).vertical[0];
+  const vD = lightingCalc({ rooms: { R: ROOM }, fixtures: downs, vertical: [wall], reflectances: { walls: 0, ceiling: 0, floor: 0 } }).vertical[0];
+  assert.ok(vS.em > vD.em, `${vS.em} > ${vD.em}`);
+  assert.equal(vS.room, 'R');
+  assert.equal(typeof vS.pass, 'boolean');
+  const t = luxTable(r);
+  assert.equal(t[0][0], 'Phòng');
+  assert.equal(t[1][11], 'KHÔNG ĐẠT');
 });
 
 test('joinery: kitchen front + section with notes, wardrobe; schedule areas and counts', () => {
@@ -2775,8 +2867,8 @@ async function smoke() {
     const list = await rpc('tools/list', {});
     assert.ok(list.result, list.error?.message);
     const names = list.result.tools.map((t) => t.name);
-    assert.equal(names.length, 80, names.join(','));
-    for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff', 'draw_electrical_plan', 'draw_plumbing_plan', 'plumbing_calc', 'measure_model', 'verify_quantities', 'list_views', 'standardize_layers', 'close_drawing', 'read_plan', 'revision_cloud', 'compare_drawings', 'stretch_entities', 'replace_text', 'convert_vietnamese_text', 'describe_drawing', 'check_annotations', 'list_texts', 'update_texts', 'clean_drawing', 'describe_folder', 'manage_images', 'retitle_view', 'update_title_blocks']) assert.ok(names.includes(t));
+    assert.equal(names.length, 81, names.join(','));
+    for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff', 'draw_electrical_plan', 'draw_plumbing_plan', 'plumbing_calc', 'measure_model', 'verify_quantities', 'list_views', 'standardize_layers', 'close_drawing', 'read_plan', 'revision_cloud', 'compare_drawings', 'stretch_entities', 'replace_text', 'convert_vietnamese_text', 'describe_drawing', 'check_annotations', 'list_texts', 'update_texts', 'clean_drawing', 'describe_folder', 'manage_images', 'retitle_view', 'update_title_blocks', 'lighting_calc']) assert.ok(names.includes(t));
     const ping = await rpc('tools/call', { name: 'ping', arguments: {} });
     assert.equal(ping.result.isError, true);
     assert.match(ping.result.content[0].text, /Cannot connect to AutoCAD/);

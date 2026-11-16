@@ -12,7 +12,7 @@ Phiên bản: **1.2.1** - [tải tại Releases](https://github.com/2ez4gcx/cons
 
 ## Tính năng
 
-80 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
+81 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
 
 | Nhóm | Tool |
 |---|---|
@@ -20,7 +20,7 @@ Phiên bản: **1.2.1** - [tải tại Releases](https://github.com/2ez4gcx/cons
 | Tiêu chuẩn | `setup_layers`, `setup_styles` |
 | Vẽ & sửa | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `stretch_entities`, `set_properties`, `replace_text`, `update_texts`, `convert_vietnamese_text`, `clean_drawing`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
 | Mặt đứng, mặt cắt & kết cấu | `draw_elevation`, `draw_section`, `draw_roof_plan`, `draw_door_schedule`, `draw_stair_detail`, `draw_finish_quantities`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule`, `structural_calc`, `draw_quantity_schedule` |
-| Thiết kế nội thất | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
+| Thiết kế nội thất | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule`, `lighting_calc` |
 | Điện & cấp thoát nước | `draw_electrical_plan`, `draw_electrical_diagram`, `electrical_calc`, `draw_plumbing_plan`, `draw_plumbing_diagram`, `plumbing_calc`, `draw_mep_notes` |
 | Ảnh & nguồn 3D | `view_image`, `attach_image`, `manage_images`, `import_drawing`, `screenshot`, `set_view` |
 | Khung tên & file | `create_layout`, `update_title_blocks`, `retitle_view`, `draw_cover_sheet`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `close_drawing`, `new_drawing` |
@@ -158,7 +158,18 @@ Phiên bản: **1.2.1** - [tải tại Releases](https://github.com/2ez4gcx/cons
     - `mode=lighting`: mặt bằng bố trí đèn (đèn và bảng ký hiệu; không có thẻ cao độ);
   - mỗi mặt bằng nội thất có khối GHI CHÚ chung: đơn vị, kiểm tra kích thước thực tế, duyệt mẫu vật liệu. Thêm theo từng loại mặt bằng: mạch gạch và độ dốc sàn; lớp sơn, lớp ốp tường; tấm trần và lỗ thăm trần; định vị đèn. Có thể thay bằng ghi chú của bạn;
   - `draw_interior_elevation`: triển khai từng vách của phòng nhìn từ trong: tường, sàn, trần bị cắt (cả dải giật cấp), cửa đi, cửa sổ của vách, đồ gỗ và nội thất sát vách (hình chiếu đứng) và ở góc phòng (hình chiếu cạnh) là block (mỗi loại, kích thước, hướng nhìn một block `NT_MD_...` / `NT_MB_...`) có wipeout dưới đường bao để đồ phía trước che đồ phía sau, ron gạch ốp, gạch ốp bếp, len chân tường, chuỗi kích thước và ghi chú vật liệu có đường dẫn;
-  - `draw_joinery_detail`: tủ bếp (tủ dưới có cánh, ngăn kéo, khoang chậu; tủ trên theo từng đoạn, máy hút mùi, gạch ốp) hoặc tủ áo: mặt đứng 1:10 với các mô-đun, chiều mở cánh, tay nắm, mặt cắt 1-1 qua thùng tủ với chiều dày ván và ghi chú vật liệu; lấy thẳng từ tủ đã đặt trên mặt bằng;
+  - `draw_joinery_detail`: tủ bếp (tủ dưới có cánh, ngăn kéo, khoang chậu; tủ trên theo từng đoạn, máy hút mùi, gạch ốp) hoặc tủ áo: mặt đứng 1:10 với các mô-đun, chiều mở cánh, tay nắm, mặt cắt 1-1 qua thùng tủ với chiều dày ván và ghi chú vật liệu; lấy thẳng từ tủ đã đặt trên mặt bằng. `kind: "display"` vẽ tủ trưng bày dạng hộc cho showroom, phòng trưng bày:
+    - các hộc nằm giữa các vách đứng phủ veneer;
+    - mỗi hộc có chân lùi, tủ đế cánh mở nhấn, mặt kệ trưng bày, tranh hoặc bảng đục lỗ, đợt trên có LED dây, bảng tiêu đề ghi tên hộc;
+    - phía trên có đố trên và hộp trần thạch cao;
+    - mặt đứng 1:30 có ghi chú vật liệu và chuỗi kích thước, mặt cắt 1-1 tỉ lệ 1:10 đặt bên cạnh;
+  - `lighting_calc`: kiểm tra độ rọi của các đèn trên mặt bằng trần theo TCVN 7114-1:2008 (tương đương ISO 8995-1).
+    - Mỗi đèn là một nguồn điểm có góc chiếu. Thông số quang mặc định theo loại đèn; có thể khai lm, góc chiếu, W theo mã đèn hoặc cho từng đèn.
+    - Tính ánh sáng trực tiếp trên lưới điểm của mặt phẳng làm việc từng phòng, cộng phần phản xạ.
+    - Ra Em, Emin, Emax, U0 so với yêu cầu theo công năng phòng. Công năng nhận từ tên phòng: văn phòng 500 lx, phòng họp 500, lễ tân 300, showroom 300, hành lang 100...
+    - Kèm công suất, mật độ công suất chiếu sáng (W/m²) và gợi ý sửa khi phòng không đạt.
+    - Tính được trên mặt đứng, ví dụ vách trưng bày. Xuất CSV và vẽ bảng vào bản vẽ.
+    - Bản vẽ mở lại ở phiên sau vẫn đọc được đèn của mặt bằng trần lưu trong bản vẽ;
   - `material_schedule`: sàn và trần theo m², len theo m (trừ cửa đi), tường theo m² từng mặt (trừ cửa và phần ốp bếp theo bộ quy tắc, cộng má cửa; cùng các mặt với bảng kiến trúc), nội thất, đồ gỗ, thiết bị vệ sinh, thiết bị, đèn theo số lượng, mỗi mã một dòng kèm phòng; bảng trong bản vẽ và CSV.
   Vật liệu mặc định theo loại phòng (phòng khô gạch porcelain 600x600, sơn nước, trần thạch cao giật cấp; WC gạch chống trơn, gạch ốp đến trần, trần chống ẩm; sân không trần) và mỗi kết quả đều liệt kê các giá trị đã tự giả định.
 - **Nhà nhiều tầng** (`draw_plan` với `floors`): mỗi tầng có tường riêng (hoặc giữ tường tầng dưới), cửa, cầu thang, ban công, phòng và mái riêng. Mặc định tầng 1 cao 3600, các tầng trên 3300, sàn dày 120. Tường mái được chép từ tường tầng dưới với chiều cao riêng. Thang chữ U ghi LÊN ở tầng 1, LÊN/XUỐNG ở tầng giữa, XUỐNG ở tầng trên cùng. Ban công có mép sàn và lan can.

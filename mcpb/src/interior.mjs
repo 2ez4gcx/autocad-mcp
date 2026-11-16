@@ -1766,6 +1766,19 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
   const out = [], warnings = [];
   // lights placed by the designer replace the automatic ones (the LED cove of a drop band stays)
   const manual = Array.isArray(placed) && placed.length > 0;
+  // where the designer's lights are (points along the linear ones), so that a room name keeps off them
+  const manualPts = [];
+  for (const l of manual ? placed : []) {
+    try {
+      if (l.from && l.to) {
+        const a = add(pt(l.from, 'from'), offset), b = add(pt(l.to, 'to'), offset);
+        const n = Math.max(1, Math.round(len(sub(b, a)) / 100));
+        for (let i = 0; i <= n; i++) manualPts.push(add(a, mul(sub(b, a), i / n)));
+      } else if (l.at) manualPts.push(add(pt(l.at, 'at'), offset));
+    } catch {
+      // a light without a place: userLight reports it
+    }
+  }
   // spec (the plan of the floor): the stairs, so that the name of a stairwell goes on its half landing, off the treads
   const spots = stairSpots(spec);
   const counts = {};
@@ -1773,11 +1786,15 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
   const count = (kind, n = 1) => {
     counts[kind] = (counts[kind] ?? 0) + n;
   };
+  // every light placed, for the illuminance check: plan coordinates, the room, the level of the ceiling it hangs from
+  const fixtures = [], ceil = {};
+  let cur = null;
   // the lights are left out of the ceiling finish plan, the level tags out of the lighting plan
   const light = (kind, p) => {
     if (finishOnly || manual) return;
     lightSymbol(kind, p, out);
     count(kind);
+    fixtures.push({ kind, code: LIGHTS[kind].code, room: cur.room, at: P(sub(p, offset)), z: cur.z });
   };
   const levelTag = (...a) => {
     if (!lightsOnly) ceilingTag(...a);
@@ -1801,6 +1818,8 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
       continue;
     }
     const level = num(c.level ?? 3000, `${name}.ceiling.level`);
+    cur = { room: name, z: level };
+    ceil[name] = { poly, inner: null, level, depth: 0 };
     const ar = areas[c.code] = areas[c.code] ?? { code: c.code, description: c.description, levels: new Set(), area: 0, rooms: [] };
     ar.area += Math.abs(polyArea(poly)) / 1e6;
     ar.rooms.push(name);
@@ -1818,16 +1837,22 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
       if (!inner) warnings.push(`${name}: the room is too narrow for a ${drop.width} drop band: drawn flat`);
       else {
         field = inner;
+        Object.assign(ceil[name], { inner, depth: drop.depth });
         out.push(polyE(inner, true, IL.ceiling));
         if (drop.cove !== false) {
           const cove = offsetPoly(poly, drop.width + 80);
           if (cove) {
             out.push(polyE(cove, true, IL.strip, HID));
-            if (!finishOnly) counts.strip_m = (counts.strip_m ?? 0) + perimeter(cove) / 1000;
+            if (!finishOnly) {
+              counts.strip_m = (counts.strip_m ?? 0) + perimeter(cove) / 1000;
+              fixtures.push({ kind: 'strip', code: LIGHTS.strip.code, room: name, length_m: r2(perimeter(cove) / 1000), z: level - drop.depth });
+            }
           }
         }
         const mid = offsetPoly(poly, drop.width / 2);
+        cur.z = level - drop.depth;
         for (const p of alongEdges(mid, spacing)) light('downlight', p);
+        cur.z = level;
         const corner = mid.reduce((m, p) => (p[0] + p[1] < m[0] + m[1] ? p : m));
         levelTag(c.code, fmtLevel(level - drop.depth), corner, hTag * 0.8, out);
         ar.levels.add(fmtLevel(level - drop.depth));
@@ -1881,7 +1906,8 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
       light('ceiling_lamp', fc);
     }
     // name above and level tag below the middle light (or between the grid lights)
-    const clear = lamp ? 420 : gridLights.some((g) => Math.abs(g[0] - fc[0]) < 700 && Math.abs(g[1] - fc[1]) < 300) ? 260 : 0;
+    const nearMid = (g) => Math.abs(g[0] - fc[0]) < 700 && Math.abs(g[1] - fc[1]) < 300;
+    const clear = lamp || manualPts.some(nearMid) ? 420 : gridLights.some(nearMid) ? 260 : 0;
     const nameAt = [fc[0], fc[1] + clear + 0.9 * hName];
     out.push(textE(name, inside(nameAt, field) ? nameAt : fc, hName, IL.room, 'middle_center'));
     const tagAt = [fc[0], fc[1] - clear - 2.2 * hTag];
@@ -1904,6 +1930,26 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
     const by = new Map();
     placed.forEach((l, i) => {
       const r = userLight(l, offset, scale, out, `lights[${i}]`);
+      if (!USER_LIGHTS[r.kind].layer) {
+        // a light (not a diffuser or a panel): its room and the level of the ceiling at its place (the band is lower)
+        const a = l.from && l.to ? pt(l.from, 'from') : l.at ? pt(l.at, 'at') : null;
+        let ends = null;
+        if (l.from && l.to) ends = [pt(l.from, 'from'), pt(l.to, 'to')];
+        else if (r.length_m && l.at) {
+          const ang = num(l.angle ?? 0, 'angle') * DEG, h = (r.length_m * 1000) / 2;
+          ends = [[a[0] - Math.cos(ang) * h, a[1] - Math.sin(ang) * h], [a[0] + Math.cos(ang) * h, a[1] + Math.sin(ang) * h]];
+        }
+        const mid = ends ? mul(add(ends[0], ends[1]), 0.5) : a;
+        const q = add(mid, offset);
+        const room = Object.keys(ceil).find((n) => inside(q, ceil[n].poly)) ?? null;
+        const cz = room ? (ceil[room].inner && !inside(q, ceil[room].inner) ? ceil[room].level - ceil[room].depth : ceil[room].level) : null;
+        const f = { kind: r.kind, code: r.code, room, z: l.z !== undefined ? num(l.z, `lights[${i}].z`) : cz };
+        if (ends) Object.assign(f, { from: P(ends[0]), to: P(ends[1]), length_m: r2(r.length_m) });
+        else f.at = P(a);
+        if (l.aim) f.aim = P(pt(l.aim, `lights[${i}].aim`));
+        for (const k of ['lm', 'beam', 'w', 'tilt', 'hang']) if (l[k] !== undefined) f[k] = num(l[k], `lights[${i}].${k}`);
+        fixtures.push(f);
+      }
       const k = r.code;
       if (!by.has(k)) by.set(k, { kind: r.kind, code: r.code, description: r.description, unit: lang === 'en' ? 'pcs' : 'cái', qty: 0, length_m: 0, user: true });
       const g = by.get(k);
@@ -1955,7 +2001,7 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
     }
     legendBottom = y;
   }
-  return { entities: out, lights: finishOnly ? null : lights, warnings, legendBottom };
+  return { entities: out, lights: finishOnly ? null : lights, fixtures: finishOnly ? [] : fixtures, warnings, legendBottom };
 }
 
 // ---------------------------------------------------------------- interior elevation
@@ -2324,11 +2370,222 @@ const JN_MATERIALS = {
  * dashed), drawers, handles, dimension chains; section 1-1 through the carcass with panel thicknesses and material
  * notes. Sizes in mm; materials {carcass, door, back, top, plinth, backsplash, rod, handle} replace the defaults.
  */
+const DISPLAY_MATERIALS = {
+  fin: 'JN-01 Vách đứng MDF chống ẩm phủ veneer sồi, dày 50',
+  back: 'JN-01 Vách lưng MDF 20 phủ veneer sồi, bắt vít vào khung tường mỗi 600',
+  shelf: 'JN-01 Mặt kệ trưng bày MDF 30 phủ veneer sồi, nẹp chỉ cạnh',
+  niche_top: 'JN-01 Đợt trên hộc MDF 30 phủ veneer sồi',
+  door: 'JN-02 Cánh tủ đế MDF 18 sơn trắng mờ, mở nhấn (push-open)',
+  carcass: 'Thùng tủ đế MDF 18 sơn trắng, đợt trong chỉnh cao',
+  plinth: 'Chân lùi MDF 18 sơn xám đậm, chân tăng chỉnh cao độ',
+  header: 'JN-03 Bảng tiêu đề: mặt mica trắng sữa 5 mm in UV, hộp MDF 18 sơn trắng, LED module bên trong',
+  picture: 'JN-04 Tranh in UV trên alu 3 mm, treo nẹp cách vách lưng 10',
+  led: 'LT-03 LED dây 4000K trong thanh nhôm có nắp tán quang, âm dưới đợt trên',
+  rail: 'Đố trên MDF 18 phủ veneer sồi',
+  pegboard: 'JN-06 Bảng đục lỗ (pegboard) trắng treo sản phẩm',
+  bulkhead: 'CL-02 Hộp trần thạch cao 12,5 sơn trắng trên khung xương',
+};
+const DISPLAY_SIZES = { plinth: 80, recess: 50, base: 450, shelf: 30, header: 400, rail: 110, fin: 50, back: 20, depth: 500, picture: [1450, 2000], panel: 18 };
+
+/**
+ * Display casework (tủ trưng bày dạng hộc): bays between vertical fins on a back panel, each with a recessed plinth, a
+ * base cabinet with push-open doors, a display shelf, an optional picture panel (or pegboard), a niche top shelf with
+ * an LED strip under it, a header box with a title; a top rail and a gypsum bulkhead up to the ceiling. The elevation at
+ * scale (default 1:30) with material notes and dimension chains, and section 1-1 through a bay at section_scale
+ * (default 1:10) beside it. bays: a number of equal bays or [{w, title, subtitle, picture, pegboard}].
+ */
+export function displayDetail(p) {
+  const sc = num(p.scale ?? 30, 'scale', { positive: true });
+  const ssc = num(p.section_scale ?? 10, 'section_scale', { positive: true });
+  const [x0, y0] = pt(p.at ?? [0, 0], 'at');
+  const assumed = [];
+  const mat = { ...DISPLAY_MATERIALS, ...(p.materials || {}) };
+  for (const k of Object.keys(DISPLAY_MATERIALS)) if (!p.materials?.[k]) assumed.push({ item: `materials.${k}`, value: DISPLAY_MATERIALS[k] });
+  const o = { ...DISPLAY_SIZES, ...(p.display || {}) };
+  for (const k of Object.keys(DISPLAY_SIZES)) if (p.display?.[k] === undefined) assumed.push({ item: `display.${k}`, value: Array.isArray(DISPLAY_SIZES[k]) ? DISPLAY_SIZES[k].join('-') : DISPLAY_SIZES[k] });
+  const T = num(p.panel ?? o.panel, 'display.panel', { positive: true }), F = num(o.fin, 'display.fin', { positive: true }), d = num(o.depth, 'display.depth', { positive: true });
+  const H = num(p.height ?? 2600, 'height', { positive: true });
+  if (p.height === undefined) assumed.push({ item: 'height', value: 2600, note: 'top of the casework (the top rail)' });
+  const ceiling = p.ceiling === null ? null : num(p.ceiling ?? 2800, 'ceiling', { positive: true });
+  if (p.ceiling === undefined) assumed.push({ item: 'ceiling', value: 2800, note: 'a gypsum bulkhead from the top of the casework up to the ceiling' });
+  const bulk = ceiling !== null && p.bulkhead !== false && ceiling > H + 1;
+  // levels: base cabinet, display shelf, picture, niche top shelf, header box, top rail
+  const zPl = num(o.plinth, 'display.plinth'), zB = num(o.base, 'display.base'), zS = zB + num(o.shelf, 'display.shelf');
+  const zTop = H - num(o.rail, 'display.rail'), zHd = zTop - num(o.header, 'display.header'), zNt = zHd - num(o.shelf, 'display.shelf');
+  const pic = o.picture ? [num(o.picture[0], 'display.picture[0]'), num(o.picture[1], 'display.picture[1]')] : null;
+  if (zNt < zS + 600) throw new PlanError(`the niche between the display shelf (${zS}) and the niche top (${zNt}) is under 600: raise height or lower display.base`);
+  if (pic && (pic[0] < zS + 100 || pic[1] > zNt - 30)) throw new PlanError(`display.picture ${pic.join('-')} must lie between the display shelf (${zS}) and the niche top (${zNt})`);
+  // bays between fins
+  let bays;
+  if (Array.isArray(p.bays)) bays = p.bays.map((b) => (typeof b === 'object' ? { ...b } : { w: b }));
+  else {
+    const wGiven = p.width !== undefined ? num(p.width, 'width', { positive: true }) : null;
+    const n = p.bays !== undefined ? Math.max(1, Math.round(num(p.bays, 'bays', { positive: true }))) : wGiven ? Math.max(1, Math.round((wGiven - F) / 950)) : 4;
+    bays = Array.from({ length: n }, () => ({}));
+  }
+  const fixedW = bays.filter((b) => b.w !== undefined).reduce((t, b) => t + num(b.w, 'bays[].w', { positive: true }), 0);
+  const free = bays.filter((b) => b.w === undefined).length;
+  let w = p.width !== undefined ? num(p.width, 'width', { positive: true }) : null;
+  if (w === null) {
+    w = free ? fixedW + free * 900 + (bays.length + 1) * F : fixedW + (bays.length + 1) * F;
+    assumed.push({ item: 'width', value: w });
+  }
+  const bw = free ? (w - (bays.length + 1) * F - fixedW) / free : 0;
+  if (free && bw < 300) throw new PlanError(`the bays come out ${r2(bw)} wide: fewer bays or a wider casework`);
+  if (!free && Math.abs(fixedW + (bays.length + 1) * F - w) > 1) throw new PlanError(`bays add up to ${fixedW + (bays.length + 1) * F} with the fins, not the width ${w}`);
+  let x = F;
+  for (const b of bays) {
+    b.w = b.w !== undefined ? num(b.w, 'bays[].w') : bw;
+    b.x0 = x;
+    b.x1 = x + b.w;
+    x = b.x1 + F;
+  }
+
+  const out = [], sec = [];
+  const D = IL.detail, DC = IL.detailCut;
+  const Xf = (v) => x0 + v, Yf = (z) => y0 + z;
+  const R = (a, b, c, e, layer = D, extra) => out.push(rectE(Xf(a), Yf(b), Xf(c), Yf(e), layer, extra));
+  const Ln = (a, b, c, e, layer = D, extra) => out.push(lineE([Xf(a), Yf(b)], [Xf(c), Yf(e)], layer, extra));
+  const hatchE = (pts, pattern, scale, layer = IL.detailPatt) => ({ type: 'hatch', boundary: pts.map(P), pattern, scale, layer });
+
+  // ---- elevation
+  out.push(lineE([Xf(-200), Yf(0)], [Xf(w + 200), Yf(0)], DC));
+  R(0, 0, w, H);
+  Ln(0, zTop, w, zTop);
+  if (bulk) R(0, H, w, ceiling, IL.ceiling);
+  for (let i = 0; i <= bays.length; i++) {
+    const xf = i === 0 ? 0 : bays[i - 1].x1;
+    R(xf, 0, xf + F, zTop);
+  }
+  for (const b of bays) {
+    Ln(b.x0, zPl, b.x1, zPl);
+    out.push(hatchE([[Xf(b.x0), Yf(0)], [Xf(b.x1), Yf(0)], [Xf(b.x1), Yf(zPl)], [Xf(b.x0), Yf(zPl)]], 'DOTS', 0.2 * sc));
+    if (b.w > 600) Ln((b.x0 + b.x1) / 2, zPl, (b.x0 + b.x1) / 2, zB);
+    R(b.x0, zB, b.x1, zS);
+    R(b.x0, zNt, b.x1, zHd);
+    Ln(b.x0 + 20, zNt - 4, b.x1 - 20, zNt - 4, IL.strip);
+    R(b.x0, zHd, b.x1, zTop);
+    // the title of the bay on its header: an icon box and the title (subtitle under it)
+    const ih = Math.min(248, (zTop - zHd) * 0.62), ix = b.x0 + 68, iz = zHd + (zTop - zHd - ih) / 2;
+    if (b.title || b.icon !== false) {
+      R(ix, iz, ix + ih, iz + ih);
+      out.push(hatchE([[Xf(ix), Yf(iz)], [Xf(ix + ih), Yf(iz)], [Xf(ix + ih), Yf(iz + ih)], [Xf(ix), Yf(iz + ih)]], 'ANSI37', 0.15 * sc));
+    }
+    const room = b.x1 - (ix + ih + 40) - 30;
+    const fit = (t, hMax) => Math.max(15, Math.min(hMax, (hMax * room) / Math.max(1, textWidth(t, hMax))));
+    const th = fit(String(b.title ?? ''), Math.min(70, (zTop - zHd) * 0.17));
+    if (b.title) out.push(textE(String(b.title), [Xf(ix + ih + 40), Yf(zHd + (zTop - zHd) * 0.55)], th, D));
+    // the subtitle smaller than the title
+    if (b.subtitle) out.push(textE(String(b.subtitle), [Xf(ix + ih + 40), Yf(zHd + (zTop - zHd) * 0.33)], Math.min(fit(String(b.subtitle), Math.min(42, (zTop - zHd) * 0.1)), 0.62 * th), D));
+    if (pic && b.picture !== false) {
+      R(b.x0 + 50, pic[0], b.x1 - 50, pic[1]);
+      Ln(b.x0 + 50, pic[0], b.x1 - 50, pic[1], IL.hidden, HID);
+      Ln(b.x0 + 50, pic[1], b.x1 - 50, pic[0], IL.hidden, HID);
+    }
+    if (b.pegboard) {
+      const top = pic && b.picture !== false ? pic[0] - 30 : zNt - 100;
+      R(b.x0 + 50, zS + 80, b.x1 - 50, top);
+      out.push(hatchE([[Xf(b.x0 + 50), Yf(zS + 80)], [Xf(b.x1 - 50), Yf(zS + 80)], [Xf(b.x1 - 50), Yf(top)], [Xf(b.x0 + 50), Yf(top)]], 'DOTS', 0.4 * sc));
+    }
+  }
+  // section mark through the first bay with a picture (else the first)
+  const cut = bays.find((b) => b.picture !== false) ?? bays[0];
+  const sx = (cut.x0 + cut.x1) / 2 + cut.w / 4;
+  const top = bulk ? ceiling : H;
+  for (const [za, zb, tz] of [[-3.8 * sc, -0.8 * sc, -3.8 * sc], [top + 1 * sc, top + 4 * sc, top + 5 * sc]]) {
+    out.push(polyE([[Xf(sx), Yf(za)], [Xf(sx), Yf(zb)]], false, IL.symbol, { width: 0.6 * sc }));
+    out.push(textE('1', [Xf(sx) + 1.5 * sc, Yf(tz)], 3 * sc, IL.symbol));
+  }
+  const dim = (list, pts, dir, at2, scale, total = true) => list.push({ type: 'dim_chain', points: pts.map(P), direction: dir, at: P(at2), total: total && pts.length > 2, gap: 10 * scale, style: dimStyleName(scale), layer: IL.dims });
+  const xs = [0, ...bays.flatMap((b) => [b.x0, b.x1]), w];
+  dim(out, xs.map((v) => [Xf(v), Yf(0)]), 'horizontal', [Xf(0), Yf(0) - 12 * sc], sc);
+  const zs = [...new Set([0, zPl, zB, zS, ...(pic ? pic : []), zNt, zHd, zTop, H, ...(bulk ? [ceiling] : [])].map(r2))].sort((a, b) => a - b);
+  dim(out, zs.map((z) => [Xf(0), Yf(z)]), 'vertical', [Xf(0) - 12 * sc, Yf(0)], sc);
+  // material notes of the elevation, to its right
+  const bR = bays[bays.length - 1];
+  const picBay = [...bays].reverse().find((b) => b.picture !== false);
+  const pegBay = [...bays].reverse().find((b) => b.pegboard);
+  const eTargets = [
+    ...(bulk ? [['bulkhead', [bR.x0 + bR.w * 0.5, (H + ceiling) / 2]]] : []),
+    ['rail', [bR.x0 + bR.w * 0.7, (zTop + H) / 2]], ['header', [bR.x0 + bR.w * 0.92, zHd + 0.85 * (zTop - zHd)]],
+    ['led', [bR.x0 + bR.w * 0.6, zNt - 4]], ['niche_top', [bR.x0 + bR.w * 0.3, (zNt + zHd) / 2]],
+    ...(pic && picBay ? [['picture', [picBay.x0 + picBay.w * 0.75, pic[0] + (pic[1] - pic[0]) * 0.3]]] : []),
+    ...(pegBay ? [['pegboard', [pegBay.x0 + pegBay.w * 0.7, zS + 200]]] : []),
+    ['fin', [bR.x0 - F / 2, (zS + zNt) / 2]], ['back', [bR.x0 + 25, (zS + zNt) / 2 - 150]],
+    ['shelf', [bR.x0 + bR.w * 0.3, (zB + zS) / 2]], ['door', [bR.x0 + bR.w * 0.25, (zPl + zB) / 2]], ['plinth', [bR.x0 + bR.w * 0.4, zPl / 2]],
+  ].map(([k, q]) => ({ text: mat[k], target: [Xf(q[0]), Yf(q[1])] }));
+  const hN = 2.5 * sc, xN = Xf(w) + 25 * sc;
+  layoutNotes(eTargets, { X: (v) => v, Y: (v) => v, xN, h: hN, scale: sc, floorY: Yf(0), out });
+  title(`MẶT ĐỨNG ${p.name ?? 'TỦ TRƯNG BÀY'}`, Xf(w / 2), Yf(0) - 32 * sc, sc, out);
+  const eRight = xN + Math.max(...eTargets.map((t) => textWidth(t.text, hN)));
+
+  // ---- section 1-1 beside it: x from the wall face (0) to the front (d), the wall on the left
+  const sx0 = eRight + 30 * sc + 40 * ssc;
+  const S = (a, z) => [sx0 + a, Yf(z)];
+  const SR = (key, a, b, c, e, hatch = null, layer = DC) => {
+    sec.push(polyE([S(a, b), S(c, b), S(c, e), S(a, e)], true, layer, layer === IL.hidden ? HID : undefined));
+    if (hatch) sec.push(hatchE([S(a, b), S(c, b), S(c, e), S(a, e)], hatch, hatch === 'DOTS' ? 0.1 * ssc : 0.4 * ssc));
+    if (key) rect[key] = [a, b, c, e];
+  };
+  const rect = {};
+  const topZ = (bulk ? ceiling : H) + 200;
+  SR(null, -120, 0, 0, topZ, 'ANSI31', IL.cut);
+  sec.push(lineE(S(-120, 0), S(d + 700, 0), DC));
+  // the fin beyond, seen
+  sec.push(polyE([S(o.back, 0), S(d, 0), S(d, zTop), S(o.back, zTop)], true, D));
+  const W = 'DOTS';
+  SR('back', 0, 0, o.back, H, W);
+  SR('plinth', d - 20 - o.recess - T, 0, d - 20 - o.recess, zPl, W);
+  SR('carcass', o.back, zPl, d - 20, zPl + T, W);
+  SR('door', d - 20 - T, zPl + 3, d - 20, zB - 3, W);
+  SR('inner', o.back + 5, (zPl + zB) / 2 - T / 2, d - 20 - T - 7, (zPl + zB) / 2 + T / 2, W);
+  SR('shelf', o.back, zB, d - 10, zS, W);
+  if (pic) {
+    SR('picture', o.back + 10, pic[0], o.back + 13, pic[1]);
+    SR(null, o.back, pic[0] + 50, o.back + 10, pic[0] + 90);
+    SR(null, o.back, pic[1] - 90, o.back + 10, pic[1] - 50);
+  }
+  SR('niche_top', o.back, zNt, d, zHd, W);
+  SR('led', d - 30, zNt - 8, d - 10, zNt);
+  SR('header', d - 25, zHd, d - 20, zTop);
+  SR(null, d - 170, zTop - T, d - 25, zTop, W);
+  SR(null, d - 170, zHd, d - 25, zHd + T, W);
+  SR(null, d - 170, zHd + T, d - 170 + T, zTop - T, W);
+  SR(null, d - 150, (zHd + zTop) / 2 - 10, d - 130, (zHd + zTop) / 2 + 10);
+  SR('rail', d - T, zTop, d, H, W);
+  SR(null, o.back, H - T, d - T, H, W);
+  if (bulk) {
+    SR('bulkhead', d - 13, H, d, ceiling, 'ANSI37');
+    SR(null, 0, H, d - 13, ceiling, null, IL.hidden);
+    SR(null, d, ceiling, d + 700, ceiling + 15);
+  }
+  const sTargets = ['bulkhead', 'rail', 'header', 'led', 'niche_top', 'picture', 'back', 'shelf', 'door', 'carcass', 'plinth']
+    .filter((k) => rect[k])
+    .map((k) => {
+      const r = rect[k];
+      return { text: mat[k], target: S((r[0] + r[2]) / 2, (r[1] + r[3]) / 2) };
+    });
+  const hS = 2.5 * ssc, xS = sx0 + d + 700 + 15 * ssc;
+  layoutNotes(sTargets, { X: (v) => v, Y: (v) => v, xN: xS, h: hS, scale: ssc, floorY: Yf(0), out: sec });
+  dim(sec, [0, o.back, d - 20, d].map((a) => S(a, 0)), 'horizontal', [sx0, Yf(0) - 10 * ssc], ssc);
+  dim(sec, zs.map((z) => S(-120, z)), 'vertical', [sx0 - 120 - 10 * ssc, Yf(0)], ssc);
+  const t1 = [];
+  title(`MẶT CẮT 1-1${p.name ? ` - ${p.name}` : ''}`, sx0 + d / 2, Yf(0) - 32 * ssc, ssc, t1);
+  sec.push(...t1);
+  const schedule = [{ code: p.code ?? 'JN-01', description: p.name ?? 'Tủ trưng bày', unit: 'bộ', qty: 1 }];
+  return {
+    entities: out, section: sec, assumed, schedule, bays: bays.map((b) => ({ x0: r2(b.x0), w: r2(b.w), title: b.title })),
+    extent: { min: [Xf(-200) - 25 * sc, Yf(0) - 45 * sc], max: [eRight, Yf(top)] },
+    section_extent: { min: [sx0 - 120 - 25 * ssc, Yf(0) - 45 * ssc], max: [xS + Math.max(...sTargets.map((t) => textWidth(t.text, hS))), Yf(topZ)] },
+  };
+}
+
 export function joineryDetail(p) {
+  if ((p.kind ?? 'kitchen') === 'display') return displayDetail(p);
   const sc = num(p.scale ?? 10, 'scale', { positive: true });
   const [x0, y0] = pt(p.at ?? [0, 0], 'at');
   const kind = p.kind ?? 'kitchen';
-  if (!['kitchen', 'wardrobe'].includes(kind)) throw new PlanError('kind must be kitchen or wardrobe');
+  if (!['kitchen', 'wardrobe'].includes(kind)) throw new PlanError('kind must be kitchen, wardrobe or display');
   const assumed = [];
   const mat = { ...JN_MATERIALS, ...(p.materials || {}) };
   const used = kind === 'kitchen' ? ['carcass', 'door', 'back', 'top', 'plinth', 'backsplash', 'handle'] : ['carcass', 'door', 'back', 'plinth', 'rod', 'handle'];

@@ -309,11 +309,15 @@
     },
     {
       "name": "draw_joinery_detail",
-      "description": "Joinery shop drawing (chi tiết đồ gỗ) at 1:10"
+      "description": "Joinery shop drawing (chi tiết đồ gỗ): kitchen, wardrobe, display casework with its section"
     },
     {
       "name": "draw_finish_quantities",
       "description": "Architectural finish quantities (bảng khối lượng hoàn thiện kiến trúc) of the building of draw_plan, floor by floor, for the architectural set"
+    },
+    {
+      "name": "lighting_calc",
+      "description": "Illuminance check of the lighting layout per room against TCVN 7114-1 (Em, Emin, U0, LPD)"
     },
     {
       "name": "material_schedule",

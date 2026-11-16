@@ -42,6 +42,8 @@
 - Count the doors, windows, furniture and lights by block, with their codes. / Đếm cửa, đồ nội thất và đèn theo block kèm mã.
 - Draw the floor, wall and ceiling finish plans and the lighting layout of floor 2, each with its legend and general notes. / Vẽ mặt bằng hoàn thiện sàn, hoàn thiện tường, hoàn thiện trần và bố trí đèn tầng 2, có chú thích và ghi chú chung.
 - Make the A3 sheets NT-01 to NT-07 with the vertical title strip (client, project, consultant, phase TKTC) and export one PDF. / Dàn tờ A3 NT-01 đến NT-07 với khung tên dải dọc (chủ đầu tư, dự án, tư vấn, giai đoạn TKTC) và xuất một file PDF.
+- Draw the display casework of the showroom wall: 5.75 m wide, six bays titled New arrivals, Best sellers, Kitchen, Bath, Outdoor and Accessories, the last one with a pegboard instead of a picture; then section 1-1 at 1:10. / Vẽ tủ trưng bày dạng hộc ở vách showroom: dài 5,75 m, sáu hộc có tên Hàng mới, Bán chạy, Nhà bếp, Phòng tắm, Ngoài trời, Phụ kiện, hộc cuối dùng bảng đục lỗ thay cho tranh; kèm mặt cắt 1-1 tỉ lệ 1:10.
+- Check the illuminance of the ceiling plan lights: is every room up to TCVN 7114-1, and is the display wall lit to 300 lx? Save the table as CSV. / Kiểm tra độ rọi của các đèn trên mặt bằng trần: các phòng có đạt TCVN 7114-1 không, vách trưng bày có đủ 300 lx không? Lưu bảng ra CSV.
 
 ## Separate sets: architecture, structure, interior / Các bộ hồ sơ riêng: kiến trúc, kết cấu, nội thất
 

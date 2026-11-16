@@ -10,7 +10,7 @@ export const VIEW_TOOLS = new Set([
   'draw_plan', 'draw_elevation', 'draw_section', 'draw_roof_plan', 'draw_door_schedule', 'draw_stair_detail', 'draw_finish_quantities',
   'draw_structure_plan', 'draw_structure_detail', 'draw_beam_schedule', 'draw_structure_notes', 'structural_calc', 'draw_quantity_schedule', 'rebar_schedule',
   'draw_furniture_plan', 'draw_floor_finish_plan', 'draw_wall_finish_plan', 'draw_ceiling_plan', 'draw_interior_elevation', 'draw_joinery_detail', 'material_schedule',
-  'draw_electrical_plan', 'draw_electrical_diagram', 'electrical_calc', 'draw_plumbing_plan', 'draw_plumbing_diagram', 'plumbing_calc', 'draw_mep_notes',
+  'draw_electrical_plan', 'draw_electrical_diagram', 'electrical_calc', 'draw_plumbing_plan', 'draw_plumbing_diagram', 'plumbing_calc', 'draw_mep_notes', 'lighting_calc',
   'draw_cover_sheet', 'draw_drawing_list',
 ]);
 /** Tools that draw nothing but work on the plan of the drawing: they take it from the drawing as the view tools do. */

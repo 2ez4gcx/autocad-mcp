@@ -48,6 +48,7 @@ import {
   interiorElevation, joineryDetail, labelBox, labelSize, materialSchedule, polyArea, resolveFinish, resolveItems, shiftSpec, textWidth,
 } from './interior.mjs';
 import { LIGHT_BLOCKS } from './symbols.mjs';
+import { LUX_TASKS, lightingCalc, luxTable } from './lux.mjs';
 import { calcSheetOf, defaultFixtures, legend as mepLegend, maskTexts, signOff, tablesCsv, wallBoxes } from './mep.mjs';
 import {
   DEVICES, electricalBasis, electricalDesign, electricalNotes, electricalPlan, electricalQuantities, electricalTables, riserDiagram, singleLineDiagram,
@@ -321,7 +322,8 @@ const server = new McpServer(
         'with the source, fix, check_drawing, create_layout + export_pdf. Elevations and sections: draw_elevation / draw_section from ' +
         'the same plan (heights, roofs). Structural details: draw_structure_detail + rebar_schedule (sizes and bars from the engineer). ' +
         'Interior design: draw_furniture_plan (layout plan with coded furniture/joinery and elevation keys), draw_floor_finish_plan, ' +
-        'draw_ceiling_plan, draw_interior_elevation (each wall of a room), draw_joinery_detail (kitchen, wardrobe), material_schedule; ' +
+        'draw_ceiling_plan, draw_interior_elevation (each wall of a room), draw_joinery_detail (kitchen, wardrobe, display casework), material_schedule, ' +
+        'lighting_calc (illuminance of the ceiling plan lights per room against TCVN 7114-1); ' +
         'finishes default by kind of room (the results list them as assumed). Material codes as in SketchUp MCP: FL floor, SK skirting, ' +
         'WL wall, CL ceiling, JN joinery, FN furniture, SN sanitary, EQ equipment, LT lighting; one code = one specification.',
       '4. Layers: keep a layer scheme the drawing already has (pass its layer names); otherwise the standard set (A-WALL, A-DOOR, A-GLAZ, ' +
@@ -486,7 +488,7 @@ async function viewCall(tool, args, run) {
   const base = viewId(tool, args);
   const old = args.update ? viewToReplace(known.views, tool, base, args.update) : null;
   const ctx = {
-    tool, base, old, update: !!args.update, id: old ? old.id : freeId(base, known.ids), args: keptArgs(tool, args),
+    tool, base, old, update: !!args.update, id: old ? old.id : freeId(base, known.ids), args: keptArgs(tool, args), views: known.views,
     n: 0, spots: [], extra: {}, sent: false, erased: 0, locked: 0, erasedBounds: null, bounds: null,
     planHash: null, planJson: null, storedHash: known.planHash, planBase: null, floorsBase: null,
   };
@@ -3537,7 +3539,8 @@ server.registerTool('draw_ceiling_plan', {
     'Reflected ceiling plan (mặt bằng trần đèn): a copy of the plan at 1:50 without door leaves; per room the drop band along the ' +
     'walls (step line, LED cove dashed), downlights in the band about every spacing (a grid on flat ceilings), a ceiling lamp in ' +
     'the middle or a pendant over each dining table of draw_furniture_plan, level tags (code over level) for the band and the ' +
-    'field, the room name; then the light legend with counts (remembered for material_schedule). ' + INTERIOR_DEFAULTS,
+    'field, the room name; then the light legend with counts (remembered for material_schedule, and the lights for ' +
+    'lighting_calc). Lights placed by hand take lm, beam, w (and z, tilt, hang) for lighting_calc. ' + INTERIOR_DEFAULTS,
   inputSchema: {
     rooms: FinishRooms, offset: opt(Point), scale: z.number().positive().default(50), spacing: z.number().positive().default(1200),
     legend: z.boolean().default(true), title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg, ...PlanCopyArgs,
@@ -3564,6 +3567,10 @@ server.registerTool('draw_ceiling_plan', {
   })));
   const cp = sb.r;
   if (cp.lights) st.lights = cp.lights;
+  if (args.mode !== 'finish') {
+    st.fixtures = cp.fixtures;
+    st.ceilingArgs = { lights: args.lights, spacing: args.spacing };
+  }
   const extra = [...cp.entities, ...sb.notes];
   if (sb.side?.warning) cp.warnings.push(sb.side.warning);
   const TITLES = {
@@ -3653,20 +3660,36 @@ server.registerTool('draw_joinery_detail', {
     'handles, module and height dimension chains and section mark 1-1; section 1-1 through the carcass (panels 17 mm, back 8 mm, ' +
     'shelves, door, plinth, countertop, wall cabinet) with dimensions and material notes. item: the code of a kitchen_base or ' +
     'wardrobe of draw_furniture_plan takes its width, modules, sink and hob (and the kitchen_wall of the same room). materials ' +
-    '{carcass, door, back, top, plinth, backsplash, rod, handle} replace the default specifications (reported in assumed).',
+    '{carcass, door, back, top, plinth, backsplash, rod, handle} replace the default specifications (reported in assumed).\n' +
+    'kind display: display casework of a showroom or gallery (tủ trưng bày dạng hộc): bays between vertical fins (50) on a ' +
+    'veneered back panel, each with a recessed plinth (80), a base cabinet with push-open doors up to 450, a display shelf (30), ' +
+    'a picture panel (1450-2000, or a pegboard), a niche top shelf with an LED strip under it, a header box (mica front with an ' +
+    'icon and the title of the bay), a top rail at height (2600) and a gypsum bulkhead up to the ceiling (2800). The elevation ' +
+    'at scale (default 30) with material notes and dimension chains, and section 1-1 through a bay at section_scale (default ' +
+    '10) beside it, its floor on the same line: put them on one sheet with create_layout views [{window: elevation, scale}, ' +
+    '{window: section, scale: section_scale}]. bays: a count of equal bays, or [{w, title, subtitle, picture: false, ' +
+    'pegboard: true}]; display {plinth, recess, base, shelf, header, rail, fin, back, depth, picture: [z0, z1] or null, panel}; ' +
+    'materials {fin, back, shelf, niche_top, door, carcass, plinth, header, picture, led, rail, pegboard, bulkhead}.',
   inputSchema: {
-    kind: z.enum(['kitchen', 'wardrobe']).default('kitchen'), item: opt(Str), name: opt(Str),
+    kind: z.enum(['kitchen', 'wardrobe', 'display']).default('kitchen'), item: opt(Str), name: opt(Str), code: opt(Str),
     width: opt(z.number().positive()), depth: opt(z.number().positive()), height: opt(z.number().positive()),
     modules: opt(Specs), wall_runs: opt(Specs).describe('[{x (from the left of the base run), w, modules}] wall cabinet runs; default one over the whole run'),
     hood: opt(Obj).describe('{x, w: 700, h: 650, z0: 1600} cooker hood between the wall cabinets'),
     sink: opt(z.number()), hob: opt(z.number()),
     base: opt(Obj), wall: opt(z.union([Obj, z.null()])), panel: opt(z.number().positive()), materials: opt(Obj),
-    scale: z.number().positive().default(10), at: opt(Point), language: opt(Lang),
+    bays: opt(z.union([z.number().int().positive(), Specs])).describe('display: a count of equal bays or [{w, title, subtitle, picture, pegboard}]'),
+    display: opt(Obj).describe('display: sizes {plinth: 80, recess: 50, base: 450, shelf: 30, header: 400, rail: 110, fin: 50, back: 20, depth: 500, picture: [1450, 2000], panel: 18}'),
+    ceiling: opt(z.union([z.number().positive(), z.null()])).describe('display: the ceiling level (2800): a gypsum bulkhead from the top of the casework up to it; null for none'),
+    bulkhead: opt(z.boolean()),
+    scale: opt(z.number().positive()).describe('Default 10 (display: 30, its elevation)'),
+    section_scale: z.number().positive().default(10).describe('display: the scale of section 1-1'),
+    at: opt(Point), language: opt(Lang),
     dry_run: z.boolean().default(false).describe('List the sizes and materials it would assume, without drawing'),
   },
   annotations: EDIT,
 }, ({ dry_run, ...args }) => exclusive(async () => {
   const p = { ...args };
+  if (args.item && args.kind === 'display') throw new Error('draw_joinery_detail: item takes a kitchen_base or wardrobe of the furniture plan; give the width and bays of a display casework');
   if (args.item) {
     const owner = [...interiorStates.values()].find((s2) => s2.items.some((x) => x.code === args.item && ['kitchen_base', 'wardrobe'].includes(x.type)));
     const pool = owner?.items ?? [];
@@ -3695,12 +3718,23 @@ server.registerTool('draw_joinery_detail', {
     }
     p.name = p.name ?? `${it.type === 'kitchen_base' ? 'TỦ BẾP' : it.def.vi.toUpperCase()} ${it.code}`;
   }
-  const sc = p.scale;
+  const sc = p.scale = p.scale ?? (p.kind === 'display' ? 30 : 10);
   if (dry_run) {
     const r = engine('draw_joinery_detail', () => joineryDetail({ ...p, at: [0, 0] }));
-    return dryRun(r.assumed, { kind: p.kind, width: p.width });
+    return dryRun(r.assumed, { kind: p.kind, width: p.width, ...(r.bays ? { bays: r.bays } : {}) });
   }
   const { at, info } = await freeSpot(p.at, sc);
+  if (p.kind === 'display') {
+    // the elevation, then section 1-1 at its own scale to the right of what was drawn, its floor on the same line
+    const r = engine('draw_joinery_detail', () => joineryDetail({ ...p, at }));
+    const elev = await drawView(r.entities, sc, info, p.language);
+    const dx = elev.bounds.max[0] + 20 * sc - r.section_extent.min[0];
+    const sec = await drawView(r.section.map((e) => shiftEntity(e, [dx, 0])), p.section_scale, info, p.language);
+    return text({
+      kind: 'display', at, scale: `1:${sc}`, section_scale: `1:${p.section_scale}`, bays: r.bays, assumed: assumedOrNone(r.assumed),
+      count: elev.count + sec.count, elevation: elev.bounds, section: sec.bounds,
+    });
+  }
   const r = engine('draw_joinery_detail', () => joineryDetail({ ...p, at }));
   const res = await drawView(r.entities, sc, info, p.language);
   return text({ kind: p.kind, at, scale: `1:${sc}`, assumed: assumedOrNone(r.assumed), count: res.count, bounds: res.bounds });
@@ -3859,6 +3893,93 @@ server.registerTool('draw_finish_quantities', {
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, finishWorkbook(Q, floors.map((x) => x.name), lang));
     out.xlsx = file;
+  }
+  return text(out);
+}));
+
+server.registerTool('lighting_calc', {
+  description:
+    'Illuminance check of a lighting layout (kiểm tra độ rọi theo TCVN 7114-1:2008 = ISO 8995-1): the lights of the last ' +
+    'draw_ceiling_plan of the floor (or lights given here, as in draw_ceiling_plan) as point sources with their beam, by ' +
+    'default downlight 800 lm 60°, spot 700 lm 36° aimed at its aim, linear 1200 lm/m, ceiling lamp 2000 lm, pendant 1500 lm ' +
+    'hung 900 below the ceiling, LED cove 600 lm/m as reflected light only (photometry {"LT-01": {lm, beam, w}} by code or ' +
+    'kind, or lm/beam/w on each light, replaces them). The direct illuminance on a grid of the work plane of each room (0.75 m; ' +
+    'the floor in corridors, stairs and entrance halls; EN 12464-1 grid without a 0.5 m band along the walls) times the ' +
+    'maintenance factor 0.8, plus the inter-reflected light (integrating sphere, reflectances ceiling/walls/floor 0.7/0.5/0.2). ' +
+    'Per room: Em, Emin, Emax, U0 against the requirement of its task, found from the room name (office 500 lx U0 0.6, ' +
+    'meeting 500/0.6, reception 300/0.6, sales and showroom 300/0.4, canteen 200/0.4, toilets 200/0.4, stairs 150/0.4, ' +
+    'corridor and entrance 100/0.4, store 100/0.4...; rooms of a dwelling get reference values, not a pass or a fail), the ' +
+    'power and the lighting power density (W/m²), and what to change where it fails. vertical: planes such as display walls ' +
+    '[{name, from, to, z0, z1, em}] (illuminance on the face looking into the room). csv_path saves the table; table: true ' +
+    'draws it. Walls between rooms block light: only the lights of a room light it.',
+  inputSchema: {
+    rooms: opt(Obj).describe(`{room name: {task, em, u0, plane}}: task one of ${Object.keys(LUX_TASKS).join(', ')}; em/u0 a requirement of its own; plane the height of the reference plane (mm)`),
+    lights: opt(Specs).describe('Lights as in draw_ceiling_plan (plan coordinates), with lm, beam, w, z, tilt, hang; default: those of the last draw_ceiling_plan of the floor'),
+    photometry: opt(Obj).describe('{code or kind: {lm (lm_m for linear and strip), beam (degrees, 120 = diffuse), w (w_m), hang (pendant)}}'),
+    maintenance_factor: z.number().positive().max(1).default(0.8),
+    work_plane: z.number().min(0).default(750), margin: z.number().min(0).default(500),
+    grid: opt(z.number().positive()).describe('Grid spacing (mm); default by EN 12464-1 from the size of the room'),
+    reflectances: opt(Obj).describe('{ceiling: 0.7, walls: 0.5, floor: 0.2}'),
+    vertical: opt(Specs).describe('[{name, room, from: [x,y], to: [x,y], z0: 800, z1: 2000, em, u0}] vertical planes'),
+    csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('semicolon'),
+    table: z.boolean().default(false).describe('Draw the table in the drawing'), at: opt(Point), scale: z.number().positive().default(50),
+    plan: opt(Obj), floor: FloorArg, language: opt(Lang),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const tool = 'lighting_calc';
+  const lang = args.language ?? language;
+  const { spec, offset: at0, key, height } = floorFor(args, tool);
+  const st = interiorOf(key);
+  const rooms = await roomOutlines(spec, tool, at0);
+  let fixtures = args.lights ? null : st.fixtures;
+  // a drawing reopened in another session: the ceiling plan of the floor as the drawing keeps it (its lights, its ceilings)
+  const kept = fixtures || args.lights ? null : (viewStore.getStore()?.views || [])
+    .filter((v) => v.tool === 'draw_ceiling_plan' && v.entities > 0 && (v.args?.mode ?? 'both') !== 'finish' && String(v.args?.floor ?? '') === String(args.floor ?? ''))
+    .sort((a, b) => String(b.time).localeCompare(String(a.time)))[0]?.args ?? null;
+  const finishes = finishesFor(st, rooms, kept?.rooms, [], height);
+  const extra = [];
+  let source = 'draw_ceiling_plan';
+  if (!fixtures) {
+    // the lights given here, else those of the ceiling plan kept in the drawing, else those the ceiling rules would place
+    const cp = engine(tool, () => ceilingPlan({
+      spec, rooms, finishes, items: st.items, offset: [0, 0], scale: 50, spacing: kept?.spacing ?? st.ceilingArgs?.spacing ?? 1200, mode: 'lighting',
+      lights: args.lights ?? kept?.lights ?? st.ceilingArgs?.lights,
+    }));
+    fixtures = cp.fixtures;
+    source = args.lights ? 'lights' : kept ? 'draw_ceiling_plan (kept in the drawing)' : 'ceiling rules';
+    if (!args.lights && !kept) extra.push({ item: 'lights', value: 'the automatic lights of the ceiling rules', note: 'no draw_ceiling_plan of this floor: give lights or draw the ceiling plan first' });
+  }
+  const unknown = Object.keys(args.rooms || {}).filter((n) => !rooms[n]);
+  const heights = Object.fromEntries(Object.keys(rooms).map((n) => [n, finishes[n]?.ceiling?.level ?? height ?? 3000]));
+  const r = engine(tool, () => lightingCalc({
+    rooms, heights, fixtures, given: args.rooms || {}, photometry: args.photometry || {}, mf: args.maintenance_factor, plane: args.work_plane,
+    margin: args.margin, spacing: args.grid ?? null, reflectances: args.reflectances || {}, vertical: args.vertical || [], lang,
+  }));
+  const rows = luxTable(r, lang);
+  const out = {
+    source, lights: fixtures.length, rooms: r.rooms, vertical: r.vertical, assumed: assumedOrNone([...extra, ...r.assumed]), method: r.method,
+    warnings: [...(unknown.length ? [`rooms not in the plan: ${unknown.join(', ')}`] : []), ...r.warnings],
+  };
+  if (!out.warnings.length) delete out.warnings;
+  if (args.csv_path) {
+    const sep = args.csv_format === 'semicolon' ? ';' : ',';
+    const numFmt = (v) => (typeof v === 'number' && args.csv_format === 'semicolon' ? String(v).replace('.', ',') : v);
+    const file = path.resolve(args.csv_path.endsWith('.csv') ? args.csv_path : `${args.csv_path}.csv`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, BOM + rows.map((row) => row.map((c) => csvCell(numFmt(c), sep)).join(sep)).join('\r\n') + '\r\n', 'utf8');
+    out.csv = file;
+  }
+  if (args.table) {
+    const sc = args.scale;
+    const { at, info } = await freeSpot(args.at, sc);
+    const table = {
+      type: 'table', at, title: lang === 'en' ? 'ILLUMINANCE CHECK (TCVN 7114-1:2008)' : 'BẢNG KIỂM TRA ĐỘ RỌI (TCVN 7114-1:2008)', rows,
+      decimal_separator: lang === 'en' ? undefined : ',', height: 2.5 * sc, row_height: 8 * sc,
+      col_widths: [32, 48, 18, 14, 14, 14, 14, 12, 12, 18, 16, 24].map((w) => w * sc), layer: ROLE.text, style: TEXT_STYLE,
+    };
+    const res = await drawView([table], sc, info, lang);
+    out.table = { at, bounds: res.bounds };
   }
   return text(out);
 }));
