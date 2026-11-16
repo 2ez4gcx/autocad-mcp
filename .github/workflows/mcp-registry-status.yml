@@ -56,8 +56,11 @@ jobs:
           MESSAGE: ${{ inputs.message }}
         run: |
           set -euo pipefail
+          # the registry takes no message with the status active
+          args=(status --status "$STATUS")
+          if [ "$STATUS" != "active" ] && [ -n "$MESSAGE" ]; then args+=(--message "$MESSAGE"); fi
           if [ -n "$VERSION" ]; then
-            "$RUNNER_TEMP/mcp-publisher" status --status "$STATUS" --message "$MESSAGE" "$SERVER" "$VERSION"
+            "$RUNNER_TEMP/mcp-publisher" "${args[@]}" "$SERVER" "$VERSION"
           else
-            "$RUNNER_TEMP/mcp-publisher" status --status "$STATUS" --message "$MESSAGE" --all-versions --yes "$SERVER"
+            "$RUNNER_TEMP/mcp-publisher" "${args[@]}" --all-versions --yes "$SERVER"
           fi
