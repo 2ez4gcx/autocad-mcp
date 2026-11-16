@@ -2354,8 +2354,9 @@ function mapShape(s, m) {
 
 // ---------------------------------------------------------------- joinery details
 
+// the materials of a kitchen or a wardrobe (the code of the item is in its title: JN-03 kitchen, JN-01 wardrobe)
 const JN_MATERIALS = {
-  carcass: 'JN-01 Thùng tủ MDF lõi xanh chống ẩm 17 mm phủ melamine',
+  carcass: 'Thùng tủ MDF lõi xanh chống ẩm 17 mm phủ melamine',
   door: 'Cánh MDF lõi xanh chống ẩm 17 mm phủ melamine',
   back: 'Hậu tủ MDF 8 mm',
   top: 'Mặt đá granite 20 mm',
@@ -2364,26 +2365,48 @@ const JN_MATERIALS = {
   rod: 'Thanh treo quần áo inox Ø25',
   handle: 'Tay nắm nhôm âm cánh',
 };
+const JN_MATERIALS_EN = {
+  carcass: 'Carcass: 17 mm moisture-resistant MDF, melamine faced',
+  door: 'Doors: 17 mm moisture-resistant MDF, melamine faced',
+  back: 'Back panel: 8 mm MDF',
+  top: 'Worktop: 20 mm granite',
+  plinth: 'Plinth: waterproof plastic, 100 high',
+  backsplash: 'WL-03 Kitchen wall tiles 600x300',
+  rod: 'Hanging rail: stainless steel Ø25',
+  handle: 'Recessed aluminium handles',
+};
 
-/**
- * Joinery detail: kind kitchen (base + wall cabinets) or wardrobe. Front elevation with its modules, doors (hinge
- * dashed), drawers, handles, dimension chains; section 1-1 through the carcass with panel thicknesses and material
- * notes. Sizes in mm; materials {carcass, door, back, top, plinth, backsplash, rod, handle} replace the defaults.
- */
+// the parts of the casework (one joinery item, code JN-10 by default); the LED strip and the bulkhead carry codes of their
+// own that the furniture, ceiling and lighting libraries do not use (one code = one specification in a set)
 const DISPLAY_MATERIALS = {
-  fin: 'JN-01 Vách đứng MDF chống ẩm phủ veneer sồi, dày 50',
-  back: 'JN-01 Vách lưng MDF 20 phủ veneer sồi, bắt vít vào khung tường mỗi 600',
-  shelf: 'JN-01 Mặt kệ trưng bày MDF 30 phủ veneer sồi, nẹp chỉ cạnh',
-  niche_top: 'JN-01 Đợt trên hộc MDF 30 phủ veneer sồi',
-  door: 'JN-02 Cánh tủ đế MDF 18 sơn trắng mờ, mở nhấn (push-open)',
+  fin: 'Vách đứng MDF chống ẩm phủ veneer sồi, dày 50',
+  back: 'Vách lưng MDF 20 phủ veneer sồi, bắt vít vào khung tường mỗi 600',
+  shelf: 'Mặt kệ trưng bày MDF 30 phủ veneer sồi, nẹp chỉ cạnh',
+  niche_top: 'Đợt trên hộc MDF 30 phủ veneer sồi',
+  door: 'Cánh tủ đế MDF 18 sơn trắng mờ, mở nhấn (push-open)',
   carcass: 'Thùng tủ đế MDF 18 sơn trắng, đợt trong chỉnh cao',
   plinth: 'Chân lùi MDF 18 sơn xám đậm, chân tăng chỉnh cao độ',
-  header: 'JN-03 Bảng tiêu đề: mặt mica trắng sữa 5 mm in UV, hộp MDF 18 sơn trắng, LED module bên trong',
-  picture: 'JN-04 Tranh in UV trên alu 3 mm, treo nẹp cách vách lưng 10',
-  led: 'LT-03 LED dây 4000K trong thanh nhôm có nắp tán quang, âm dưới đợt trên',
+  header: 'Bảng tiêu đề: mặt mica trắng sữa 5 mm in UV, hộp MDF 18 sơn trắng, LED module bên trong',
+  picture: 'Tranh in UV trên alu 3 mm, treo nẹp cách vách lưng 10',
+  led: 'LT-07 LED dây 4000K trong thanh nhôm có nắp tán quang, âm dưới đợt trên',
   rail: 'Đố trên MDF 18 phủ veneer sồi',
-  pegboard: 'JN-06 Bảng đục lỗ (pegboard) trắng treo sản phẩm',
-  bulkhead: 'CL-02 Hộp trần thạch cao 12,5 sơn trắng trên khung xương',
+  pegboard: 'Bảng đục lỗ (pegboard) trắng treo sản phẩm',
+  bulkhead: 'CL-03 Hộp trần thạch cao 12,5 sơn trắng trên khung xương',
+};
+const DISPLAY_MATERIALS_EN = {
+  fin: 'Fins: moisture-resistant MDF, oak veneer, 50 thick',
+  back: 'Back panel: 20 MDF, oak veneer, screwed to the wall battens at 600',
+  shelf: 'Display shelf: 30 MDF, oak veneer, edge banded',
+  niche_top: 'Niche top shelf: 30 MDF, oak veneer',
+  door: 'Base doors: 18 MDF, white matt paint, push-to-open',
+  carcass: 'Base carcass: 18 MDF, white paint, adjustable shelf',
+  plinth: 'Recessed plinth: 18 MDF, dark grey paint, adjustable feet',
+  header: 'Header sign: 5 mm opal acrylic face, UV printed, 18 MDF box painted white, LED modules inside',
+  picture: 'Picture: UV print on 3 mm aluminium composite panel, hung on cleats 10 off the back panel',
+  led: 'LT-07 LED strip 4000K in an aluminium profile with a diffuser, recessed under the top shelf',
+  rail: 'Top rail: 18 MDF, oak veneer',
+  pegboard: 'White pegboard for hanging products',
+  bulkhead: 'CL-03 Bulkhead: 12.5 gypsum board on a metal frame, painted white',
 };
 const DISPLAY_SIZES = { plinth: 80, recess: 50, base: 450, shelf: 30, header: 400, rail: 110, fin: 50, back: 20, depth: 500, picture: [1450, 2000], panel: 18 };
 
@@ -2399,8 +2422,10 @@ export function displayDetail(p) {
   const ssc = num(p.section_scale ?? 10, 'section_scale', { positive: true });
   const [x0, y0] = pt(p.at ?? [0, 0], 'at');
   const assumed = [];
-  const mat = { ...DISPLAY_MATERIALS, ...(p.materials || {}) };
-  for (const k of Object.keys(DISPLAY_MATERIALS)) if (!p.materials?.[k]) assumed.push({ item: `materials.${k}`, value: DISPLAY_MATERIALS[k] });
+  const en = (p.language ?? getDrawingLanguage()) === 'en';
+  const DEF = en ? DISPLAY_MATERIALS_EN : DISPLAY_MATERIALS;
+  const mat = { ...DEF, ...(p.materials || {}) };
+  for (const k of Object.keys(DEF)) if (!p.materials?.[k]) assumed.push({ item: `materials.${k}`, value: DEF[k] });
   const o = { ...DISPLAY_SIZES, ...(p.display || {}) };
   for (const k of Object.keys(DISPLAY_SIZES)) if (p.display?.[k] === undefined) assumed.push({ item: `display.${k}`, value: Array.isArray(DISPLAY_SIZES[k]) ? DISPLAY_SIZES[k].join('-') : DISPLAY_SIZES[k] });
   const T = num(p.panel ?? o.panel, 'display.panel', { positive: true }), F = num(o.fin, 'display.fin', { positive: true }), d = num(o.depth, 'display.depth', { positive: true });
@@ -2413,6 +2438,11 @@ export function displayDetail(p) {
   const zPl = num(o.plinth, 'display.plinth'), zB = num(o.base, 'display.base'), zS = zB + num(o.shelf, 'display.shelf');
   const zTop = H - num(o.rail, 'display.rail'), zHd = zTop - num(o.header, 'display.header'), zNt = zHd - num(o.shelf, 'display.shelf');
   const pic = o.picture ? [num(o.picture[0], 'display.picture[0]'), num(o.picture[1], 'display.picture[1]')] : null;
+  if (zPl < 0) throw new PlanError('display.plinth must be 0 or more');
+  if (zB < zPl + 150) throw new PlanError(`display.base ${zB} must be at least 150 above the plinth (${zPl})`);
+  for (const k of ['shelf', 'header']) if (!(num(o[k], `display.${k}`) > 0)) throw new PlanError(`display.${k} must be more than 0`);
+  if (num(o.rail, 'display.rail') < T) throw new PlanError(`display.rail must be at least the panel (${T})`);
+  if (pic && pic[1] - pic[0] < 100) throw new PlanError(`display.picture ${pic.join('-')}: its top must be at least 100 above its bottom`);
   if (zNt < zS + 600) throw new PlanError(`the niche between the display shelf (${zS}) and the niche top (${zNt}) is under 600: raise height or lower display.base`);
   if (pic && (pic[0] < zS + 100 || pic[1] > zNt - 30)) throw new PlanError(`display.picture ${pic.join('-')} must lie between the display shelf (${zS}) and the niche top (${zNt})`);
   // bays between fins
@@ -2441,7 +2471,7 @@ export function displayDetail(p) {
     x = b.x1 + F;
   }
 
-  const out = [], sec = [];
+  const out = [], sec = [], warnings = [];
   const D = IL.detail, DC = IL.detailCut;
   const Xf = (v) => x0 + v, Yf = (z) => y0 + z;
   const R = (a, b, c, e, layer = D, extra) => out.push(rectE(Xf(a), Yf(b), Xf(c), Yf(e), layer, extra));
@@ -2458,19 +2488,23 @@ export function displayDetail(p) {
     R(xf, 0, xf + F, zTop);
   }
   for (const b of bays) {
-    Ln(b.x0, zPl, b.x1, zPl);
-    out.push(hatchE([[Xf(b.x0), Yf(0)], [Xf(b.x1), Yf(0)], [Xf(b.x1), Yf(zPl)], [Xf(b.x0), Yf(zPl)]], 'DOTS', 0.2 * sc));
+    if (zPl > 0) {
+      Ln(b.x0, zPl, b.x1, zPl);
+      out.push(hatchE([[Xf(b.x0), Yf(0)], [Xf(b.x1), Yf(0)], [Xf(b.x1), Yf(zPl)], [Xf(b.x0), Yf(zPl)]], 'DOTS', 0.2 * sc));
+    }
     if (b.w > 600) Ln((b.x0 + b.x1) / 2, zPl, (b.x0 + b.x1) / 2, zB);
     R(b.x0, zB, b.x1, zS);
     R(b.x0, zNt, b.x1, zHd);
     Ln(b.x0 + 20, zNt - 4, b.x1 - 20, zNt - 4, IL.strip);
     R(b.x0, zHd, b.x1, zTop);
     // the title of the bay on its header: an icon box and the title (subtitle under it)
-    const ih = Math.min(248, (zTop - zHd) * 0.62), ix = b.x0 + 68, iz = zHd + (zTop - zHd - ih) / 2;
-    if (b.title || b.icon !== false) {
+    const pad = Math.min(68, b.w * 0.08);
+    let ih = Math.min(248, (zTop - zHd) * 0.62, b.w * 0.28), ix = b.x0 + pad;
+    const iz = zHd + (zTop - zHd - ih) / 2;
+    if (ih >= 60 && b.icon !== false) {
       R(ix, iz, ix + ih, iz + ih);
       out.push(hatchE([[Xf(ix), Yf(iz)], [Xf(ix + ih), Yf(iz)], [Xf(ix + ih), Yf(iz + ih)], [Xf(ix), Yf(iz + ih)]], 'ANSI37', 0.15 * sc));
-    }
+    } else ih = -pad * 0.5;
     const room = b.x1 - (ix + ih + 40) - 30;
     const fit = (t, hMax) => Math.max(15, Math.min(hMax, (hMax * room) / Math.max(1, textWidth(t, hMax))));
     const th = fit(String(b.title ?? ''), Math.min(70, (zTop - zHd) * 0.17));
@@ -2482,14 +2516,17 @@ export function displayDetail(p) {
       Ln(b.x0 + 50, pic[0], b.x1 - 50, pic[1], IL.hidden, HID);
       Ln(b.x0 + 50, pic[1], b.x1 - 50, pic[0], IL.hidden, HID);
     }
-    if (b.pegboard) {
-      const top = pic && b.picture !== false ? pic[0] - 30 : zNt - 100;
+    const pegTop = pic && b.picture !== false ? pic[0] - 30 : zNt - 100;
+    if (b.pegboard && pegTop - (zS + 80) < 150) warnings.push(`bay ${bays.indexOf(b) + 1}: no room for the pegboard under the picture`);
+    if (b.pegboard && pegTop - (zS + 80) >= 150) {
+      const top = pegTop;
       R(b.x0 + 50, zS + 80, b.x1 - 50, top);
       out.push(hatchE([[Xf(b.x0 + 50), Yf(zS + 80)], [Xf(b.x1 - 50), Yf(zS + 80)], [Xf(b.x1 - 50), Yf(top)], [Xf(b.x0 + 50), Yf(top)]], 'DOTS', 0.4 * sc));
     }
   }
   // section mark through the first bay with a picture (else the first)
   const cut = bays.find((b) => b.picture !== false) ?? bays[0];
+  const cutPic = pic && cut.picture !== false ? pic : null;
   const sx = (cut.x0 + cut.x1) / 2 + cut.w / 4;
   const top = bulk ? ceiling : H;
   for (const [za, zb, tz] of [[-3.8 * sc, -0.8 * sc, -3.8 * sc], [top + 1 * sc, top + 4 * sc, top + 5 * sc]]) {
@@ -2499,7 +2536,7 @@ export function displayDetail(p) {
   const dim = (list, pts, dir, at2, scale, total = true) => list.push({ type: 'dim_chain', points: pts.map(P), direction: dir, at: P(at2), total: total && pts.length > 2, gap: 10 * scale, style: dimStyleName(scale), layer: IL.dims });
   const xs = [0, ...bays.flatMap((b) => [b.x0, b.x1]), w];
   dim(out, xs.map((v) => [Xf(v), Yf(0)]), 'horizontal', [Xf(0), Yf(0) - 12 * sc], sc);
-  const zs = [...new Set([0, zPl, zB, zS, ...(pic ? pic : []), zNt, zHd, zTop, H, ...(bulk ? [ceiling] : [])].map(r2))].sort((a, b) => a - b);
+  const zs = [...new Set([0, zPl, zB, zS, ...(pic && bays.some((b) => b.picture !== false) ? pic : []), zNt, zHd, zTop, H, ...(bulk ? [ceiling] : [])].map(r2))].sort((a, b) => a - b);
   dim(out, zs.map((z) => [Xf(0), Yf(z)]), 'vertical', [Xf(0) - 12 * sc, Yf(0)], sc);
   // material notes of the elevation, to its right
   const bR = bays[bays.length - 1];
@@ -2510,13 +2547,17 @@ export function displayDetail(p) {
     ['rail', [bR.x0 + bR.w * 0.7, (zTop + H) / 2]], ['header', [bR.x0 + bR.w * 0.92, zHd + 0.85 * (zTop - zHd)]],
     ['led', [bR.x0 + bR.w * 0.6, zNt - 4]], ['niche_top', [bR.x0 + bR.w * 0.3, (zNt + zHd) / 2]],
     ...(pic && picBay ? [['picture', [picBay.x0 + picBay.w * 0.75, pic[0] + (pic[1] - pic[0]) * 0.3]]] : []),
-    ...(pegBay ? [['pegboard', [pegBay.x0 + pegBay.w * 0.7, zS + 200]]] : []),
+    ...(pegBay && !warnings.length ? [['pegboard', [pegBay.x0 + pegBay.w * 0.7, zS + 200]]] : []),
     ['fin', [bR.x0 - F / 2, (zS + zNt) / 2]], ['back', [bR.x0 + 25, (zS + zNt) / 2 - 150]],
-    ['shelf', [bR.x0 + bR.w * 0.3, (zB + zS) / 2]], ['door', [bR.x0 + bR.w * 0.25, (zPl + zB) / 2]], ['plinth', [bR.x0 + bR.w * 0.4, zPl / 2]],
+    ['shelf', [bR.x0 + bR.w * 0.3, (zB + zS) / 2]], ['door', [bR.x0 + bR.w * 0.25, (zPl + zB) / 2]],
+    ...(zPl > 0 ? [['plinth', [bR.x0 + bR.w * 0.4, zPl / 2]]] : []),
   ].map(([k, q]) => ({ text: mat[k], target: [Xf(q[0]), Yf(q[1])] }));
   const hN = 2.5 * sc, xN = Xf(w) + 25 * sc;
   layoutNotes(eTargets, { X: (v) => v, Y: (v) => v, xN, h: hN, scale: sc, floorY: Yf(0), out });
-  title(`MẶT ĐỨNG ${p.name ?? 'TỦ TRƯNG BÀY'}`, Xf(w / 2), Yf(0) - 32 * sc, sc, out);
+  const code = String(p.code ?? 'JN-10');
+  if (p.code === undefined) assumed.push({ item: 'code', value: code, note: 'the code of the casework (JN-01..JN-09 are the furniture library)' });
+  const name = p.name ?? `${en ? 'DISPLAY CASEWORK' : 'TỦ TRƯNG BÀY'} ${code}`;
+  title(en ? `ELEVATION - ${name}` : `MẶT ĐỨNG ${name}`, Xf(w / 2), Yf(0) - 32 * sc, sc, out);
   const eRight = xN + Math.max(...eTargets.map((t) => textWidth(t.text, hN)));
 
   // ---- section 1-1 beside it: x from the wall face (0) to the front (d), the wall on the left
@@ -2535,15 +2576,15 @@ export function displayDetail(p) {
   sec.push(polyE([S(o.back, 0), S(d, 0), S(d, zTop), S(o.back, zTop)], true, D));
   const W = 'DOTS';
   SR('back', 0, 0, o.back, H, W);
-  SR('plinth', d - 20 - o.recess - T, 0, d - 20 - o.recess, zPl, W);
+  if (zPl > 0) SR('plinth', d - 20 - o.recess - T, 0, d - 20 - o.recess, zPl, W);
   SR('carcass', o.back, zPl, d - 20, zPl + T, W);
   SR('door', d - 20 - T, zPl + 3, d - 20, zB - 3, W);
   SR('inner', o.back + 5, (zPl + zB) / 2 - T / 2, d - 20 - T - 7, (zPl + zB) / 2 + T / 2, W);
   SR('shelf', o.back, zB, d - 10, zS, W);
-  if (pic) {
-    SR('picture', o.back + 10, pic[0], o.back + 13, pic[1]);
-    SR(null, o.back, pic[0] + 50, o.back + 10, pic[0] + 90);
-    SR(null, o.back, pic[1] - 90, o.back + 10, pic[1] - 50);
+  if (cutPic) {
+    SR('picture', o.back + 10, cutPic[0], o.back + 13, cutPic[1]);
+    SR(null, o.back, cutPic[0] + 50, o.back + 10, cutPic[0] + 90);
+    SR(null, o.back, cutPic[1] - 90, o.back + 10, cutPic[1] - 50);
   }
   SR('niche_top', o.back, zNt, d, zHd, W);
   SR('led', d - 30, zNt - 8, d - 10, zNt);
@@ -2570,16 +2611,21 @@ export function displayDetail(p) {
   dim(sec, [0, o.back, d - 20, d].map((a) => S(a, 0)), 'horizontal', [sx0, Yf(0) - 10 * ssc], ssc);
   dim(sec, zs.map((z) => S(-120, z)), 'vertical', [sx0 - 120 - 10 * ssc, Yf(0)], ssc);
   const t1 = [];
-  title(`MẶT CẮT 1-1${p.name ? ` - ${p.name}` : ''}`, sx0 + d / 2, Yf(0) - 32 * ssc, ssc, t1);
+  title(`${en ? 'SECTION' : 'MẶT CẮT'} 1-1 - ${name}`, sx0 + d / 2, Yf(0) - 32 * ssc, ssc, t1);
   sec.push(...t1);
-  const schedule = [{ code: p.code ?? 'JN-01', description: p.name ?? 'Tủ trưng bày', unit: 'bộ', qty: 1 }];
+  const schedule = [{ code, description: p.name ?? (en ? 'Display casework' : 'Tủ trưng bày'), unit: en ? 'set' : 'bộ', qty: 1 }];
   return {
-    entities: out, section: sec, assumed, schedule, bays: bays.map((b) => ({ x0: r2(b.x0), w: r2(b.w), title: b.title })),
+    entities: out, section: sec, assumed, schedule, warnings, bays: bays.map((b) => ({ x0: r2(b.x0), w: r2(b.w), title: b.title })),
     extent: { min: [Xf(-200) - 25 * sc, Yf(0) - 45 * sc], max: [eRight, Yf(top)] },
     section_extent: { min: [sx0 - 120 - 25 * ssc, Yf(0) - 45 * ssc], max: [xS + Math.max(...sTargets.map((t) => textWidth(t.text, hS))), Yf(topZ)] },
   };
 }
 
+/**
+ * Joinery detail: kind kitchen (base + wall cabinets) or wardrobe. Front elevation with its modules, doors (hinge
+ * dashed), drawers, handles, dimension chains; section 1-1 through the carcass with panel thicknesses and material
+ * notes. Sizes in mm; materials {carcass, door, back, top, plinth, backsplash, rod, handle} replace the defaults.
+ */
 export function joineryDetail(p) {
   if ((p.kind ?? 'kitchen') === 'display') return displayDetail(p);
   const sc = num(p.scale ?? 10, 'scale', { positive: true });
@@ -2587,9 +2633,11 @@ export function joineryDetail(p) {
   const kind = p.kind ?? 'kitchen';
   if (!['kitchen', 'wardrobe'].includes(kind)) throw new PlanError('kind must be kitchen, wardrobe or display');
   const assumed = [];
-  const mat = { ...JN_MATERIALS, ...(p.materials || {}) };
+  const en = (p.language ?? getDrawingLanguage()) === 'en';
+  const DEF = en ? JN_MATERIALS_EN : JN_MATERIALS;
+  const mat = { ...DEF, ...(p.materials || {}) };
   const used = kind === 'kitchen' ? ['carcass', 'door', 'back', 'top', 'plinth', 'backsplash', 'handle'] : ['carcass', 'door', 'back', 'plinth', 'rod', 'handle'];
-  for (const k of used) if (!p.materials?.[k]) assumed.push({ item: `materials.${k}`, value: JN_MATERIALS[k] });
+  for (const k of used) if (!p.materials?.[k]) assumed.push({ item: `materials.${k}`, value: DEF[k] });
   const T = num(p.panel ?? 17, 'panel', { positive: true });
   const out = [];
   const D = IL.detail, DC = IL.detailCut;
@@ -2653,7 +2701,7 @@ export function joineryDetail(p) {
     }
     notesFor.push(['top', mat.top], ['door', mat.door], ['bottom', mat.carcass], ['back', mat.back], ['plinth', mat.plinth], ['handle', mat.handle]);
     if (wl) notesFor.push(['splash', mat.backsplash]);
-    title1 = `MẶT ĐỨNG ${p.name ?? 'TỦ BẾP'}`;
+    title1 = en ? `ELEVATION - ${p.name ?? 'KITCHEN CABINETS'}` : `MẶT ĐỨNG ${p.name ?? 'TỦ BẾP'}`;
     // Section depth dimensions: the base (bottom) and the wall cabinets (top).
     secDims = [[0, b.d, 0], ...(wl ? [[0, wl.d, wl.z0 + wl.h]] : [])];
   } else {
@@ -2677,7 +2725,7 @@ export function joineryDetail(p) {
     handleRect = [cd + 3 + T, 950, cd + 3 + T + 12, 1250];
     secShapes = [sR(0, 100, cd, h), sC(cd / 2, zt - 80, 12.5), sR(...handleRect)];
     notesFor.push(['door', mat.door], ['bottom', mat.carcass], ['back', mat.back], ['plinth', mat.plinth], ['rod', mat.rod], ['handle', mat.handle]);
-    title1 = `MẶT ĐỨNG ${p.name ?? 'TỦ ÁO'}`;
+    title1 = en ? `ELEVATION - ${p.name ?? 'WARDROBE'}` : `MẶT ĐỨNG ${p.name ?? 'TỦ ÁO'}`;
     secDims = [[0, d, 0]];
   }
   out.push(lineE([Xf(-200), Yf(0)], [Xf(w + 200), Yf(0)], DC));
@@ -2711,8 +2759,9 @@ export function joineryDetail(p) {
   layoutNotes(targets, { X: (x) => x, Y: (y) => y, xN, h: hN, scale: sc, floorY: Yf(0), out });
   for (const [s0, s1, z] of secDims) dimH([S(s0, z), S(s1, z)], z === 0 ? Yf(0) - 10 * sc : Yf(z) + 8 * sc, 10 * sc);
   dimV([...new Set(zDims)].sort((a, b2) => a - b2).map((z) => S(-120, z)), sx0 - 120 - 10 * sc);
-  title('MẶT CẮT 1-1', sx0 + depthMax / 2, Yf(0) - 32 * sc, sc, out);
-  const schedule = [{ code: kind === 'kitchen' ? 'JN-03' : 'JN-01', description: p.name ?? (kind === 'kitchen' ? 'Tủ bếp' : 'Tủ áo'), unit: 'bộ', qty: 1 }];
+  title(en ? 'SECTION 1-1' : 'MẶT CẮT 1-1', sx0 + depthMax / 2, Yf(0) - 32 * sc, sc, out);
+  const desc = kind === 'kitchen' ? (en ? 'Kitchen cabinets' : 'Tủ bếp') : (en ? 'Wardrobe' : 'Tủ áo');
+  const schedule = [{ code: kind === 'kitchen' ? 'JN-03' : 'JN-01', description: p.name ?? desc, unit: en ? 'set' : 'bộ', qty: 1 }];
   return {
     entities: out, assumed, schedule,
     extent: { min: [Xf(-200) - 25 * sc, Yf(0) - 45 * sc], max: [xN + Math.max(...targets.map((t) => textWidth(t.text, hN)), 0), Yf(hTotal + 200)] },

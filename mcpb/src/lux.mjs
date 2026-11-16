@@ -3,6 +3,7 @@
 // inter-reflected part by the integrating sphere, then Em, Emin, Emax and U0 against the requirements of TCVN 7114-1:2008
 // (ISO 8995-1:2002) per kind of room, with the power and the lighting power density.
 import { num, PlanError, pt } from './plan.mjs';
+import { words } from './standards.mjs';
 
 const r2 = (v) => Math.round(v * 100) / 100;
 const r0 = (v) => Math.round(v);
@@ -44,6 +45,7 @@ export const LUX_TASKS = {
   corridor: { em: 100, u0: 0.4, plane: 0, vi: 'Hành lang, lối đi', en: 'Corridor, circulation area' },
   entrance: { em: 100, u0: 0.4, plane: 0, vi: 'Sảnh vào', en: 'Entrance hall' },
   stairs: { em: 150, u0: 0.4, plane: 0, vi: 'Cầu thang', en: 'Stairs' },
+  plant: { em: 200, u0: 0.4, vi: 'Phòng kỹ thuật, phòng máy, phòng điện', en: 'Plant room, switch room' },
   // dwellings (not in TCVN 7114-1): reference values
   living: { em: 150, u0: null, standard: false, vi: 'Phòng khách (nhà ở, tham khảo)', en: 'Living room (dwelling, reference)' },
   bedroom: { em: 100, u0: null, standard: false, vi: 'Phòng ngủ (nhà ở, tham khảo)', en: 'Bedroom (dwelling, reference)' },
@@ -53,33 +55,35 @@ export const LUX_TASKS = {
   study: { em: 300, u0: null, standard: false, vi: 'Phòng làm việc (nhà ở, tham khảo)', en: 'Study (dwelling, reference)' },
 };
 
-// the task of a room by its name (Vietnamese or English), first match wins
+// the task of a room by the words of its name (Vietnamese or English), first match wins
 const TASK_BY_NAME = [
-  [/hành lang|lối đi|corridor|passage/i, 'corridor'],
-  [/cầu thang|thang bộ|stair/i, 'stairs'],
-  [/lễ tân|reception/i, 'reception'],
-  [/sảnh|entrance|lobby|foyer/i, 'entrance'],
-  [/họp|hội nghị|meeting|conference|boardroom/i, 'meeting'],
-  [/văn phòng|làm việc chung|office|workspace|open.?plan/i, 'office'],
-  [/thu ngân|till|cashier/i, 'till'],
-  [/trưng bày|showroom|gallery|bán hàng|cửa hàng|shop|retail|exhibition|display/i, 'sales'],
-  [/thư viện|đọc|library|reading/i, 'reading'],
-  [/lớp|phòng học|classroom/i, 'classroom'],
-  [/căng tin|căn tin|nhà ăn|pantry|canteen/i, 'canteen'],
-  [/chờ|lounge|waiting/i, 'lounge'],
-  [/nghỉ|rest room|break/i, 'rest'],
-  [/kho|store|storage/i, 'storage'],
-  [/vệ sinh|toilet|wc|thay đồ|washroom|locker/i, 'toilet'],
-  [/tắm|bath/i, 'bathroom'],
-  [/bếp|kitchen/i, 'kitchen'],
-  [/ăn|dining/i, 'dining'],
-  [/ngủ|bed/i, 'bedroom'],
-  [/khách|sinh hoạt|living|family/i, 'living'],
-  [/làm việc|study/i, 'study'],
-];
+  ['hành lang|lối đi|corridors?|passages?', 'corridor'],
+  ['cầu thang|thang bộ|stairs?|staircases?', 'stairs'],
+  ['lễ tân|reception', 'reception'],
+  ['sảnh|entrance|lobby|foyer', 'entrance'],
+  ['họp|hội nghị|hội thảo|meeting|conference|boardroom', 'meeting'],
+  ['văn phòng|làm việc|giám đốc|offices?|workspace|open plan|director|manager', 'office'],
+  ['thu ngân|till|cashier', 'till'],
+  ['trưng bày|showroom|gallery|bán hàng|cửa hàng|shop|retail|exhibition|display', 'sales'],
+  ['thư viện|đọc sách|phòng đọc|library|reading', 'reading'],
+  ['lớp học|phòng học|classrooms?', 'classroom'],
+  ['bếp nhà hàng|bếp công nghiệp|bếp ăn tập thể|commercial kitchen|restaurant kitchen', 'kitchen_commercial'],
+  ['căng tin|căn tin|nhà ăn|pantry|canteen', 'canteen'],
+  ['chờ|lounge|waiting', 'lounge'],
+  ['nghỉ|rest room|break room', 'rest'],
+  ['kỹ thuật|kĩ thuật|phòng máy|phòng điện|tủ điện|server|plant|switch room|electrical room', 'plant'],
+  ['kho|stores?|storage', 'storage'],
+  ['vệ sinh|toilets?|wc|thay đồ|washrooms?|lockers?|changing', 'toilet'],
+  ['tắm|baths?|bathrooms?', 'bathroom'],
+  ['bếp|kitchens?', 'kitchen'],
+  ['ăn|dining', 'dining'],
+  ['ngủ|beds?|bedrooms?', 'bedroom'],
+  ['khách|sinh hoạt|living|family', 'living'],
+  ['study', 'study'],
+].map(([alts, t]) => [words(alts), t]);
 
 export function taskOf(name) {
-  for (const [re, t] of TASK_BY_NAME) if (re.test(String(name))) return t;
+  for (const [re, t] of TASK_BY_NAME) if (re.test(name)) return t;
   return null;
 }
 
@@ -222,7 +226,7 @@ export function lightingCalc({ rooms, heights = {}, fixtures = [], given = {}, p
     const pz = g.plane !== undefined ? num(g.plane, `rooms.${name}.plane`) : task?.plane ?? plane;
     const H = heights[name] ?? 3000;
     const grid = roomGrid(poly, margin, spacing);
-    const lit = [], ind = [];
+    const lit = [];
     let power = 0, flux = 0, fluxInd = 0;
     for (const f of fx) {
       const ph = photometryOf(f, photometry);
@@ -316,7 +320,10 @@ export function lightingCalc({ rooms, heights = {}, fixtures = [], given = {}, p
     const ph = { ...(PHOTOMETRY[f.kind] ?? PHOTOMETRY.downlight), ...(photometry[f.kind] || {}), ...(photometry[f.code] || {}) };
     return [k, ph];
   }));
-  for (const [k, v] of Object.entries(usedPh)) if (!photometry[k] && !fixtures.some((f) => (f.code ?? f.kind) === k && f.lm !== undefined)) assumed.push({ item: `photometry.${k}`, value: v });
+  for (const [k, v] of Object.entries(usedPh)) {
+    const f = fixtures.find((x) => (x.code ?? x.kind) === k);
+    if (!photometry[k] && !photometry[f.kind] && !fixtures.some((x) => (x.code ?? x.kind) === k && x.lm !== undefined)) assumed.push({ item: `photometry.${k}`, value: v });
+  }
   // lights outside every room (or in a room without a ceiling) light nothing here: say so
   const lost = fixtures.filter((f) => !f.room || !rooms[f.room]);
   const warnings = lost.length ? [`${lost.length} light(s) outside the rooms of the plan, not counted: ${[...new Set(lost.map((f) => f.code ?? f.kind))].join(', ')}`] : [];

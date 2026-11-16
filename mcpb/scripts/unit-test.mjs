@@ -595,7 +595,7 @@ test('ceiling plan modes: finish without lights (step widths dimensioned), light
   assert.ok(nb[0].text === 'GHI CHÚ:' && nb[1].type === 'mtext' && nb[1].text.startsWith('1. ') && nb[1].text.includes('\n6. '));
 });
 
-test('joinery: display casework, elevation and section 1-1 at their own scales', () => {
+test('joinery: display casework, elevation and section 1-1 at their own scales', async () => {
   const r = joineryDetail({ kind: 'display', width: 5750, bays: [{ title: 'SẢN PHẨM MỚI', subtitle: 'NEW ARRIVALS' }, {}, {}, {}, {}, { pegboard: true, picture: false }] });
   noNaN(r.entities);
   noNaN(r.section);
@@ -609,8 +609,11 @@ test('joinery: display casework, elevation and section 1-1 at their own scales',
   // one picture per bay but the pegboard one; the title of the bay on its header
   assert.equal(r.entities.filter((e) => e.type === 'line' && e.layer === 'A-DETL' && e.linetype).length, 0);
   assert.ok(r.entities.some((e) => e.type === 'text' && e.text === 'SẢN PHẨM MỚI') && r.entities.some((e) => e.text === 'NEW ARRIVALS'));
-  assert.ok(r.entities.some((e) => e.type === 'leader' && e.text.startsWith('JN-06')), 'the pegboard has its note');
-  assert.ok(r.section.some((e) => e.type === 'leader' && e.text.startsWith('LT-03')) && r.section.some((e) => e.text === 'MẶT CẮT 1-1'));
+  assert.ok(r.entities.some((e) => e.type === 'leader' && e.text.startsWith('Bảng đục lỗ')), 'the pegboard has its note');
+  assert.ok(r.section.some((e) => e.type === 'leader' && e.text.startsWith('LT-07')) && r.section.some((e) => e.text === 'MẶT CẮT 1-1 - TỦ TRƯNG BÀY JN-10'));
+  // codes of their own: none of the furniture library (JN-01..09), the ceiling lamp (LT-03) or the damp-proof ceiling (CL-02)
+  assert.ok(![...r.entities, ...r.section].some((e) => e.type === 'leader' && /^(JN-0\d|LT-0[1-6]|CL-0[12]) /.test(e.text)));
+  assert.equal(r.schedule[0].code, 'JN-10');
   // every note once in the section
   const texts = r.section.filter((e) => e.type === 'leader').map((e) => e.text);
   assert.equal(new Set(texts).size, texts.length);
@@ -625,6 +628,22 @@ test('joinery: display casework, elevation and section 1-1 at their own scales',
   assert.throws(() => joineryDetail({ kind: 'display', width: 3000, height: 1500 }), /under 600/);
   assert.throws(() => joineryDetail({ kind: 'display', width: 3000, display: { picture: [300, 2000] } }), /display.picture/);
   assert.throws(() => joineryDetail({ kind: 'cupboard' }), /kitchen, wardrobe or display/);
+  assert.throws(() => joineryDetail({ kind: 'display', width: 2000, display: { picture: [1800, 1500] } }), /at least 100 above its bottom/);
+  assert.throws(() => joineryDetail({ kind: 'display', width: 2000, display: { base: 100 } }), /at least 150 above the plinth/);
+  // no plinth: no flat hatch, no plinth in the section
+  const np = joineryDetail({ kind: 'display', width: 2000, display: { plinth: 0 } });
+  assert.ok(!np.entities.some((e) => e.type === 'hatch' && e.boundary[0][1] === e.boundary[2][1]));
+  assert.ok(![...np.entities, ...np.section].some((e) => e.type === 'leader' && e.text.startsWith('Chân lùi')));
+  // narrow bays: the icon stays inside its bay
+  const nb = joineryDetail({ kind: 'display', width: 1000, bays: [{ w: 300, title: 'A' }, { w: 300 }, { w: 300 }], display: { fin: 25 } });
+  const icons = nb.entities.filter((e) => e.type === 'hatch' && e.pattern === 'ANSI37');
+  assert.ok(icons.every((h, i) => h.boundary[0][0] > nb.bays[i].x0 && h.boundary[1][0] < nb.bays[i].x0 + nb.bays[i].w), JSON.stringify(icons.map((h) => h.boundary[0])));
+  // a pegboard without room under a low picture is left out with a warning; a section through a bay without a picture shows none
+  assert.equal(joineryDetail({ kind: 'display', width: 2000, bays: [{ pegboard: true }, {}], display: { picture: [580, 1200] } }).warnings.length, 1);
+  assert.ok(!joineryDetail({ kind: 'display', width: 2000, bays: [{ picture: false }, { picture: false }] }).section.some((e) => e.type === 'leader' && e.text.startsWith('Tranh in UV')));
+  // an update draws the view as it was: a null (no ceiling, no wall cabinets) is kept with the view
+  const { keptArgs } = await import('../src/views.mjs');
+  assert.deepEqual(keptArgs('draw_joinery_detail', { kind: 'display', ceiling: null, wall: null, at: [0, 0] }), { kind: 'display', ceiling: null, wall: null });
 });
 
 test('lighting: illuminance from point sources, tasks by room name, the lights of the ceiling plan', async () => {
@@ -645,6 +664,9 @@ test('lighting: illuminance from point sources, tasks by room name, the lights o
   assert.ok(g.points.every((p) => p[0] > 500 && p[0] < 5500 && p[1] > 500 && p[1] < 3500));
   assert.deepEqual(['PHÒNG HỌP', 'HÀNH LANG', 'SẢNH LỄ TÂN', 'SHOWROOM', 'WC NAM', 'PHÒNG NGỦ 1', 'PHÒNG KHÁCH', 'KHO', 'XYZ'].map(taskOf),
     ['meeting', 'corridor', 'reception', 'sales', 'toilet', 'bedroom', 'living', 'storage', null]);
+  // whole words: "ăn" (dining) is not in "CĂN HỘ"; a restaurant kitchen, an office, a plant room
+  assert.deepEqual(['CĂN HỘ', 'BẾP NHÀ HÀNG', 'PHÒNG LÀM VIỆC', 'PHÒNG KỸ THUẬT', 'PHÒNG ĂN', 'Meeting room 2', 'BẾP ĂN', 'BẾP ĂN TẬP THỂ'].map(taskOf),
+    [null, 'kitchen_commercial', 'office', 'plant', 'dining', 'meeting', 'kitchen', 'kitchen_commercial']);
   // the ceiling plan keeps its lights: the band downlights hang from the band (150 lower), the lamp from the field
   const c = ceilingPlan({ rooms: { 'PHÒNG HỌP': ROOM }, finishes: { 'PHÒNG HỌP': resolveFinish('PHÒNG NGỦ') }, scale: 50 });
   assert.ok(c.fixtures.filter((f) => f.kind === 'downlight').every((f) => f.z === 2850 && f.room === 'PHÒNG HỌP'));
@@ -1568,7 +1590,7 @@ test('review fixes: structural notes in English, view titles follow the language
   assert.ok(!texts.some((t) => /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừữựỳỵỷỹ]/i.test(t)), texts.filter((t) => /[ăâđêôơư]/i.test(t)).slice(0, 3).join(' | '));
   assert.ok(texts.includes('MEMBER') && texts.some((t) => /^Concrete B20/.test(t)));
   setDrawingLanguage('en');
-  assert.ok(viewTitle('PLAN', 0, 0, 100, 'L').some((e) => e.text === 'SCALE: 1/100'));
+  assert.ok(viewTitle('PLAN', 0, 0, 100, 'L').some((e) => e.text === 'SCALE 1:100'));
   setDrawingLanguage('vi');
   assert.ok(viewTitle('MẶT BẰNG', 0, 0, 100, 'L').some((e) => e.text === 'TỶ LỆ: 1/100'));
 });
@@ -2479,8 +2501,9 @@ test('views: the id of a view, a free id, what is kept with it, the view an upda
   // a view drawn again without update is a view of its own
   assert.equal(V.freeId('draw_section:mark=A', []), 'draw_section:mark=A');
   assert.equal(V.freeId('draw_section:mark=A', ['draw_section:mark=A', 'draw_section:mark=A#2']), 'draw_section:mark=A#3');
-  // kept with the view: its arguments without the plan and the run; the building of draw_plan is kept once, as the plan
-  assert.deepEqual(V.keptArgs('draw_ceiling_plan', { floor: 2, mode: 'lighting', plan: { walls: [] }, update: true, at: [0, 0], spacing: 1200, notes: null }), { floor: 2, mode: 'lighting', spacing: 1200 });
+  // kept with the view: its arguments without the plan and the run (a null is a value: none); the building of draw_plan
+  // is kept once, as the plan
+  assert.deepEqual(V.keptArgs('draw_ceiling_plan', { floor: 2, mode: 'lighting', plan: { walls: [] }, update: true, at: [0, 0], spacing: 1200, legend: undefined, wall: null }), { floor: 2, mode: 'lighting', spacing: 1200, wall: null });
   assert.deepEqual(V.keptArgs('draw_plan', { walls: [1], floors: [2], dimensions: ['bottom'], scale: 100, update: true }), { dimensions: ['bottom'], scale: 100 });
   assert.deepEqual(V.keptPlan({ walls: [1], scale: 100, update: true, dry_run: false, north: null }), { walls: [1], scale: 100 });
   assert.equal(V.hashOf('a').length, 12);
@@ -2828,6 +2851,78 @@ test('plumbing set: shaft and stacks, fixtures, supply and drainage runs, septic
   const wb = plumbingWorkbook(D, Q);
   assert.ok(wb.subarray(0, 2).toString() === 'PK' && (wb.toString('latin1').match(/<f>/g) || []).length > 20, 'live formulas');
   assert.ok(!wb.toString('utf8').includes('>NaN<'), 'every measured length is a number');
+});
+
+test('English sets: codes, decimal marks and texts in English; room names of both languages; marks', async () => {
+  const VI = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
+  const floors = mepFloorsOf();
+  for (const f of floors) {
+    const finishes = Object.fromEntries(Object.keys(f.rooms).map((n) => [n, resolveFinish(n, {}, [], f.height)]));
+    f.lights = ceilingPlan({ rooms: f.rooms, finishes, items: f.items, mode: 'lighting', scale: 100 }).entities
+      .filter((e) => e.type === 'block' && /^MCP_DEN_/.test(e.name)).map((e) => ({ kind: e.name === 'MCP_DEN_DOWNLIGHT' ? 'downlight' : 'ceiling_lamp', at: e.at }));
+  }
+  // the user's own words (floor and room names) may stay Vietnamese; nothing else
+  const user = new Set(floors.flatMap((f) => [f.name, ...Object.keys(f.rooms)]).flatMap((n) => String(n).split(/[\s,;:()+]+/)));
+  const own = (texts) => texts.filter((t) => VI.test(t) && !String(t).split(/[\s,;:()+]+/).every((w) => !VI.test(w) || user.has(w)));
+  const textsOf = (ents) => ents.flatMap((e) => (e.type === 'table' ? e.rows.flat().map((c) => String(c?.text ?? c ?? '')) : e.text !== undefined ? [String(e.text)] : []));
+  const S = await import('../src/standards.mjs');
+  const E = await import('../src/electrical.mjs');
+  S.setDrawingLanguage('en');
+  try {
+    const D = electricalDesign({ floors, lang: 'en' });
+    assert.deepEqual(D.boards.map((b) => b.id), ['DB-1', 'DB-2']);
+    assert.equal(D.main.id, 'MDB');
+    const ids = D.boards.flatMap((b) => b.circuits.map((c) => c.id));
+    assert.ok(ids.some((i) => /^AC\d/.test(i)) && ids.some((i) => /^CK\d/.test(i)) && !ids.some((i) => /^(ĐH|NL|BT|BN)/.test(i)), ids.join(','));
+    assert.equal(D.boards[0].circuits.find((c) => c.kind === 'socket').cable, '2x2.5+E2.5');
+    const Q = electricalQuantities(D, { lang: 'en' });
+    const et = [
+      ...textsOf([...electricalPlan(D, 0, { mode: 'power', legendAt: [8000, 9000], lang: 'en' }).entities, ...electricalPlan(D, 0, { mode: 'lighting', legendAt: [8000, 9000], lang: 'en' }).entities]),
+      ...textsOf([...singleLineDiagram(D, { lang: 'en' }).entities, ...E.riserDiagram(D, { lang: 'en' }).entities]),
+      ...Q.rows.flatMap((r) => [r.item ?? '', r.how ?? '']), ...E.electricalTables(D, Q, 'en').flatMap((t) => t.rows.flat().map(String)), ...E.electricalBasis(D, 'en'),
+    ];
+    assert.deepEqual(own(et), []);
+    assert.ok(et.some((t) => t.startsWith('Pd = Kd x ΣPd')) && et.includes('Pd (W)'), 'the load symbols in English');
+    // plumbing: the codes of the plans, risers and the septic tank in English
+    const P = plumbingDesign({ floors, roofDrains: [{ at: [400, 400] }, { at: [5600, 8600] }], lang: 'en' });
+    const pt = textsOf([
+      ...plumbingPlan(P, 0, { mode: 'drainage', legendAt: [8000, 9000], lang: 'en' }).entities, ...plumbingPlan(P, 0, { mode: 'supply', legendAt: [8000, 9000], lang: 'en' }).entities,
+      ...plumbingRisers(P, { lang: 'en' }).entities, ...septicDetail(P, { lang: 'en' }).entities,
+    ]);
+    assert.deepEqual(own(pt), []);
+    assert.ok(pt.includes('ST') && pt.includes('MH1') && pt.some((t) => /^SP D110/.test(t)), pt.join('|').slice(0, 400));
+    assert.ok(!pt.some((t) => /(^|\s)(TX|TR|TM|CL|CN|OĐ|BTH|HG\d)\b/.test(t)), 'no Vietnamese codes');
+    // joinery: kitchen, wardrobe, display casework
+    for (const kind of ['kitchen', 'wardrobe', 'display']) {
+      const r = joineryDetail({ kind, width: 2400 });
+      assert.deepEqual(own(textsOf([...r.entities, ...(r.section || [])])), [], kind);
+      assert.ok(textsOf(r.entities).some((t) => t.startsWith('ELEVATION - ')), kind);
+    }
+  } finally {
+    S.setDrawingLanguage('vi');
+  }
+  // the Vietnamese sets keep their codes
+  assert.equal(electricalDesign({ floors }).main.id, 'TĐ-T');
+  // room names: whole words of either language ("ĂN" is not in "VĂN PHÒNG" or "CĂN HỘ", "KHO" not in "KHOA")
+  const { roomKind } = await import('../src/mep.mjs');
+  assert.deepEqual(['VĂN PHÒNG', 'CĂN HỘ', 'KHOA NỘI', 'PHÒNG ĂN', 'BẾP + ĂN', 'BATHROOM 2', 'MASTER BEDROOM', 'LIVING ROOM', 'STAIRCASE', 'WC1', 'P.NGỦ 2'].map(roomKind),
+    ['office', 'room', 'room', 'dining', 'kitchen', 'wc', 'bedroom', 'living', 'stair', 'wc', 'bedroom']);
+  // marks: the tag of the floor, beams by language
+  const { beamPrefix } = await import('../src/calc.mjs');
+  assert.deepEqual(['TẦNG 2', 'TUM', 'TẦNG LỬNG', 'ROOF', 'Level 3'].map((n) => S.floorTag(n)), ['2', 'T', 'TL', 'R', '3']);
+  assert.deepEqual([beamPrefix('floor', 'TẦNG 2', 1), beamPrefix('floor', 'TẦNG 2', 1, 'en'), beamPrefix('foundation', '', 0, 'en'), beamPrefix('floor', 'TUM', 4), beamPrefix('roof', '', 4, 'en')],
+    ['D2.', 'B2.', 'GB.', 'DT.', 'RB.']);
+  // a floor whose name ends in no number keeps the number of its place (as before)
+  assert.equal(beamPrefix('floor', 'TẦNG LỬNG', 1), 'D2.');
+  // the slabs carry the tag of their beams: S2-1 with D2.1, the roof M (R in English)
+  const spec5 = { floors: [{ name: 'TẦNG 1', height: 3300, walls: [{ points: [[0, 0], [5000, 0], [5000, 6000], [0, 6000]], closed: true, thickness: 200 }], columns: [{ at: [0, 0] }, { at: [5000, 0] }, { at: [5000, 6000] }, { at: [0, 6000] }] }, { name: 'TẦNG LỬNG', height: 3000 }] };
+  for (const lang of ['vi', 'en']) {
+    const R = structuralCalc({ spec: spec5, lang });
+    const fl = R.slabs.find((s) => s.kind === 'floor');
+    assert.equal(fl.tag, '2', lang);
+    assert.ok(fl.types.every((t) => t.name.startsWith(lang === 'en' ? 'B2.' : 'D2.')), fl.types.map((t) => t.name).join(','));
+    assert.equal(R.slabs.find((s) => s.kind === 'roof').tag, lang === 'en' ? 'R' : 'M');
+  }
 });
 
 // ---- smoke test: the bundled server starts, lists its tools and reports a clear error without AutoCAD

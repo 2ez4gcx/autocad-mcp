@@ -59,7 +59,7 @@ export function freeId(base, taken) {
 export function keptArgs(tool, args = {}) {
   const out = {};
   for (const [k, v] of Object.entries(args || {})) {
-    if (v === undefined || v === null || NOT_KEPT.has(k)) continue;
+    if (v === undefined || NOT_KEPT.has(k)) continue;
     if (tool === 'draw_plan' && BUILDING.has(k)) continue;
     out[k] = v;
   }

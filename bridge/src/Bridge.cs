@@ -86,7 +86,7 @@ namespace AcadMcp
 
     public static class Bridge
     {
-        public static readonly string VERSION = "1.2.1";
+        public static readonly string VERSION = "1.3.0";
         const int MaxRequestBytes = 64 * 1024 * 1024;
 
         static Control _ui;

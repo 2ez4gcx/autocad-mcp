@@ -47,8 +47,17 @@ export const FIXTURES = {
   washer: { vi: 'Máy giặt (van cấp, ống xả)', en: 'Washing machine', N: 1, q: 0.2, drain: 0.3, dn: 60, sys: 'waste', hot: false },
   tap: { vi: 'Vòi rửa sân, tưới cây', en: 'Hose tap', N: 1, q: 0.2, drain: 0, dn: 0, sys: null, hot: false },
 };
-/** Codes written at the equipment on the plans (the legend says what they are). */
-export const CODE = { shaft: 'OĐ', septic: 'BTH', meter: 'ĐHN', pump: 'MB', tank: 'BỒN' };
+/**
+ * Codes written on the plans and diagrams (the legend says what they are), in the language of the set: equipment
+ * (shaft, septic tank, water meter, pump, tank, manholes) and the pipe systems (cold and hot water, soil, waste,
+ * rainwater, vent). CODE: the Vietnamese ones.
+ */
+export const PCODE = {
+  vi: { shaft: 'OĐ', septic: 'BTH', meter: 'ĐHN', pump: 'MB', tank: 'BỒN', manhole: 'HG', cold: 'CL', hot: 'CN', soil: 'TX', waste: 'TR', rain: 'TM', vent: 'TH' },
+  en: { shaft: 'SH', septic: 'ST', meter: 'WM', pump: 'PU', tank: 'TANK', manhole: 'MH', cold: 'CW', hot: 'HW', soil: 'SP', waste: 'WP', rain: 'RWP', vent: 'VP' },
+};
+export const CODE = PCODE.vi;
+const codesFor = (lang) => PCODE[lang] ?? PCODE.vi;
 
 /** Short names of the fixtures for the diagrams. */
 const SHORT = {
@@ -63,12 +72,12 @@ const TANK_D = [[500, 770], [1000, 960], [1500, 1180], [2000, 1180], [3000, 1380
 const tankDiameter = (v) => (TANK_D.find(([vol]) => vol >= v) ?? TANK_D[TANK_D.length - 1])[1];
 
 const SYS = {
-  cold: { layer: 'cold_water', vi: 'Ống cấp nước lạnh PPR', en: 'Cold water PPR', mat: 'PPR', abbr: 'CL' },
-  hot: { layer: 'hot_water', vi: 'Ống cấp nước nóng PPR', en: 'Hot water PPR', mat: 'PPR', abbr: 'CN' },
-  soil: { layer: 'soil', vi: 'Ống thoát xí uPVC', en: 'Soil uPVC', mat: 'uPVC', abbr: 'TX' },
-  waste: { layer: 'waste', vi: 'Ống thoát nước rửa uPVC', en: 'Waste uPVC', mat: 'uPVC', abbr: 'TR' },
-  rain: { layer: 'rain', vi: 'Ống thoát nước mưa uPVC', en: 'Rainwater uPVC', mat: 'uPVC', abbr: 'TM' },
-  vent: { layer: 'vent', vi: 'Ống thông hơi uPVC', en: 'Vent uPVC', mat: 'uPVC', abbr: 'TH' },
+  cold: { layer: 'cold_water', vi: 'Ống cấp nước lạnh PPR', en: 'Cold water PPR', mat: 'PPR' },
+  hot: { layer: 'hot_water', vi: 'Ống cấp nước nóng PPR', en: 'Hot water PPR', mat: 'PPR' },
+  soil: { layer: 'soil', vi: 'Ống thoát xí uPVC', en: 'Soil uPVC', mat: 'uPVC' },
+  waste: { layer: 'waste', vi: 'Ống thoát nước rửa uPVC', en: 'Waste uPVC', mat: 'uPVC' },
+  rain: { layer: 'rain', vi: 'Ống thoát nước mưa uPVC', en: 'Rainwater uPVC', mat: 'uPVC' },
+  vent: { layer: 'vent', vi: 'Ống thông hơi uPVC', en: 'Vent uPVC', mat: 'uPVC' },
 };
 
 /** Points of an L route from a to b with its corner by the wall it runs along (the corner nearest a wall of the rooms). */
@@ -413,6 +422,7 @@ export function plumbingPlan(design, k, { mode = 'supply', offset = [0, 0], scal
   const F = design.floors[k];
   const O = design.options, E = design.equipment;
   const out = [], en = lang === 'en', sc = scale, h = 1.8 * sc;
+  const CODE = codesFor(lang);
   const at = (p) => add(p, offset);
   const supply = mode === 'supply';
   const labels = labelPlacer(h, hard, limit);
@@ -461,7 +471,7 @@ export function plumbingPlan(design, k, { mode = 'supply', offset = [0, 0], scal
     }
     if (!best || best.l < 8 * sc) continue;
     const slope = !supply && r.sys !== 'rain' ? ` i=${O.slopes[r.dn] ?? 2}%` : '';
-    const t = `${SYS[r.sys].abbr} D${r.dn}${slope}`;
+    const t = `${CODE[r.sys]} D${r.dn}${slope}`;
     const v = sub(best.b, best.a);
     // along the pipe, read from the bottom or the right of the sheet
     let rot = Math.atan2(v[1], v[0]) * 180 / Math.PI;
@@ -510,7 +520,7 @@ export function plumbingPlan(design, k, { mode = 'supply', offset = [0, 0], scal
         out.push(lineE(at([x, s.c[1] - s.B / 2]), at([x, s.c[1] + s.B / 2]), L('underground'), { scale_linetype: true }));
       }
       equipLabel(CODE.septic, s.c, 40);
-      for (const [p, name] of [[E.hg1, 'HG1'], [E.hg2, 'HG2']]) {
+      for (const [p, name] of [[E.hg1, `${CODE.manhole}1`], [E.hg2, `${CODE.manhole}2`]]) {
         out.push(polyE([[-300, -300], [300, -300], [300, 300], [-300, 300]].map((q) => at(add(p, q))), true, L('plumb_equipment')));
         out.push(polyE([[-200, -200], [200, -200], [200, 200], [-200, 200]].map((q) => at(add(p, q))), true, L('plumb_equipment')));
         equipLabel(name, p);
@@ -528,7 +538,7 @@ export function plumbingPlan(design, k, { mode = 'supply', offset = [0, 0], scal
     for (const sys of sysShown) {
       if (!has(sys)) continue;
       const dns = [...new Set(F.runs.filter((r) => r.sys === sys).map((r) => r.dn))].sort((a, b) => a - b).map((d) => `D${d}`).join(', ');
-      rows.push({ line: L(SYS[sys].layer), extra: { scale_linetype: true }, text: `${SYS[sys].abbr}: ${en ? SYS[sys].en : SYS[sys].vi} ${dns}` });
+      rows.push({ line: L(SYS[sys].layer), extra: { scale_linetype: true }, text: `${CODE[sys]}: ${en ? SYS[sys].en : SYS[sys].vi} ${dns}` });
     }
     if (!supply && F.ground) rows.push({ line: L('underground'), extra: { scale_linetype: true }, text: en ? 'Pipes and tank under the ground floor slab' : 'Ống, bể đi ngầm dưới sàn tầng 1 (nét đứt)' });
     if (supply) {
@@ -542,14 +552,14 @@ export function plumbingPlan(design, k, { mode = 'supply', offset = [0, 0], scal
       }
       if (k === design.floors.length - 1 && E.tank) codeRow(CODE.tank, en ? `Stainless tank ${O.tank} L on ${E.tank.onTower ? 'the tower roof' : 'the roof'}` : `Bồn inox ${O.tank}L đặt trên ${E.tank.onTower ? 'mái tum' : 'mái'}`);
     } else {
-      codeRow(CODE.shaft, `${en ? 'Shaft: stacks' : 'Hộp gen: ống đứng'} ${SYS.soil.abbr} D${O.pipes.soil}, ${SYS.waste.abbr} D${O.pipes.waste_stack}${design.shafts.some((g) => g.stacks.rain) ? `, ${SYS.rain.abbr} D${O.pipes.rain}` : ''}`);
-      if (k === design.floors.length - 1) codeRow('TH', en ? `Vents of the stacks, ${vent} m over the roof` : `Ống thông hơi cao ${vent}m trên mặt mái`);
+      codeRow(CODE.shaft, `${en ? 'Shaft: stacks' : 'Hộp gen: ống đứng'} ${CODE.soil} D${O.pipes.soil}, ${CODE.waste} D${O.pipes.waste_stack}${design.shafts.some((g) => g.stacks.rain) ? `, ${CODE.rain} D${O.pipes.rain}` : ''}`);
+      if (k === design.floors.length - 1) codeRow(CODE.vent, en ? `Vents of the stacks, ${vent} m over the roof` : `Ống thông hơi cao ${vent}m trên mặt mái`);
       if (F.ground) {
         codeRow(CODE.septic, en ? `Septic tank, 3 compartments, ${E.septic.V} m³, under the slab` : `Bể tự hoại 3 ngăn V=${String(E.septic.V).replace('.', ',')}m³, dưới sàn tầng 1`);
-        codeRow('HG', en ? 'Manholes 600x600; HG2 to the street sewer' : 'Hố ga 600x600; HG2 ra cống chung');
+        codeRow(CODE.manhole, en ? `Manholes 600x600; ${CODE.manhole}2 to the street sewer` : `Hố ga 600x600; ${CODE.manhole}2 ra cống chung`);
       }
       rows.push({ block: 'MCP_PHEU_THU', real: true, layer: L('waste'), text: en ? 'Floor drain D60 / roof and balcony drain D90' : 'Phễu thu sàn D60 / phễu thu mái, ban công D90' });
-      if (F.downpipes.length) rows.push({ draw: (p) => [{ type: 'circle', center: P(p), radius: r2(0.9 * sc), layer: L('rain') }], text: en ? `Rainwater downpipe ${SYS.rain.abbr} D${O.pipes.rain}` : `Ống đứng thoát nước mưa ${SYS.rain.abbr} D${O.pipes.rain}` });
+      if (F.downpipes.length) rows.push({ draw: (p) => [{ type: 'circle', center: P(p), radius: r2(0.9 * sc), layer: L('rain') }], text: en ? `Rainwater downpipe ${CODE.rain} D${O.pipes.rain}` : `Ống đứng thoát nước mưa ${CODE.rain} D${O.pipes.rain}` });
     }
     const lg = legend(en ? (supply ? 'WATER SUPPLY LEGEND' : 'DRAINAGE LEGEND') : (supply ? 'KÝ HIỆU CẤP NƯỚC' : 'KÝ HIỆU THOÁT NƯỚC'), rows, legendAt, sc, L('plumb_text'), L('plumb_text'));
     out.push(...lg.entities);
@@ -593,6 +603,7 @@ export const ventHeight = (design) => (design.equipment.terrace ? 3000 : 700);
 export function plumbingRisers(design, { at = [0, 0], scale = 50, lang = 'vi' } = {}) {
   const out = [];
   const en = lang === 'en', s = scale, O = design.options;
+  const CODE = codesFor(lang);
   const T = (t, p, hh = 2.2, align = 'left', layer = L('plumb_text')) => out.push(textE(t, p, hh * s, layer, align));
   const floors = design.floors;
   const hpx = 32, W = 150;
@@ -645,8 +656,8 @@ export function plumbingRisers(design, { at = [0, 0], scale = 50, lang = 'vi' } 
   const yTop = lvl(floors.length) + 7 * s;
   out.push(lineE([xs, yTop], [xs, lvl(0) - 6 * s], L('soil')));
   out.push(lineE([xw, yTop], [xw, lvl(0) - 6 * s], L('waste'), { scale_linetype: true }));
-  T(`${SYS.soil.abbr} D${O.pipes.soil}`, [xs - 1.5 * s, lvl(floors.length) - 6 * s], 2, 'right');
-  T(`${SYS.waste.abbr} D${O.pipes.waste_stack}`, [xw + 1.5 * s, lvl(floors.length) - 6 * s], 2);
+  T(`${CODE.soil} D${O.pipes.soil}`, [xs - 1.5 * s, lvl(floors.length) - 6 * s], 2, 'right');
+  T(`${CODE.waste} D${O.pipes.waste_stack}`, [xw + 1.5 * s, lvl(floors.length) - 6 * s], 2);
   for (const x of [xs, xw]) out.push(polyE([[x - 2 * s, yTop], [x + 2 * s, yTop], [x + 2 * s, yTop + 2 * s], [x - 2 * s, yTop + 2 * s]], true, L('vent')));
   const vh = String(ventHeight(design) / 1000).replace('.', en ? '.' : ',');
   T(en ? `VENT CAPS ${vh} m ABOVE THE ${ventHeight(design) > 1000 ? 'TERRACE' : 'ROOF'}` : `CHỤP THÔNG HƠI CAO ${vh}m TRÊN ${ventHeight(design) > 1000 ? 'SÂN THƯỢNG' : 'MÁI'}`, [xw + 4 * s, yTop + 1 * s], 1.8);
@@ -670,7 +681,7 @@ export function plumbingRisers(design, { at = [0, 0], scale = 50, lang = 'vi' } 
   T(en ? `SEPTIC TANK ${design.equipment.septic.V} m³` : `BỂ TỰ HOẠI ${String(design.equipment.septic.V).replace('.', ',')}m³`, [xs, yg - 11 * s], 2, 'center');
   out.push(lineE([xs, lvl(0) - 6 * s], [xs, yg], L('soil')));
   const hgx = xm - 30 * s;
-  for (const [x, t] of [[hgx, 'HG1'], [xm, 'HG2']]) {
+  for (const [x, t] of [[hgx, `${CODE.manhole}1`], [xm, `${CODE.manhole}2`]]) {
     out.push(polyE([[x - 3 * s, yg - 6 * s], [x + 3 * s, yg - 6 * s], [x + 3 * s, yg], [x - 3 * s, yg]], true, L('plumb_equipment')));
     T(t, [x, yg - 9 * s], 2, 'center');
   }
@@ -691,6 +702,7 @@ export function plumbingRisers(design, { at = [0, 0], scale = 50, lang = 'vi' } 
 export function septicDetail(design, { at = [0, 0], scale = 25, lang = 'vi' } = {}) {
   const out = [];
   const en = lang === 'en', s = scale;
+  const CODE = codesFor(lang);
   const S = design.equipment.septic;
   const [Li, Bi, Hi] = S.inner;
   const w = 220, base = 200, lean = 100, cover = 100, free = 300;
@@ -720,8 +732,8 @@ export function septicDetail(design, { at = [0, 0], scale = 25, lang = 'vi' } = 
   out.push(lineE([x0 - X(600), y0 + X(Bo / 2)], [x0 + X(w + 150), y0 + X(Bo / 2)], L('soil')));
   out.push(lineE([x0 + X(Lo - w - 150), y0 + X(Bo / 2)], [x0 + X(Lo + 600), y0 + X(Bo / 2)], L('waste')));
   // short names over the stubs, clear of the width dimension beyond them
-  T(en ? `IN ${SYS.soil.abbr} D110` : `VÀO ${SYS.soil.abbr} D110`, [x0 - X(300), y0 + X(Bo / 2) + 1.2 * s], 1.8, 'center');
-  T(en ? 'OUT D110 → HG1' : 'RA D110 → HG1', [x0 + X(Lo + 300), y0 + X(Bo / 2) + 1.2 * s], 1.8, 'center');
+  T(en ? `IN ${CODE.soil} D110` : `VÀO ${CODE.soil} D110`, [x0 - X(300), y0 + X(Bo / 2) + 1.2 * s], 1.8, 'center');
+  T(en ? `OUT D110 → ${CODE.manhole}1` : `RA D110 → ${CODE.manhole}1`, [x0 + X(Lo + 300), y0 + X(Bo / 2) + 1.2 * s], 1.8, 'center');
   dim([x0, y0], [x0 + X(Lo), y0], -10 * s);
   for (const [a, b] of comps) dim([x0 + X(a), y0 + X(Bo)], [x0 + X(b), y0 + X(Bo)], 8 * s);
   // the overall width beyond the outlet pipe
@@ -774,7 +786,7 @@ export function septicDetail(design, { at = [0, 0], scale = 25, lang = 'vi' } = 
   const mx = x0 + X(Lo) + 60 * s, my = y0;
   out.push(rect([mx, my], [mx + X(1040), my + X(1040)]), rect([mx + X(220), my + X(220)], [mx + X(820), my + X(820)]));
   dim([mx, my], [mx + X(1040), my], -10 * s);
-  out.push(...viewTitle(en ? 'MANHOLE HG - PLAN' : 'MẶT BẰNG HỐ GA', mx + X(520), my - 22 * s, s, txt, lang));
+  out.push(...viewTitle(en ? `MANHOLE ${CODE.manhole} - PLAN` : 'MẶT BẰNG HỐ GA', mx + X(520), my - 22 * s, s, txt, lang));
   const msy = sy;
   out.push(rect([mx, msy], [mx + X(1040), msy + X(150)]));
   for (const xx of [mx, mx + X(820)]) out.push(rect([xx, msy + X(150)], [xx + X(220), msy + X(950)]));
@@ -783,7 +795,7 @@ export function septicDetail(design, { at = [0, 0], scale = 25, lang = 'vi' } = 
   out.push(lineE([mx + X(820), msy + X(450)], [mx + X(1440), msy + X(450)], L('waste')));
   dim([mx + X(1040), msy + X(150)], [mx + X(1040), msy + X(950)], -10 * s, 'vertical');
   T(en ? 'Inside 600x600, brick 220, RC cover 80 with a lifting hook' : 'Lòng hố 600x600, xây gạch 220, nắp BTCT dày 80 có móc', [mx, msy - 12 * s], 2);
-  out.push(...viewTitle(en ? 'MANHOLE HG - SECTION' : 'MẶT CẮT HỐ GA', mx + X(520), msy - X(lean) - 22 * s, s, txt, lang));
+  out.push(...viewTitle(en ? `MANHOLE ${CODE.manhole} - SECTION` : 'MẶT CẮT HỐ GA', mx + X(520), msy - X(lean) - 22 * s, s, txt, lang));
   return { entities: out };
 }
 

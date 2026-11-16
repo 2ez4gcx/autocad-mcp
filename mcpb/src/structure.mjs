@@ -607,7 +607,7 @@ export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = '
       const [a0, a1] = a.split('x').map(Number), [b0, b1] = b.split('x').map(Number);
       return a0 * a1 - b0 * b1;
     });
-    for (const q of pads) q.mark = q.mark ?? `M${padKeys.indexOf(`${q.B}x${q.L}`) + 1}`;
+    for (const q of pads) q.mark = q.mark ?? `${lang === 'en' ? 'F' : 'M'}${padKeys.indexOf(`${q.B}x${q.L}`) + 1}`;
     for (const q of pads) {
       const c = q.p;
       const r = [[c[0] - q.B / 2, c[1] - q.L / 2], [c[0] + q.B / 2, c[1] - q.L / 2], [c[0] + q.B / 2, c[1] + q.L / 2], [c[0] - q.B / 2, c[1] + q.L / 2]];
@@ -848,7 +848,7 @@ export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = '
     const lines = [
       ...footings.map((f) => (en ? `PAD FOOTING ${f.name} ${f.size} (${f.count} No.)` : `MÓNG ĐƠN ${f.name} ${f.size} (SL ${f.count})`)),
       en ? `BOTTOM ${fmtLv(-(foundation.depth ?? 1500))}` : `ĐÁY MÓNG ${fmtLv(-(foundation.depth ?? 1500))}`,
-      en ? 'GROUND BEAMS GM UNDER THE WALLS' : 'GIẰNG MÓNG GM DƯỚI TƯỜNG',
+      en ? 'GROUND BEAMS GB UNDER THE WALLS' : 'GIẰNG MÓNG GM DƯỚI TƯỜNG',
       ...(legend ? [legend] : []),
       ...foundationNotes,
     ];
@@ -901,7 +901,7 @@ export function beamSchedule({ beams, scale = 25, cover = 25, perRow = 3, lang =
   const items = beams.map((bm, i) => {
     const b = num(bm.b, `beams[${i}].b`, { positive: true }), h = num(bm.h, `beams[${i}].h`, { positive: true });
     const slab = num(bm.slab ?? 120, `beams[${i}].slab`, { min: 0 });
-    const flange = slab > 0 && bm.flange !== false && !/^GM/i.test(String(bm.name ?? ''));
+    const flange = slab > 0 && bm.flange !== false && !/^(GM|GB)/i.test(String(bm.name ?? ''));
     const bars = bm.bars ?? draftBars(b, h);
     if (!bm.bars) assumed.push({ item: `${bm.name}.bars`, value: `${bars.support.map((g) => `${g.n}Ø${g.d}`).join(' + ')} / ${bars.span.map((g) => `${g.n}Ø${g.d}`).join(' + ')}`, note: 'preliminary, for drafting: the engineer designs them' });
     const st = bm.stirrup ?? { d: 6, support: 100, span: 200 };

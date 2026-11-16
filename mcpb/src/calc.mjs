@@ -8,7 +8,7 @@
 // a licensed structural engineer checks it, calculates it again and signs it. Pure computation and draw_entities specs.
 import { buildModel, floorsOf } from './elevation.mjs';
 import { gridList, num, PlanError, uStairGeom } from './plan.mjs';
-import { TEXT_STYLE } from './standards.mjs';
+import { floorTag, TEXT_STYLE } from './standards.mjs';
 import { framingPlan, SL } from './structure.mjs';
 
 const r1 = (v) => Math.round(v * 10) / 10;
@@ -37,6 +37,17 @@ export const LIVE = [
   { key: 'store', re: /(KHO|STORE)/i, p: 2, vi: 'Kho nhỏ trong nhà ở', en: 'Small stores' },
   { key: 'room', re: /.*/, p: 1.5, vi: 'Phòng ở, phòng khách, bếp, phòng thờ', en: 'Rooms, living, kitchen' },
 ];
+/**
+ * The prefix of the beams of a slab: Vietnamese GM. ground beams (giằng móng), D2. floor 2 (dầm), DT. stair tower, DM.
+ * roof; English GB., B2., BT., RB.
+ */
+export function beamPrefix(where, name, k, lang = 'vi') {
+  const en = lang === 'en';
+  if (where === 'foundation') return en ? 'GB.' : 'GM.';
+  if (where === 'roof') return en ? 'RB.' : 'DM.';
+  return `${en ? 'B' : 'D'}${floorTag(name, String(k + 1))}.`;
+}
+
 export const ROOF_LIVE = { key: 'roof', p: 0.75, vi: 'Mái BTCT không sử dụng', en: 'RC roof, not used' };
 export const gammaLive = (p) => (p < 2 ? 1.3 : 1.2);
 /**
@@ -730,20 +741,19 @@ export function structuralCalc({ spec, rooms = {}, concrete = 'B20', steel = 'CB
   const slabs = [];
   {
     const f0 = F[0];
-    const fp = framingPlan({ spec: f0.spec, level: ground, slab: 120, name: FOUND, prefix: 'GM.', beam: { h: 400 }, column: plain, foundation: { depth } });
+    const fp = framingPlan({ spec: f0.spec, level: ground, slab: 120, name: FOUND, prefix: beamPrefix('foundation', FOUND, 0, lang), beam: { h: 400 }, column: plain, foundation: { depth }, lang });
     slabs.push({ name: FOUND, level: ground, slab: 0, fp, above: f0, kind: 'foundation', rooms: {}, stairs: [], balconies: [], height: f0.height + Math.abs(ground) });
   }
   for (let k = 1; k < F.length; k++) {
     const f = F[k], below = F[k - 1];
-    const m = /(\d+)\s*$/.exec(String(f.name));
-    const prefix = /TUM/i.test(String(f.name)) ? 'DT.' : `D${m ? m[1] : k + 1}.`;
-    const fp = framingPlan({ spec: below.spec, level: f.level, slab: f.slab, name: f.name, prefix, column: plain });
-    slabs.push({ name: f.name, level: f.level, slab: f.slab, fp, above: f, kind: 'floor', rooms: rooms[k] ?? {}, stairs: stairBoxes(f), balconies: f.spec.balconies ?? [], height: f.height });
+    const fp = framingPlan({ spec: below.spec, level: f.level, slab: f.slab, name: f.name, prefix: beamPrefix('floor', f.name, k, lang), column: plain, lang });
+    // tag: the floor in the marks of its slab and balconies (S2-1), as in those of its beams (D2.1)
+    slabs.push({ name: f.name, tag: floorTag(f.name, String(k + 1)), level: f.level, slab: f.slab, fp, above: f, kind: 'floor', rooms: rooms[k] ?? {}, stairs: stairBoxes(f), balconies: f.spec.balconies ?? [], height: f.height });
   }
   {
     const t = F[F.length - 1];
-    const fp = framingPlan({ spec: t.spec, level: t.level + t.height + 120, slab: 120, name: ROOF, prefix: 'DM.', column: plain });
-    slabs.push({ name: ROOF, level: t.level + t.height + 120, slab: 120, fp, above: null, kind: 'roof', rooms: {}, stairs: [], balconies: [], height: 0 });
+    const fp = framingPlan({ spec: t.spec, level: t.level + t.height + 120, slab: 120, name: ROOF, prefix: beamPrefix('roof', ROOF, F.length, lang), column: plain, lang });
+    slabs.push({ name: ROOF, tag: en ? 'R' : 'M', level: t.level + t.height + 120, slab: 120, fp, above: null, kind: 'roof', rooms: {}, stairs: [], balconies: [], height: 0 });
   }
   assumed.push({ item: 'materials', value: `${concrete} (Rb ${mat.c.Rb}, Rbt ${mat.c.Rbt} MPa), ${steel} (Rs ${mat.s.Rs}), ${stirrupSteel} (Rsw ${mat.sw.Rsw})` });
   assumed.push({ item: 'live loads', value: LIVE.map((x) => `${x.vi} ${x.p}`).join('; ') + `; ${ROOF_LIVE.vi} ${ROOF_LIVE.p} kPa`, note: 'TCVN 2737:2023, γf 1.3 (< 2 kPa) / 1.2' });
@@ -933,7 +943,7 @@ export function structuralCalc({ spec, rooms = {}, concrete = 'B20', steel = 'CB
     const list = pads.filter((x) => x.side === side);
     const H = Math.max(...list.map((x) => x.H));
     const mesh = list.map((x) => x.mesh).sort((a, b) => area(b.d) / b.spacing - area(a.d) / a.spacing)[0];
-    return { mark: `M${k + 1}`, B: side, L: side, H, mesh, count: list.length, ok: list.every((x) => x.punch && x.meshOk) && Number.isFinite(side) };
+    return { mark: `${en ? 'F' : 'M'}${k + 1}`, B: side, L: side, H, mesh, count: list.length, ok: list.every((x) => x.punch && x.meshOk) && Number.isFinite(side) };
   });
   const columns = designed.sort((a, b) => b.use.N - a.use.N).map(({ c, first, use }) => {
     const k = footed.findIndex((q) => q.c === c), pad = k >= 0 ? pads[k] : null, type = pad ? padTypes[sides.indexOf(pad.side)] : null;

@@ -3,7 +3,7 @@
   "name": "io.github.2ez4gcx/construction-autocad-mcp",
   "title": "Construction AutoCAD MCP",
   "description": "Let AI draw in AutoCAD: plans from images, KT/KC/NT sets, TCVN calc, quantities, sheets, PDF.",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "websiteUrl": "https://github.com/2ez4gcx/construction-autocad-mcp",
   "repository": {
     "url": "https://github.com/2ez4gcx/construction-autocad-mcp",
@@ -12,7 +12,7 @@
   },
   "icons": [
     {
-      "src": "https://raw.githubusercontent.com/2ez4gcx/construction-autocad-mcp/v1.2.1/mcpb/icon.png",
+      "src": "https://raw.githubusercontent.com/2ez4gcx/construction-autocad-mcp/v1.3.0/mcpb/icon.png",
       "mimeType": "image/png",
       "sizes": [
         "512x512"
@@ -22,9 +22,9 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/2ez4gcx/construction-autocad-mcp/releases/download/v1.2.1/construction-autocad-mcp-1.2.1.mcpb",
-      "version": "1.2.1",
-      "fileSha256": "3e24333b95bb069ae58120c6a5fdc2feee39cf5e254614922b91f6c375309e92",
+      "identifier": "https://github.com/2ez4gcx/construction-autocad-mcp/releases/download/v1.3.0/construction-autocad-mcp-1.3.0.mcpb",
+      "version": "1.3.0",
+      "fileSha256": "88c39073f3a37f4a9bbd090bded9075118c7a562b6f945c778deac96a6d5a72d",
       "transport": {
         "type": "stdio"
       },

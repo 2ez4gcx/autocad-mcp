@@ -135,36 +135,36 @@ TỔNG CỘNG;;;;;;;;104,37
 
 SÀN TẦNG 2
 SỐ HIỆU;HÌNH DẠNG;Ø (mm);DÀI 1 THANH (mm);SỐ THANH/CK;SỐ CK;TỔNG SỐ THANH;TỔNG DÀI (m);KHỐI LƯỢNG (kg)
-STẦNG2-1;Thép lớp dưới phương X Ø10a200;10;5000;93;1;93;465;287,04
-STẦNG2-2;Thép lớp dưới phương Y Ø8a150;8;3760;165;1;165;620,4;245,1
-STẦNG2-3;Thép mũ trên dầm giữa hai ô, dài L/4 mỗi bên Ø10a120;10;978;328;1;328;320,78;198,01
-STẦNG2-4;Thép mũ trên dầm biên (cấu tạo), dài L/4 Ø8a200;8;1093;236;1;236;257,95;101,91
-BCTẦNG2-1;Thép mũ ban công, neo vào sàn trong Ø10a200;10;2680;25;1;25;67;41,36
-BCTẦNG2-2;Thép lớp dưới ban công (cấu tạo) Ø8a200;8;1450;25;1;25;36,25;14,32
-BCTẦNG2-3;Thép phân bố ban công, 2 lớp Ø8a200;8;4800;14;1;14;67,2;26,55
+S2-1;Thép lớp dưới phương X Ø10a200;10;5000;93;1;93;465;287,04
+S2-2;Thép lớp dưới phương Y Ø8a150;8;3760;165;1;165;620,4;245,1
+S2-3;Thép mũ trên dầm giữa hai ô, dài L/4 mỗi bên Ø10a120;10;978;328;1;328;320,78;198,01
+S2-4;Thép mũ trên dầm biên (cấu tạo), dài L/4 Ø8a200;8;1093;236;1;236;257,95;101,91
+BC2-1;Thép mũ ban công, neo vào sàn trong Ø10a200;10;2680;25;1;25;67;41,36
+BC2-2;Thép lớp dưới ban công (cấu tạo) Ø8a200;8;1450;25;1;25;36,25;14,32
+BC2-3;Thép phân bố ban công, 2 lớp Ø8a200;8;4800;14;1;14;67,2;26,55
 Ø8;;;;;;;;387,88
 Ø10;;;;;;;;526,41
 TỔNG CỘNG;;;;;;;;914,29
 
 SÀN TẦNG 3
 SỐ HIỆU;HÌNH DẠNG;Ø (mm);DÀI 1 THANH (mm);SỐ THANH/CK;SỐ CK;TỔNG SỐ THANH;TỔNG DÀI (m);KHỐI LƯỢNG (kg)
-STẦNG3-1;Thép lớp dưới phương X Ø10a200;10;5000;93;1;93;465;287,04
-STẦNG3-2;Thép lớp dưới phương Y Ø8a150;8;3760;165;1;165;620,4;245,1
-STẦNG3-3;Thép mũ trên dầm giữa hai ô, dài L/4 mỗi bên Ø10a120;10;978;328;1;328;320,78;198,01
-STẦNG3-4;Thép mũ trên dầm biên (cấu tạo), dài L/4 Ø8a200;8;1093;236;1;236;257,95;101,91
-BCTẦNG3-1;Thép mũ ban công, neo vào sàn trong Ø10a200;10;2680;25;1;25;67;41,36
-BCTẦNG3-2;Thép lớp dưới ban công (cấu tạo) Ø8a200;8;1450;25;1;25;36,25;14,32
-BCTẦNG3-3;Thép phân bố ban công, 2 lớp Ø8a200;8;4800;14;1;14;67,2;26,55
+S3-1;Thép lớp dưới phương X Ø10a200;10;5000;93;1;93;465;287,04
+S3-2;Thép lớp dưới phương Y Ø8a150;8;3760;165;1;165;620,4;245,1
+S3-3;Thép mũ trên dầm giữa hai ô, dài L/4 mỗi bên Ø10a120;10;978;328;1;328;320,78;198,01
+S3-4;Thép mũ trên dầm biên (cấu tạo), dài L/4 Ø8a200;8;1093;236;1;236;257,95;101,91
+BC3-1;Thép mũ ban công, neo vào sàn trong Ø10a200;10;2680;25;1;25;67;41,36
+BC3-2;Thép lớp dưới ban công (cấu tạo) Ø8a200;8;1450;25;1;25;36,25;14,32
+BC3-3;Thép phân bố ban công, 2 lớp Ø8a200;8;4800;14;1;14;67,2;26,55
 Ø8;;;;;;;;387,88
 Ø10;;;;;;;;526,41
 TỔNG CỘNG;;;;;;;;914,29
 
 SÀN TUM
 SỐ HIỆU;HÌNH DẠNG;Ø (mm);DÀI 1 THANH (mm);SỐ THANH/CK;SỐ CK;TỔNG SỐ THANH;TỔNG DÀI (m);KHỐI LƯỢNG (kg)
-STUM-1;Thép lớp dưới phương X Ø10a200;10;5000;93;1;93;465;287,04
-STUM-2;Thép lớp dưới phương Y Ø8a150;8;3760;165;1;165;620,4;245,1
-STUM-3;Thép mũ trên dầm giữa hai ô, dài L/4 mỗi bên Ø12a150;12;978;264;1;264;258,19;229,5
-STUM-4;Thép mũ trên dầm biên (cấu tạo), dài L/4 Ø8a200;8;1093;236;1;236;257,95;101,91
+ST-1;Thép lớp dưới phương X Ø10a200;10;5000;93;1;93;465;287,04
+ST-2;Thép lớp dưới phương Y Ø8a150;8;3760;165;1;165;620,4;245,1
+ST-3;Thép mũ trên dầm giữa hai ô, dài L/4 mỗi bên Ø12a150;12;978;264;1;264;258,19;229,5
+ST-4;Thép mũ trên dầm biên (cấu tạo), dài L/4 Ø8a200;8;1093;236;1;236;257,95;101,91
 Ø8;;;;;;;;347,01
 Ø10;;;;;;;;287,04
 Ø12;;;;;;;;229,5
@@ -172,9 +172,9 @@ TỔNG CỘNG;;;;;;;;863,55
 
 SÀN MÁI
 SỐ HIỆU;HÌNH DẠNG;Ø (mm);DÀI 1 THANH (mm);SỐ THANH/CK;SỐ CK;TỔNG SỐ THANH;TỔNG DÀI (m);KHỐI LƯỢNG (kg)
-SMÁI-1;Thép lớp dưới phương X Ø8a200;8;2700;28;1;28;75,6;29,87
-SMÁI-2;Thép lớp dưới phương Y Ø8a200;8;5600;13;1;13;72,8;28,76
-SMÁI-4;Thép mũ trên dầm biên (cấu tạo), dài L/4 Ø8a200;8;775;82;1;82;63,55;25,11
+SM-1;Thép lớp dưới phương X Ø8a200;8;2700;28;1;28;75,6;29,87
+SM-2;Thép lớp dưới phương Y Ø8a200;8;5600;13;1;13;72,8;28,76
+SM-4;Thép mũ trên dầm biên (cấu tạo), dài L/4 Ø8a200;8;775;82;1;82;63,55;25,11
 Ø8;;;;;;;;83,74
 TỔNG CỘNG;;;;;;;;83,74
 

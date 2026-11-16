@@ -47,6 +47,8 @@ export function electricalWorkbook(D, Q, lang = 'vi') {
   const en = lang === 'en';
   const S1 = en ? 'Parameters' : 'Thông số', S2 = en ? 'Loads' : 'Phụ tải', S3 = en ? 'Quantities' : 'Khối lượng';
   const O = D.options;
+  // the codes of the design: TĐ-T, Ptt, Itt, Kđt in Vietnamese; MDB, Pd, Id, Kd in English
+  const K = D.codes ?? { main: D.main.id, P: 'Ptt', I: 'Itt', kdt: 'Kđt' };
   const p = params(S1, en ? 'ELECTRICAL CALCULATION - PARAMETERS' : 'BẢNG TÍNH ĐIỆN - THÔNG SỐ', NOTE[lang]?.e ?? NOTE.vi.e, en);
   p.add('U', en ? 'Voltage U' : 'Điện áp U', inp(O.voltage), 'V', en ? '1 phase' : '1 pha');
   p.add('cos', 'cos φ', inp(O.cosphi));
@@ -54,7 +56,7 @@ export function electricalWorkbook(D, Q, lang = 'vi') {
   for (const [k, vi, enl] of [['light', 'Ks chiếu sáng', 'Ks lighting'], ['socket', 'Ks ổ cắm', 'Ks sockets'], ['ac', 'Ks điều hòa', 'Ks air conditioners'], ['heater', 'Ks bình nóng lạnh', 'Ks water heaters'], ['hob', 'Ks bếp', 'Ks hob'], ['pump', 'Ks bơm', 'Ks pump']]) {
     p.add(`ks_${k}`, en ? enl : vi, inp(O.ks[k] ?? 1));
   }
-  p.add('kdt', en ? 'Kđt between the floor boards' : 'Kđt giữa các tủ tầng', inp(O.kdt));
+  p.add('kdt', en ? `${K.kdt} diversity between the floor boards` : `${K.kdt} giữa các tủ tầng`, inp(O.kdt));
   p.add('du', en ? 'Allowed voltage drop' : 'Sụt áp cho phép', inp(3), '%');
   p.add('allow', en ? 'Cable allowance' : 'Hệ số hao hụt dây', inp(0.1));
   p.rows.push([], [tx(en ? 'CABLE Cu/PVC (mm²)' : 'DÂY Cu/PVC (mm²)', 'head'), tx('Iz (A)', 'head')]);
@@ -70,8 +72,8 @@ export function electricalWorkbook(D, Q, lang = 'vi') {
   const sheets = [{ name: S1, rows: p.rows, widths: [44, 14, 12, 30] }];
 
   // ---- loads
-  const H = en ? ['BOARD', 'CIRCUIT', 'FEEDS', 'P (W)', 'Ks', 'Ptt (W)', 'Itt (A)', 'In min (A)', 'In (A)', 'BREAKER', 'S min (mm²)', 'S (mm²)', 'L (m)', 'ΔU (%)', 'CHECK']
-    : ['TỦ', 'MẠCH', 'PHỤ TẢI', 'P (W)', 'Ks', 'Ptt (W)', 'Itt (A)', 'In min (A)', 'In (A)', 'THIẾT BỊ', 'S min (mm²)', 'S (mm²)', 'L (m)', 'ΔU (%)', 'KIỂM TRA'];
+  const H = en ? ['BOARD', 'CIRCUIT', 'FEEDS', 'P (W)', 'Ks', `${K.P} (W)`, `${K.I} (A)`, 'In min (A)', 'In (A)', 'BREAKER', 'S min (mm²)', 'S (mm²)', 'L (m)', 'ΔU (%)', 'CHECK']
+    : ['TỦ', 'MẠCH', 'PHỤ TẢI', 'P (W)', 'Ks', `${K.P} (W)`, `${K.I} (A)`, 'In min (A)', 'In (A)', 'THIẾT BỊ', 'S min (mm²)', 'S (mm²)', 'L (m)', 'ΔU (%)', 'KIỂM TRA'];
   const rows = [[tx(en ? 'LOADS, BREAKERS AND CABLES' : 'BẢNG TÍNH PHỤ TẢI, CHỌN THIẾT BỊ BẢO VỆ VÀ DÂY DẪN', 'title')], [tx(NOTE[lang]?.e ?? NOTE.vi.e, 'note')], [], H.map((h) => tx(h, 'head'))];
   const U = p.ref('U'), COS = p.ref('cos'), RHO = p.ref('rho'), DU = p.ref('du');
   const OK = en ? 'OK' : 'ĐẠT', NO = en ? 'FAILS' : 'KHÔNG ĐẠT';
@@ -88,17 +90,17 @@ export function electricalWorkbook(D, Q, lang = 'vi') {
     }
     const last = rows.length;
     const r = rows.length + 1;
-    rows.push([tx(B.id, 'bold'), tx(en ? 'TOTAL' : 'TỔNG', 'bold'), tx(en ? `${B.floors.join(', ')}; feeder from TĐ-T` : `${B.floors.join(', ')}; cáp cấp từ TĐ-T`, 'bold'),
+    rows.push([tx(B.id, 'bold'), tx(en ? 'TOTAL' : 'TỔNG', 'bold'), tx(en ? `${B.floors.join(', ')}; feeder from ${D.main.id}` : `${B.floors.join(', ')}; cáp cấp từ ${D.main.id}`, 'bold'),
       f(`SUM(D${first}:D${last})`, 'boldNum'), tx(''), f(`SUM(F${first}:F${last})`, 'boldNum'), f(`F${r}/(${U}*${COS})`, 'boldNum'), inp(32),
       f(ladder(`MAX(G${r},H${r})`, RATINGS, 100), 'int'), inp('MCB 2P'), inp(6), f(cableF(`I${r}`, `K${r}`)), inp(B.feeder_length),
       f(`2*M${r}*G${r}*${RHO}/L${r}/${U}*100`), f(`IF(N${r}<=${DU},"${OK}","${NO}")`, 'text')]);
     boardRows.push(r);
   }
   const rm = rows.length + 1;
-  rows.push([tx('TĐ-T', 'bold'), tx(en ? 'MAIN' : 'TỔNG', 'bold'), tx(en ? 'all floor boards x Kđt' : 'các tủ tầng x Kđt', 'bold'), f(boardRows.map((r) => `D${r}`).join('+'), 'boldNum'),
+  rows.push([tx(D.main.id, 'bold'), tx(en ? 'MAIN' : 'TỔNG', 'bold'), tx(en ? `all floor boards x ${K.kdt}` : `các tủ tầng x ${K.kdt}`, 'bold'), f(boardRows.map((r) => `D${r}`).join('+'), 'boldNum'),
     f(p.ref('kdt')), f(`E${rm}*(${boardRows.map((r) => `F${r}`).join('+')})`, 'boldNum'), f(`F${rm}/(${U}*${COS})`, 'boldNum'), inp(63),
     f(ladder(`MAX(G${rm},H${rm})`, RATINGS, 100), 'int'), inp('MCB 2P'), inp(16), f(cableF(`I${rm}`, `K${rm}`)), inp(15), f(`2*M${rm}*G${rm}*${RHO}/L${rm}/${U}*100`), f(`IF(N${rm}<=${DU},"${OK}","${NO}")`, 'text')]);
-  rows.push([], [tx(en ? 'In: the smallest rating at least Itt and In min; S: the smallest cable with Iz ≥ In and at least S min. Lengths from the drawing (edit them after the routes are set).'
+  rows.push([], [tx(en ? `In: the smallest rating at least ${K.I} and In min; S: the smallest cable with Iz ≥ In and at least S min. Lengths from the drawing (edit them after the routes are set).`
     : 'In: cỡ nhỏ nhất không nhỏ hơn Itt và In min; S: tiết diện nhỏ nhất có Iz ≥ In và không nhỏ hơn S min. Chiều dài lấy theo bản vẽ (sửa khi đã chốt tuyến dây).', 'note')]);
   const lastLoad = rm;
   sheets.push({ name: S2, rows, widths: [9, 9, 52, 10, 7, 10, 9, 10, 8, 16, 10, 9, 9, 9, 12], freeze: 5 });

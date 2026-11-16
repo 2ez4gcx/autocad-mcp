@@ -239,7 +239,30 @@ export const capsWidth = (s, h) => [...String(s)].reduce((w, ch) => w + (ch === 
 // the language of the tool call being drawn (set by the server before every tool): what a title falls back to
 let drawingLanguage = 'vi';
 export const setDrawingLanguage = (lang) => { drawingLanguage = lang === 'en' ? 'en' : 'vi'; };
+
+/**
+ * A test of whole words in a name, any case, Vietnamese or English: words('ĂN', 'DINING') finds "PHÒNG ĂN" but not
+ * "VĂN PHÒNG" or "CĂN HỘ" (a Vietnamese syllable is not matched inside another; digits and punctuation end a word).
+ */
+export function words(...alts) {
+  const re = new RegExp(`(?<![\\p{L}\\p{M}])(?:${alts.join('|')})(?![\\p{L}\\p{M}])`, 'iu');
+  return { test: (s) => re.test(String(s ?? '').normalize('NFC')) };
+}
 export const getDrawingLanguage = () => drawingLanguage;
+
+/**
+ * The short tag of a floor in marks (S2-1, D2.1, BC3-1): the number at the end of its name, T for a stair tower (TUM),
+ * else fallback (the place of the floor), else the initials of its name without accents (TẦNG LỬNG -> TL, ROOF -> R).
+ */
+export function floorTag(name, fallback = '') {
+  const s = String(name ?? '');
+  const m = /(\d+)\s*$/.exec(s);
+  if (m) return m[1];
+  if (/\bTUM\b/i.test(s)) return 'T';
+  if (fallback) return fallback;
+  const ini = s.normalize('NFD').replace(/\p{M}/gu, '').replace(/[đĐ]/g, 'D').split(/[^A-Za-z0-9]+/).filter(Boolean).map((w) => w[0].toUpperCase()).join('');
+  return ini;
+}
 
 export function viewTitle(text, cx, y, scale, layer, lang = drawingLanguage, h = 5, showScale = true) {
   const w = capsWidth(text, h * scale) / 2 + scale;
@@ -248,7 +271,7 @@ export function viewTitle(text, cx, y, scale, layer, lang = drawingLanguage, h =
     { type: 'text', text, at: [r(cx), r(y)], height: r(h * scale), align: 'center', layer, style: TEXT_STYLE },
     { type: 'line', from: [r(cx - w), r(y - 1.6 * scale)], to: [r(cx + w), r(y - 1.6 * scale)], layer },
     // tables and notes have no scale
-    ...(showScale ? [{ type: 'text', text: `${lang === 'en' ? 'SCALE' : 'TỶ LỆ'}: 1/${scale}`, at: [r(cx), r(y - 6.2 * scale)], height: r(0.6 * h * scale), align: 'center', layer, style: TEXT_STYLE }] : []),
+    ...(showScale ? [{ type: 'text', text: lang === 'en' ? `SCALE 1:${scale}` : `TỶ LỆ: 1/${scale}`, at: [r(cx), r(y - 6.2 * scale)], height: r(0.6 * h * scale), align: 'center', layer, style: TEXT_STYLE }] : []),
   ];
 }
 

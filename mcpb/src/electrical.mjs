@@ -30,8 +30,20 @@ export const AC_SIZES = [9000, 12000, 18000, 24000];
 export const RATINGS = [6, 10, 16, 20, 25, 32, 40, 50, 63, 80, 100];
 export const CABLES = [[1.5, 17.5], [2.5, 24], [4, 32], [6, 41], [10, 57], [16, 76], [25, 101], [35, 125]];
 const PE = { 1.5: 1.5, 2.5: 2.5, 4: 4, 6: 4, 10: 6, 16: 10, 25: 16, 35: 16 };
-const fmtS = (s) => String(s).replace('.', ',');
-export const cableText = (S) => `2x${fmtS(S)}+E${fmtS(PE[S] ?? S)}`;
+const fmtS = (s, lang) => (lang === 'en' ? String(s) : String(s).replace('.', ','));
+/** A cable: 2 cores and the earth, the decimal mark of the language (2x2,5+E2,5; 2x2.5+E2.5). */
+export const cableText = (S, lang = 'vi') => `2x${fmtS(S, lang)}+E${fmtS(PE[S] ?? S, lang)}`;
+
+/**
+ * The codes of a set in its language: boards (TĐ-1 / DB-1, the main TĐ-T / MDB), dedicated circuits (ĐH / AC air
+ * conditioner, NL / WH water heater, BT / CK hob, BN / PU pump; L lighting, S sockets in both) and the symbols of the
+ * load calculation (Ptt, Itt, Kđt / Pd, Id, Kd). An electrical design keeps the codes of its language (design.codes).
+ */
+export const ECODE = {
+  vi: { board: 'TĐ-', main: 'TĐ-T', ac: 'ĐH', heater: 'NL', hob: 'BT', pump: 'BN', P: 'Ptt', I: 'Itt', kdt: 'Kđt' },
+  en: { board: 'DB-', main: 'MDB', ac: 'AC', heater: 'WH', hob: 'CK', pump: 'PU', P: 'Pd', I: 'Id', kdt: 'Kd' },
+};
+const codesOf = (design) => design.codes ?? ECODE.vi;
 
 /** Circuits by kind: breaker, cable, name. */
 const CIRCUIT = {
@@ -83,8 +95,9 @@ export function electricalDesign({ floors, options = {}, lang = 'vi' }) {
   const note = (item, value, n) => assumed.push({ item, value, ...(n ? { note: n } : {}) });
   if (!options.voltage) note('supply', `1 phase ${O.voltage} V from the utility meter at the front`, 'QCVN 12:2014/BXD');
   if (!options.heights) note('heights', 'switches +1.25, sockets +0.40, worktop +1.10, air conditioner +2.20, water heater +2.00, WC +1.25, washer +1.20, hob +0.60, boards +1.50');
-  if (!options.max_lights) note('max_lights', `${O.max_lights} lights a circuit (MCB 1P 10A, 2x1,5)`);
-  if (!options.max_sockets) note('max_sockets', `${O.max_sockets} sockets a circuit (RCBO 1P 20A 30mA, 2x2,5+E2,5)`);
+  if (!options.max_lights) note('max_lights', `${O.max_lights} lights a circuit (MCB 1P 10A, 2x1.5)`);
+  if (!options.max_sockets) note('max_sockets', `${O.max_sockets} sockets a circuit (RCBO 1P 20A 30mA, 2x2.5+E2.5)`);
+  const K = ECODE[lang] ?? ECODE.vi;
   if (!options.btu_per_m2) note('air conditioners', `${O.btu_per_m2} BTU/m² in bedrooms, living and dining rooms: ${AC_SIZES.join(' / ')} BTU`);
   let nid = 0;
   const id = () => `E${++nid}`;
@@ -141,7 +154,7 @@ export function electricalDesign({ floors, options = {}, lang = 'vi' }) {
         }
       }
       const c = cands[0];
-      const bid = `TĐ-${k + 1}`;
+      const bid = `${K.board}${k + 1}`;
       if (c) {
         const u0 = faceU(c.fc, c.d.from), u1 = faceU(c.fc, c.d.to);
         const ua = Math.min(u0, u1), ub = Math.max(u0, u1);
@@ -164,7 +177,7 @@ export function electricalDesign({ floors, options = {}, lang = 'vi' }) {
         }
         if (k === 0 && board) {
           // the main board beside it; where that wall has no more room, on the nearest other wall of the room
-          const MAIN = { label: 'TĐ-T', z: O.heights.board, isMain: true };
+          const MAIN = { label: K.main, z: O.heights.board, isMain: true };
           const um = takeSpot(fcB, base + sg * 750, 750) ?? takeSpot(fcB, base - sg * 750, 750);
           if (um !== null) board.main = dev('board', facePoint(fcB, um, 0), c.R.name, { rot: deg(fcB.inw), ...MAIN });
           else {
@@ -506,7 +519,7 @@ export function electricalDesign({ floors, options = {}, lang = 'vi' }) {
   const newCircuit = (bid, kind) => {
     const key = `${bid}|${kind}`;
     counters.set(key, (counters.get(key) ?? 0) + 1);
-    const C = { id: `${CIRCUIT[kind].prefix}${counters.get(key)}`, board: bid, kind, devices: [], floors: [] };
+    const C = { id: `${K[kind] ?? CIRCUIT[kind].prefix}${counters.get(key)}`, board: bid, kind, devices: [], floors: [] };
     boards.get(bid).circuits.push(C);
     return C;
   };
@@ -590,7 +603,7 @@ export function electricalDesign({ floors, options = {}, lang = 'vi' }) {
       C.rating = ratingFor(C.I, def.rating);
       C.S = cableFor(C.rating, def.S);
       C.breaker = `${def.breaker} ${C.rating}A`;
-      C.cable = cableText(C.S);
+      C.cable = cableText(C.S, lang);
       C.name = lang === 'en' ? def.en : def.vi;
       const F = out.find((x) => x.name === C.floors[0]);
       const start = P0(F);
@@ -615,18 +628,18 @@ export function electricalDesign({ floors, options = {}, lang = 'vi' }) {
     B.rating = ratingFor(B.I, 32);
     B.S = cableFor(B.rating, 6);
     B.breaker = `MCB 2P ${B.rating}A`;
-    B.cable = cableText(B.S);
+    B.cable = cableText(B.S, lang);
     if (B.rating > 32 && !options.boards) assumed.push({ item: `${B.id}`, value: `MCB 2P ${B.rating}A, ${B.cable}`, note: `the load needs more than the 32A assumed (${B.I} A)` });
   }
   // the main board: the floor boards and the meter
   const list = [...boards.values()];
-  const main = { id: 'TĐ-T', P: r2(list.reduce((s, b) => s + b.P, 0)), kdt: O.kdt };
+  const main = { id: K.main, P: r2(list.reduce((s, b) => s + b.P, 0)), kdt: O.kdt };
   main.Ptt = r2(O.kdt * list.reduce((s, b) => s + b.Ptt, 0));
   main.I = r2(I(main.Ptt));
   main.rating = ratingFor(main.I, 63);
   main.S = cableFor(main.rating, 16);
   main.breaker = `MCB 2P ${main.rating}A`;
-  main.cable = `Cu/XLPE/PVC ${cableText(main.S).replace('+E', ' + E')}`;
+  main.cable = `Cu/XLPE/PVC ${cableText(main.S, lang).replace('+E', ' + E')}`;
   if (main.rating > 63) warnings.push(`main board: ${main.I} A over a single-phase 63A supply: ask the utility for a three-phase supply`);
   // the floor feeders: their length from the main board up the stair
   const mainF = out[0];
@@ -635,7 +648,7 @@ export function electricalDesign({ floors, options = {}, lang = 'vi' }) {
     B.feeder_length = r2(((F?.level ?? 0) + 3000 + (B.at && mainF.board ? dist(B.at, mainF.board.at) : 2000)) / 1000);
     B.du = r2(((2 * B.feeder_length * B.I * O.rho) / B.S / O.voltage) * 100);
   }
-  return { floors: out, boards: list, main, options: O, assumed, warnings };
+  return { floors: out, boards: list, main, options: O, assumed, warnings, codes: K };
 }
 
 // ---------------------------------------------------------------- drawings
@@ -849,19 +862,20 @@ export function singleLineDiagram(design, { at = [0, 0], scale = 50, lang = 'vi'
   const x0 = at[0];
   const boards = design.boards;
   const M = design.main;
+  const K = codesOf(design);
   // ---- the floor boards, one under another
   let y = at[1], right = x0;
   for (const B of boards) {
     T(`${en ? 'BOARD' : 'TỦ ĐIỆN'} ${B.id} (${B.floors.join(', ')})`, [x0, y], 4);
     y -= 10 * s;
     const bx = x0 + labW * s;
-    T(`${en ? 'FROM TĐ-T' : 'TỪ TĐ-T'}: ${B.cable}`, [bx + 4 * s, y + 1 * s], 2.2);
+    T(`${en ? 'FROM' : 'TỪ'} ${M.id}: ${B.cable}`, [bx + 4 * s, y + 1 * s], 2.2);
     const yy = breakerSym(bx, y - 2 * s, s, layer, out);
     T(B.breaker, [bx + 4 * s, y - 9 * s], 2.2);
     const cs = B.circuits;
     const bR = bx + ((cs.length + 1) * colW) * s;
     out.push({ type: 'polyline', points: [P([bx - 10 * s, yy]), P([bR, yy])], closed: false, layer, width: r2(0.6 * s) });
-    const rows = [[en ? 'Circuit' : 'Mạch'], [en ? 'Feeds' : 'Phụ tải'], [en ? 'Breaker' : 'Bảo vệ'], [en ? 'Cable Cu/PVC' : 'Dây Cu/PVC'], ['P (W)'], ['Ks'], ['Itt (A)'], [en ? 'Length (m)' : 'Dài (m)'], ['ΔU (%)']];
+    const rows = [[en ? 'Circuit' : 'Mạch'], [en ? 'Feeds' : 'Phụ tải'], [en ? 'Breaker' : 'Bảo vệ'], [en ? 'Cable Cu/PVC' : 'Dây Cu/PVC'], ['P (W)'], ['Ks'], [`${K.I} (A)`], [en ? 'Length (m)' : 'Dài (m)'], ['ΔU (%)']];
     cs.forEach((C, i) => {
       const x = bx + ((i + 0.5) * colW) * s;
       breakerSym(x, yy, s, layer, out);
@@ -877,14 +891,14 @@ export function singleLineDiagram(design, { at = [0, 0], scale = 50, lang = 'vi'
       rows[8].push(C.du);
     });
     out.push({ type: 'table', at: P([bx - labW * s, yy - 16 * s]), rows, header: false, height: r2(1.8 * s), row_height: r2(6 * s), col_widths: [labW, ...cs.map(() => colW)].map((w) => r2(w * s)), layer, style: TEXT_STYLE, decimal_separator: en ? undefined : ',' });
-    T(`ΣP = ${num(B.P)} W; Ptt = ${num(B.Ptt)} W; Itt = ${num(B.I)} A`, [bx - labW * s, yy - 76 * s], 2.2);
+    T(`ΣP = ${num(B.P)} W; ${K.P} = ${num(B.Ptt)} W; ${K.I} = ${num(B.I)} A`, [bx - labW * s, yy - 76 * s], 2.2);
     right = Math.max(right, bx + cs.length * colW * s, bR);
     y = yy - 88 * s;
   }
   // ---- the main board beside them: meter, main breaker, earth, a drop per floor board and a spare
   const m0 = right + 25 * s;
   let ym = at[1];
-  T(en ? 'MAIN BOARD TĐ-T' : 'TỦ ĐIỆN TỔNG TĐ-T', [m0, ym], 4);
+  T(`${en ? 'MAIN BOARD' : 'TỦ ĐIỆN TỔNG'} ${M.id}`, [m0, ym], 4);
   ym -= 10 * s;
   const mx = m0 + labW * s;
   out.push(sym('MCP_E_CTO', [mx - 1.5 * s, ym + 2 * s], { scale: s, rotation: -90, layer: L('elec_equipment') }));
@@ -896,7 +910,7 @@ export function singleLineDiagram(design, { at = [0, 0], scale = 50, lang = 'vi'
     { id: en ? 'SPARE' : 'DỰ PHÒNG', breaker: 'MCB 2P 32A', cable: '', P: '', I: '', L: '' }];
   const busL = mx - 10 * s, busR = mx + (feeders.length * colW + 4) * s;
   out.push({ type: 'polyline', points: [P([busL, yb]), P([busR, yb])], closed: false, layer, width: r2(0.6 * s) });
-  const rowsMain = [[en ? 'Feeder' : 'Lộ ra'], [en ? 'Breaker' : 'Thiết bị bảo vệ'], [en ? 'Cable Cu/PVC' : 'Dây dẫn Cu/PVC'], ['Ptt (W)'], ['Itt (A)'], [en ? 'Length (m)' : 'Dài (m)']];
+  const rowsMain = [[en ? 'Feeder' : 'Lộ ra'], [en ? 'Breaker' : 'Thiết bị bảo vệ'], [en ? 'Cable Cu/PVC' : 'Dây dẫn Cu/PVC'], [`${K.P} (W)`], [`${K.I} (A)`], [en ? 'Length (m)' : 'Dài (m)']];
   feeders.forEach((fd, i) => {
     const x = mx + ((i + 0.5) * colW) * s;
     breakerSym(x, yb, s, layer, out);
@@ -912,7 +926,7 @@ export function singleLineDiagram(design, { at = [0, 0], scale = 50, lang = 'vi'
   out.push(lineE([busL, yb], [busL, yb - 8 * s], layer));
   out.push(sym('MCP_E_TIEP_DIA', [busL, yb - 8 * s], { scale: s, layer: L('earth') }));
   T(en ? 'EARTH R ≤ 4 Ω' : 'TIẾP ĐỊA R ≤ 4 Ω', [busL - 2 * s, yb - 15 * s], 2, 'right');
-  T(`Ptt = Kđt x ΣPtt = ${num(M.kdt)} x ${num(r2(M.Ptt / M.kdt))} = ${num(M.Ptt)} W; Itt = ${num(M.I)} A`, [mx - labW * s, yb - 58 * s], 2.2);
+  T(`${K.P} = ${K.kdt} x Σ${K.P} = ${num(M.kdt)} x ${num(r2(M.Ptt / M.kdt))} = ${num(M.Ptt)} W; ${K.I} = ${num(M.I)} A`, [mx - labW * s, yb - 58 * s], 2.2);
   right = Math.max(right, mx + feeders.length * colW * s);
   out.push(...viewTitle(en ? 'SINGLE-LINE DIAGRAM AND BOARD SCHEDULES' : 'SƠ ĐỒ NGUYÊN LÝ CẤP ĐIỆN, BẢNG PHÂN PHỐI TỦ ĐIỆN', (x0 + right) / 2, y - 6 * s, s, layer, lang, 5, false));
   return { entities: out, bottom: y - 20 * s, right };
@@ -951,7 +965,7 @@ export function riserDiagram(design, { at = [0, 0], scale = 50, lang = 'vi' } = 
   T(en ? 'UTILITY 1P 220V' : 'LƯỚI EVN 1P 220V', [x0 + 18 * s, mainY - 4 * s], 2);
   out.push(lineE([x0 + 34 * s, mainY + 3.5 * s], [bx, mainY + 3.5 * s], L('power_wire')));
   T(design.main.cable, [x0 + 35 * s, mainY + 5 * s], 1.8);
-  box(bx, mainY, 18, 7, 'TĐ-T');
+  box(bx, mainY, 18, 7, design.main.id);
   // floor boards and feeders (one line each, offset so they do not overlap)
   design.boards.forEach((B, j) => {
     const i = floors.findIndex((F) => F.name === B.floor);
@@ -1050,7 +1064,7 @@ export function electricalQuantities(design, { lang = 'vi', allowance = 0.1 } = 
   }
   // water heaters and the pump: in the plumbing bill (their sockets and circuits here)
   head(en ? 'BOARDS AND BREAKERS' : 'TỦ ĐIỆN, THIẾT BỊ BẢO VỆ');
-  row(en ? `Main board TĐ-T with ${design.main.breaker}` : `Tủ điện tổng TĐ-T, ${design.main.breaker}`, pcs, 1);
+  row(en ? `Main board ${design.main.id} with ${design.main.breaker}` : `Tủ điện tổng ${design.main.id}, ${design.main.breaker}`, pcs, 1);
   for (const B of design.boards) row(en ? `Board ${B.id} with ${B.breaker}` : `Tủ điện ${B.id}, ${B.breaker}`, pcs, 1);
   const brk = new Map();
   for (const B of design.boards) {
@@ -1060,7 +1074,7 @@ export function electricalQuantities(design, { lang = 'vi', allowance = 0.1 } = 
   // the spare way of the main board
   const SPARE = 'MCB 2P 32A';
   brk.set(SPARE, (brk.get(SPARE) ?? 0) + 1);
-  for (const [b, c] of [...brk.entries()].sort()) rows.push({ stt: ++n, item: b, unit: pcs, q: c, how: b === SPARE ? (en ? 'with 1 spare way in TĐ-T' : 'gồm 1 lộ dự phòng ở TĐ-T') : '', ...(b === SPARE ? { plus: 1 } : {}) });
+  for (const [b, c] of [...brk.entries()].sort()) rows.push({ stt: ++n, item: b, unit: pcs, q: c, how: b === SPARE ? (en ? `with 1 spare way in ${design.main.id}` : `gồm 1 lộ dự phòng ở ${design.main.id}`) : '', ...(b === SPARE ? { plus: 1 } : {}) });
   head(en ? 'CABLES AND CONDUIT' : 'DÂY DẪN, ỐNG LUỒN DÂY');
   const cab = new Map();
   for (const B of design.boards) {
@@ -1091,28 +1105,30 @@ export function electricalQuantities(design, { lang = 'vi', allowance = 0.1 } = 
 /** The load calculation and the bill of quantities as tables (for the sheet and the CSV). */
 export function electricalTables(design, Q, lang = 'vi') {
   const en = lang === 'en';
+  const K = codesOf(design);
   const loads = {
     title: en ? 'LOAD CALCULATION, BREAKERS AND CABLES' : 'BẢNG TÍNH PHỤ TẢI, CHỌN THIẾT BỊ BẢO VỆ VÀ DÂY DẪN',
     widths: [16, 14, 72, 18, 10, 18, 14, 34, 26, 14, 14],
-    rows: [[en ? 'BOARD' : 'TỦ', en ? 'CIRCUIT' : 'MẠCH', en ? 'FEEDS' : 'PHỤ TẢI', 'P (W)', 'Ks', 'Ptt (W)', 'Itt (A)', en ? 'BREAKER' : 'BẢO VỆ', en ? 'CABLE Cu/PVC' : 'DÂY Cu/PVC', 'L (m)', 'ΔU (%)']],
+    rows: [[en ? 'BOARD' : 'TỦ', en ? 'CIRCUIT' : 'MẠCH', en ? 'FEEDS' : 'PHỤ TẢI', 'P (W)', 'Ks', `${K.P} (W)`, `${K.I} (A)`, en ? 'BREAKER' : 'BẢO VỆ', en ? 'CABLE Cu/PVC' : 'DÂY Cu/PVC', 'L (m)', 'ΔU (%)']],
   };
   for (const B of design.boards) {
     for (const C of B.circuits) loads.rows.push([B.id, C.id, `${C.name}: ${C.rooms.join(', ')}`, C.P, C.ks, C.Ptt, C.I, C.breaker, C.cable, C.length, C.du]);
-    loads.rows.push([B.id, en ? 'TOTAL' : 'TỔNG', en ? `${B.floors.join(', ')}; feeder from TĐ-T` : `${B.floors.join(', ')}; cáp cấp từ TĐ-T`, B.P, '', B.Ptt, B.I, B.breaker, B.cable, B.feeder_length, B.du]);
+    loads.rows.push([B.id, en ? 'TOTAL' : 'TỔNG', en ? `${B.floors.join(', ')}; feeder from ${design.main.id}` : `${B.floors.join(', ')}; cáp cấp từ ${design.main.id}`, B.P, '', B.Ptt, B.I, B.breaker, B.cable, B.feeder_length, B.du]);
   }
   const M = design.main;
-  loads.rows.push(['TĐ-T', en ? 'MAIN' : 'TỔNG', en ? `all boards, Kđt = ${M.kdt}` : `các tủ tầng, Kđt = ${String(M.kdt).replace('.', ',')}`, M.P, M.kdt, M.Ptt, M.I, M.breaker, M.cable.replace('Cu/XLPE/PVC ', ''), '', '']);
+  loads.rows.push([M.id, en ? 'MAIN' : 'TỔNG', en ? `all boards, ${K.kdt} = ${M.kdt}` : `các tủ tầng, ${K.kdt} = ${String(M.kdt).replace('.', ',')}`, M.P, M.kdt, M.Ptt, M.I, M.breaker, M.cable.replace('Cu/XLPE/PVC ', ''), '', '']);
   return [loads, boqTable(en ? 'BILL OF QUANTITIES - ELECTRICAL' : 'BẢNG KHỐI LƯỢNG VẬT TƯ ĐIỆN', Q.rows, lang)];
 }
 
 /** The basis of the electrical calculation (notes of the sheet). */
 export function electricalBasis(design, lang = 'vi') {
   const O = design.options, en = lang === 'en';
+  const { P: Pd, I: Id, kdt: Kd } = codesOf(design);
   const c = (v) => (en ? String(v) : String(v).replace('.', ','));
   return en ? [
-    `Supply 1 phase ${O.voltage} V, cos φ = ${O.cosphi}; Itt = Ptt / (U cos φ). Demand factors Ks: lighting ${O.ks.light}, sockets ${O.ks.socket}, air conditioners ${O.ks.ac}, water heaters ${O.ks.heater}, hob ${O.ks.hob}; between the floor boards Kđt = ${O.kdt}.`,
-    'Itt of a lighting or socket circuit: Ks P / (U cos φ); of a dedicated circuit (air conditioner, water heater, hob, pump): the full P / (U cos φ), its Ks only counts in the load of the board.',
-    'Breakers: In ≥ Itt; cables Cu/PVC in conduit, two loaded cores: Iz ≥ In (1.5: 17.5 A, 2.5: 24 A, 4: 32 A, 6: 41 A, 10: 57 A, 16: 76 A).',
+    `Supply 1 phase ${O.voltage} V, cos φ = ${O.cosphi}; ${Id} = ${Pd} / (U cos φ). Demand factors Ks: lighting ${O.ks.light}, sockets ${O.ks.socket}, air conditioners ${O.ks.ac}, water heaters ${O.ks.heater}, hob ${O.ks.hob}; diversity between the floor boards ${Kd} = ${O.kdt}.`,
+    `${Id} of a lighting or socket circuit: Ks P / (U cos φ); of a dedicated circuit (air conditioner, water heater, hob, pump): the full P / (U cos φ), its Ks only counts in the load of the board.`,
+    `Breakers: In ≥ ${Id}; cables Cu/PVC in conduit, two loaded cores: Iz ≥ In (1.5: 17.5 A, 2.5: 24 A, 4: 32 A, 6: 41 A, 10: 57 A, 16: 76 A).`,
     `Voltage drop ΔU% = 2 L I ρ / (S U) x 100, ρ = ${O.rho} Ω mm²/m; at most 3 % on a circuit.`,
     `Installed power: socket ${O.power.socket} W, worktop socket ${O.power.counter} W, water heater ${O.power.heater} W, hob ${O.power.hob} W, pump ${O.power.pump} W, air conditioners about BTU/10 W.`,
     'Standards: QCVN 12:2014/BXD, TCVN 9206:2012, TCVN 9207:2012, TCVN 7447 (IEC 60364), TCVN 9385:2012 (earthing).',

@@ -12,7 +12,7 @@
 import { uStairGeom } from './plan.mjs';
 import { ruleSet } from './rules.mjs';
 import { dec, mS, runsOn, showExpr, solidModel } from './solids.mjs';
-import { TEXT_STYLE, viewTitle } from './standards.mjs';
+import { floorTag, TEXT_STYLE, viewTitle } from './standards.mjs';
 import { rebarSchedule, SL } from './structure.mjs';
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -129,12 +129,14 @@ export function rebarGroups(R, lang = 'vi', { tie = { d: 6, spacing: 150 }, mode
       }
     }
     const row = (mark, shape, b, [n, total]) => ({ mark, shape: `${shape} ${strip(b)}`, d: b.d, length: Math.round(total / n), n, members: 1 });
-    const id = `S${S.name.replace(/\s+/g, '')}`;
+    // S2-1 for the slab of floor 2 (the tag of its floor, not its whole name)
+    const tag = S.tag ?? floorTag(S.name, S.name.replace(/\s+/g, ''));
+    const id = `S${tag}`;
     const rows = [row(`${id}-1`, T.slabX, bx, acc.x), row(`${id}-2`, T.slabY, by, acc.y)];
     if (acc.t[0]) rows.push(row(`${id}-3`, T.slabTop, bt, acc.t));
     if (acc.e[0]) rows.push(row(`${id}-4`, T.slabEdge, be, acc.e));
     (S.balconyDesign ?? []).forEach((b, i) => {
-      const out = b.d * 1000, len = b.len * 1000, bid = `BC${S.name.replace(/\s+/g, '')}${(S.balconyDesign.length > 1 ? `.${i + 1}` : '')}`;
+      const out = b.d * 1000, len = b.len * 1000, bid = `BC${tag}${(S.balconyDesign.length > 1 ? `.${i + 1}` : '')}`;
       // top bars: the cantilever, as much again into the floor slab (40d at least), a hook down at the edge
       rows.push({ mark: `${bid}-1`, shape: `${T.balTop} ${strip(b.top)}`, d: b.top.d, length: Math.round(out + Math.max(out, LAP * b.top.d) + Math.max(0, S.slab - 40)), n: Math.floor(len / b.top.s) + 1, members: 1 });
       rows.push({ mark: `${bid}-2`, shape: `${T.balBot} ${strip(b.dist)}`, d: b.dist.d, length: Math.round(out + 150), n: Math.floor(len / b.dist.s) + 1, members: 1 });

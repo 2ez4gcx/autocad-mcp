@@ -27,7 +27,7 @@ import { symbolDef } from './symbols.mjs';
 import { doorSchedule } from './doors.mjs';
 import { roofPlan } from './roof.mjs';
 import { stairDetail } from './stair.mjs';
-import { calcCsv, calcSheet, CONCRETE, STEEL, structuralCalc } from './calc.mjs';
+import { beamPrefix, calcCsv, calcSheet, CONCRETE, STEEL, structuralCalc } from './calc.mjs';
 import { boqCsv, boqSheets } from './boq.mjs';
 import { ruleSet } from './rules.mjs';
 import { parseCtb, planCsv, planLayers, readMappingCsv, readStandardCsv } from './layers.mjs';
@@ -316,6 +316,7 @@ const server = new McpServer(
         'list of each result.',
       '1. Units: drawing units (mm in a metric drawing: check drawing_info.units), areas m², angles degrees counter-clockwise from +X, Y up, points [x,y].',
       '2. Start with drawing_info (and list_layers). On a connection error call ping; if the bridge is missing call install_autocad_bridge.',
+      '2b. Language: the drawings are Vietnamese by default (decimal comma, TCVN titles and codes). For a set in English call setup_layers with language "en" once (the session then draws in English) or pass language "en" to each tool: titles, notes, legends, tables, codes (DB-1/MDB boards, AC/WH circuits, CW/HW/SP/WP pipes, B2./GB. beams, F1 footings) and decimal points follow. Names the user gives (rooms, floors, sheet titles) are written as given: name the rooms in the language of the set (English names such as BEDROOM, KITCHEN, BATHROOM are recognised as well as Vietnamese ones).',
       '3. Drawing from an image or a 3D model: read every printed dimension first (view_image with grid/crop zooms in), pick the plot scale, ' +
         'setup_layers + setup_styles, attach_image as a faded underlay calibrated on a known dimension, draw_plan for walls/openings/columns/' +
         'grids/stairs/rooms/dimensions, draw_entities for the rest (furniture, fixtures, hatches, notes, elevations), then screenshot and compare ' +
@@ -596,7 +597,7 @@ const Handles = jsonish(z.array(z.union([z.string(), z.number()]).transform(Stri
 const Obj = jsonish(z.record(z.string(), z.any()));
 const Specs = jsonish(z.array(z.record(z.string(), z.any())));
 const Str = z.string();
-const Lang = z.enum(['vi', 'en']);
+const Lang = z.enum(['vi', 'en']).describe('Language of the texts drawn: vi (default of the session) or en');
 const HANDLES_DESC = 'Entity handles (hex strings like "2A7") from tool results; valid while the drawing is open.';
 const FILTER = {
   types: opt(jsonish(z.array(z.string()))).describe('DXF types: LINE, LWPOLYLINE (or polyline), CIRCLE, ARC, TEXT, MTEXT, INSERT (or block), HATCH, DIMENSION, MULTILEADER, IMAGE...'),
@@ -2124,7 +2125,7 @@ async function layoutViews({ name, paper, orientation, views, title_block, lang,
   const scaleText = scales.length === 1 ? `1:${scales[0]}` : asShown;
   const list = sheetsMade.get(info0.name) ?? [];
   sheetsMade.set(info0.name, [...list.filter((x) => x.layout !== name), {
-    layout: name, number: title_block?.number ?? name, title: title_block?.title ?? '', scale: scaleText, paper: `${paper} ${orientation === 'portrait' ? 'đứng' : 'ngang'}`,
+    layout: name, number: title_block?.number ?? name, title: title_block?.title ?? '', scale: scaleText, paper: `${paper} ${lng === 'en' ? orientation : orientation === 'portrait' ? 'đứng' : 'ngang'}`,
   }]);
   return { ...r, scale: scaleText, views: vs.map((v) => ({ scale: `1:${v.scale}`, at: v.at.map((c) => Math.round(c)) })), paper, orientation, ...(warnings.length ? { warnings } : {}) };
 }
@@ -2227,7 +2228,7 @@ server.registerTool('create_layout', {
   const r = await sendNow('create_layout', req);
   const list = sheetsMade.get(info0.name) ?? [];
   sheetsMade.set(info0.name, [...list.filter((x) => x.layout !== name), {
-    layout: name, number: title_block?.number ?? name, title: title_block?.title ?? '', scale: `1:${s}`, paper: `${paper} ${orientation === 'portrait' ? 'đứng' : 'ngang'}`,
+    layout: name, number: title_block?.number ?? name, title: title_block?.title ?? '', scale: `1:${s}`, paper: `${paper} ${(lang ?? language) === 'en' ? orientation : orientation === 'portrait' ? 'đứng' : 'ngang'}`,
   }]);
   return text({ ...r, scale: `1:${s}`, paper, orientation, ...(warnings.length ? { warnings } : {}) });
 }));
@@ -2936,7 +2937,7 @@ server.registerTool('draw_structure_plan', {
     name = lang === 'en' ? 'FOUNDATION' : 'MÓNG';
     slab = args.slab ?? 120;
     roomsSpec = floors[0].spec;
-    prefix = 'GM.';
+    prefix = beamPrefix('foundation', name, 0, lang);
   } else if (roof) {
     below = floors[floors.length - 1];
     slab = args.slab ?? 120;
@@ -2944,7 +2945,7 @@ server.registerTool('draw_structure_plan', {
     level = below.level + (below.height ?? spec.heights?.top ?? 3600) + slab;
     name = lang === 'en' ? 'ROOF' : 'MÁI';
     roomsSpec = null;
-    prefix = 'DM.';
+    prefix = beamPrefix('roof', name, floors.length, lang);
   } else {
     const k = typeof args.floor === 'number' || /^\d+$/.test(String(args.floor)) ? Number(args.floor) - 1 : floors.findIndex((f) => f.name === String(args.floor));
     if (!floors[k] || k < 1) throw new Error(`draw_structure_plan: floor must be 2..${floors.length} (the slab of that floor) or "roof"`);
@@ -2953,9 +2954,8 @@ server.registerTool('draw_structure_plan', {
     name = floors[k].name;
     slab = args.slab ?? floors[k].slab ?? 120;
     roomsSpec = floors[k].spec;
-    // D2. for floor 2 ..., DT. for a stair tower (tum)
-    const m = /(\d+)\s*$/.exec(String(name));
-    prefix = /TUM/i.test(String(name)) ? 'DT.' : `D${m ? m[1] : k + 1}.`;
+    // D2. for floor 2 ..., DT. for a stair tower (tum); B2., BT. in English
+    prefix = beamPrefix('floor', name, k, lang);
   }
   const sc = args.scale;
   const rooms = roomsSpec && !args.dry_run ? await roomOutlines(roomsSpec, 'draw_structure_plan').catch(() => ({})) : {};
@@ -3569,6 +3569,8 @@ server.registerTool('draw_ceiling_plan', {
   if (cp.lights) st.lights = cp.lights;
   if (args.mode !== 'finish') {
     st.fixtures = cp.fixtures;
+    // the plan they belong to: another drawing of this session (another plan) does not take them
+    st.fixturesKey = specKey(spec);
     st.ceilingArgs = { lights: args.lights, spacing: args.spacing };
   }
   const extra = [...cp.entities, ...sb.notes];
@@ -3677,7 +3679,8 @@ server.registerTool('draw_joinery_detail', {
     hood: opt(Obj).describe('{x, w: 700, h: 650, z0: 1600} cooker hood between the wall cabinets'),
     sink: opt(z.number()), hob: opt(z.number()),
     base: opt(Obj), wall: opt(z.union([Obj, z.null()])), panel: opt(z.number().positive()), materials: opt(Obj),
-    bays: opt(z.union([z.number().int().positive(), Specs])).describe('display: a count of equal bays or [{w, title, subtitle, picture, pegboard}]'),
+    bays: opt(jsonish(z.union([z.number().int().positive(), z.array(z.union([z.number().positive(), z.record(z.string(), z.any())]))])))
+      .describe('display: a count of equal bays, or [{w, title, subtitle, picture: false, pegboard: true, icon: false} or a width]'),
     display: opt(Obj).describe('display: sizes {plinth: 80, recess: 50, base: 450, shelf: 30, header: 400, rail: 110, fin: 50, back: 20, depth: 500, picture: [1450, 2000], panel: 18}'),
     ceiling: opt(z.union([z.number().positive(), z.null()])).describe('display: the ceiling level (2800): a gypsum bulkhead from the top of the casework up to it; null for none'),
     bulkhead: opt(z.boolean()),
@@ -3716,7 +3719,8 @@ server.registerTool('draw_joinery_detail', {
       const hood = pool.find((x) => x.type === 'hood' && along(x) !== null);
       if (hood && p.hood === undefined) p.hood = { x: along(hood), w: hood.w, d: hood.d, h: hood.h, z0: hood.opts.z0 };
     }
-    p.name = p.name ?? `${it.type === 'kitchen_base' ? 'TỦ BẾP' : it.def.vi.toUpperCase()} ${it.code}`;
+    const en = (p.language ?? language) === 'en';
+    p.name = p.name ?? `${it.type === 'kitchen_base' ? (en ? 'KITCHEN CABINETS' : 'TỦ BẾP') : (en ? it.def.en : it.def.vi).toUpperCase()} ${it.code}`;
   }
   const sc = p.scale = p.scale ?? (p.kind === 'display' ? 30 : 10);
   if (dry_run) {
@@ -3732,7 +3736,7 @@ server.registerTool('draw_joinery_detail', {
     const sec = await drawView(r.section.map((e) => shiftEntity(e, [dx, 0])), p.section_scale, info, p.language);
     return text({
       kind: 'display', at, scale: `1:${sc}`, section_scale: `1:${p.section_scale}`, bays: r.bays, assumed: assumedOrNone(r.assumed),
-      count: elev.count + sec.count, elevation: elev.bounds, section: sec.bounds,
+      warnings: r.warnings.length ? r.warnings : undefined, count: elev.count + sec.count, elevation: elev.bounds, section: sec.bounds,
     });
   }
   const r = engine('draw_joinery_detail', () => joineryDetail({ ...p, at }));
@@ -3932,7 +3936,7 @@ server.registerTool('lighting_calc', {
   const { spec, offset: at0, key, height } = floorFor(args, tool);
   const st = interiorOf(key);
   const rooms = await roomOutlines(spec, tool, at0);
-  let fixtures = args.lights ? null : st.fixtures;
+  let fixtures = args.lights || st.fixturesKey !== specKey(spec) ? null : st.fixtures;
   // a drawing reopened in another session: the ceiling plan of the floor as the drawing keeps it (its lights, its ceilings)
   const kept = fixtures || args.lights ? null : (viewStore.getStore()?.views || [])
     .filter((v) => v.tool === 'draw_ceiling_plan' && v.entities > 0 && (v.args?.mode ?? 'both') !== 'finish' && String(v.args?.floor ?? '') === String(args.floor ?? ''))
@@ -4256,7 +4260,8 @@ server.registerTool('draw_electrical_plan', {
     '(mặt bằng ổ cắm, điều hòa): double sockets by the kind of room (bedside, desk, TV wall, dining), worktop sockets, hob ' +
     'outlet and hood socket, weatherproof sockets in WCs and yards, wall air conditioners sized at 600 BTU/m² with their ' +
     'sockets, water heaters in WCs, the pump, data and TV outlets to the data cabinet, the meter outside the front door; ' +
-    'circuits S, ĐH, NL, BT, BN. Boards: TĐ-1, TĐ-2... by the stair door, the main board TĐ-T on the ground floor (a floor ' +
+    'circuits S, ĐH, NL, BT, BN (English set: S, AC, WH, CK, PU). Boards: TĐ-1, TĐ-2... (DB-1...) by the stair door, the main ' +
+    'board TĐ-T (MDB) on the ground floor (a floor ' +
     'without rooms of its own, e.g. the stair tower, is fed from the board below). Legend with the counts, the circuits of ' +
     'the floor, general notes. The same design (devices, circuits, loads) serves draw_electrical_diagram and ' +
     'electrical_calc. Defaults (heights, circuit sizes, demand factors, powers) are listed in assumed; options: {heights, ' +
@@ -4311,7 +4316,7 @@ server.registerTool('draw_electrical_plan', {
 server.registerTool('draw_electrical_diagram', {
   description:
     'Diagrams of the electrical set from the design of draw_electrical_plan (same plan, items and options). kind ' +
-    'single_line (sơ đồ nguyên lý cấp điện): the main board TĐ-T from the meter (cable, main breaker, earth) with a drop per ' +
+    'single_line (sơ đồ nguyên lý cấp điện): the main board TĐ-T (MDB in English) from the meter (cable, main breaker, earth) with a drop per ' +
     'floor board and its schedule, then each floor board (incoming breaker, busbar, a drop per circuit) with its schedule: ' +
     'circuit, load, breaker, cable Cu/PVC, P, Ks, Itt, length, voltage drop. kind riser (sơ đồ trục đứng cấp điện): the ' +
     'floors and levels, the meter, the main and floor boards with their feeders, the data cabinet, the earthing; with the ' +
@@ -4573,7 +4578,7 @@ const MEP_NOTES = {
     ],
     en: [
       'Standards: QCVN 12:2014/BXD; TCVN 9206:2012, TCVN 9207:2012; TCVN 7447 (IEC 60364); TCVN 9385:2012 (earthing).',
-      'Single-phase 220 V supply through the utility meter; main board TĐ-T on the ground floor, a board on each floor by the stair.',
+      'Single-phase 220 V supply through the utility meter; main board MDB on the ground floor, a board on each floor by the stair.',
       'Cu/PVC cables in rigid PVC conduit concealed in walls, floors and ceilings; sizes and breakers per the single-line diagram.',
       'Socket circuits and wet areas on 30 mA RCBOs; each air conditioner, water heater, hob and pump on its own circuit.',
       'Cable colours: line red or brown, neutral blue or black, earth green-yellow; every socket earthed.',
@@ -4611,7 +4616,8 @@ server.registerTool('draw_mep_notes', {
   description:
     'General notes and legend sheet of the electrical or plumbing set (ghi chú chung, bảng ký hiệu, chữ viết tắt): the ' +
     'standards, supply, materials, installation and tests as numbered notes, every symbol of the set with its description ' +
-    'and mounting height, and the abbreviations (TĐ, L, S, ĐH, NL, BT, BN, MCB, RCBO / TX, TR, TM, HG, PPR, uPVC). For the ' +
+    'and mounting height, and the abbreviations (TĐ, L, S, ĐH, NL, BT, BN, MCB, RCBO / TX, TR, TM, HG, PPR, uPVC; in English DB, MDB, AC, ' +
+    'WH, CK, PU / CW, HW, SP, WP, RWP, VP, SH, ST, MH, WM). For the ' +
     'first sheet after the drawing list (Đ-01, N-01). notes replaces the general notes.',
   inputSchema: { system: z.enum(['electrical', 'plumbing']), scale: z.number().positive().default(50), at: opt(Point), notes: opt(z.array(Str)), language: opt(Lang) },
   annotations: EDIT,
@@ -4647,9 +4653,9 @@ server.registerTool('draw_mep_notes', {
   const lgd = mepLegend(en ? 'LEGEND' : 'BẢNG KÝ HIỆU', rows, [190 * sc, 0], sc, layer, layer);
   out.push(...lgd.entities);
   const abbr = elec
-    ? (en ? 'TĐ-T main board; TĐ-n floor board; L lighting; S sockets; ĐH air conditioner; NL water heater; BT hob; BN pump; MCB miniature breaker; RCBO residual current breaker with overcurrent; Cu/PVC copper PVC cable.'
+    ? (en ? 'MDB main distribution board; DB-n floor distribution board; L lighting; S sockets; AC air conditioner; WH water heater; CK cooker (hob); PU pump; Pd design load; Id design current; Kd diversity factor; MCB miniature circuit breaker; RCBO residual current breaker with overcurrent; Cu/PVC copper PVC cable.'
       : 'TĐ-T tủ điện tổng; TĐ-n tủ điện tầng; L chiếu sáng; S ổ cắm; ĐH điều hòa; NL bình nóng lạnh; BT bếp từ; BN bơm nước; MCB aptomat; RCBO aptomat chống dòng rò; Cu/PVC dây đồng cách điện PVC.')
-    : (en ? 'CL cold water; CN hot water; TX soil; TR waste; TM rainwater; TH vent; OĐ shaft with the stacks and risers; BTH septic tank; HG manhole; ĐHN water meter; MB pump; PPR polypropylene pipe; uPVC rigid PVC pipe; D outside diameter; i slope.'
+    : (en ? 'CW cold water; HW hot water; SP soil pipe; WP waste pipe; RWP rainwater pipe; VP vent pipe; SH shaft with the stacks and risers; ST septic tank; MH manhole; WM water meter; PU pump; PPR polypropylene pipe; uPVC rigid PVC pipe; D outside diameter; i slope.'
       : 'CL cấp lạnh; CN cấp nóng; TX thoát xí; TR thoát rửa; TM thoát mưa; TH thông hơi; OĐ hộp gen ống đứng; BTH bể tự hoại; HG hố ga; ĐHN đồng hồ nước; MB máy bơm; PPR ống nhựa PP-R; uPVC ống nhựa PVC cứng; D đường kính ngoài; i độ dốc.');
   out.push({ type: 'text', text: en ? 'ABBREVIATIONS' : 'CHỮ VIẾT TẮT', at: [0, -110 * sc], height: 3 * sc, layer, style: TEXT_STYLE });
   out.push({ type: 'mtext', text: abbr, at: [0, -116 * sc], height: 2.5 * sc, width: 170 * sc, layer, style: TEXT_STYLE });

@@ -3,7 +3,7 @@
 // chains, wiring arcs and pipe runs, labels kept clear of each other and the legend of a sheet. Pure geometry.
 import { buildModel } from './elevation.mjs';
 import { centroid, edgesOf, inside, openingsOn, overlaps, runsBetween, textWidth, wallFrame } from './interior.mjs';
-import { TEXT_STYLE } from './standards.mjs';
+import { TEXT_STYLE, words } from './standards.mjs';
 import { sym } from './symbols.mjs';
 
 export const r2 = (v) => Math.round(v * 100) / 100;
@@ -37,20 +37,21 @@ export const textE = (text, at, h, layer, align = 'left', rotation = 0) => ({
 
 // ---------------------------------------------------------------- rooms
 
+// whole words of the name (Vietnamese or English): "ĂN" is not found in "VĂN PHÒNG", "KHO" not in "KHOA"
 const KINDS = [
-  ['wc', /(WC|VỆ SINH|TẮM|TOILET|BATH)/i],
-  ['kitchen', /(BẾP|KITCHEN)/i],
-  ['stair', /(CẦU THANG|STAIR)/i],
-  ['terrace', /(SÂN THƯỢNG|TERRACE|ROOF)/i],
-  ['laundry', /(SÂN PHƠI|GIẶT|LAUNDRY)/i],
-  ['outdoor', /(SÂN|HIÊN|BAN CÔNG|LÔ GIA|LOGIA|BALCONY|PORCH|YARD)/i],
-  ['bedroom', /(NGỦ|BEDROOM)/i],
-  ['living', /(KHÁCH|SINH HOẠT|LIVING|FAMILY)/i],
-  ['worship', /(THỜ|ALTAR|WORSHIP)/i],
-  ['hall', /(SẢNH|HÀNH LANG|HALL|LOBBY|CORRIDOR)/i],
-  ['storage', /(KHO|STORE|STORAGE)/i],
-  ['dining', /(ĂN|DINING)/i],
-  ['office', /(LÀM VIỆC|OFFICE|ĐỌC|STUDY)/i],
+  ['wc', words('WC', 'VỆ SINH', 'TẮM', 'TOILETS?', 'BATH', 'BATHROOMS?', 'WASHROOMS?', 'RESTROOMS?', 'SHOWER ROOM', 'POWDER ROOM', 'ENSUITE')],
+  ['kitchen', words('BẾP', 'KITCHENS?', 'KITCHENETTE', 'PANTRY')],
+  ['stair', words('CẦU THANG', 'THANG BỘ', 'STAIRS?', 'STAIRCASE', 'STAIRWELL')],
+  ['terrace', words('SÂN THƯỢNG', 'TERRACE', 'ROOF', 'ROOFTOP')],
+  ['laundry', words('SÂN PHƠI', 'PHƠI', 'GIẶT', 'LAUNDRY')],
+  ['outdoor', words('SÂN', 'HIÊN', 'BAN CÔNG', 'LÔ GIA', 'LOGIA', 'LOGGIA', 'VƯỜN', 'BALCONY', 'BALCONIES', 'PORCH', 'YARD', 'BACKYARD', 'COURTYARD', 'PATIO', 'GARDEN')],
+  ['bedroom', words('NGỦ', 'BEDROOMS?', 'BED ROOM', 'MASTER BED')],
+  ['living', words('KHÁCH', 'SINH HOẠT', 'LIVING', 'FAMILY', 'LOUNGE')],
+  ['worship', words('THỜ', 'ALTAR', 'WORSHIP', 'PRAYER')],
+  ['hall', words('SẢNH', 'HÀNH LANG', 'HALL', 'HALLWAY', 'LOBBY', 'CORRIDOR', 'FOYER')],
+  ['storage', words('KHO', 'STORES?', 'STOREROOM', 'STORAGE')],
+  ['dining', words('ĂN', 'DINING')],
+  ['office', words('LÀM VIỆC', 'VĂN PHÒNG', 'OFFICES?', 'ĐỌC', 'STUDY', 'THƯ VIỆN', 'LIBRARY')],
 ];
 
 /** Kind of a room from its name: wc, kitchen, stair, terrace, laundry, outdoor, bedroom, living, worship, hall, storage, dining, office, room. */
