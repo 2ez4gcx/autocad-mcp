@@ -60,6 +60,74 @@
       "description": "Quantities by layer/block: lengths, areas, counts, CSV for Excel"
     },
     {
+      "name": "revision_cloud",
+      "description": "Cloud the places of a revision with its delta number (khoanh mây chỗ sửa đổi)"
+    },
+    {
+      "name": "compare_drawings",
+      "description": "Compare the drawing with an earlier version on disk and cloud what changed"
+    },
+    {
+      "name": "stretch_entities",
+      "description": "Stretch part of a drawing in place, as STRETCH (move a wall; dimensions follow)"
+    },
+    {
+      "name": "replace_text",
+      "description": "Find and replace text across texts, attributes, dimensions, tables and blocks"
+    },
+    {
+      "name": "convert_vietnamese_text",
+      "description": "Turn texts typed for TCVN3 fonts (.VnTime) into Unicode and move their styles to Arial"
+    },
+    {
+      "name": "manage_images",
+      "description": "List, unload, reload, replace, detach and purge attached images (refresh a render)"
+    },
+    {
+      "name": "retitle_view",
+      "description": "Change the title of views and fit the underline to the new title"
+    },
+    {
+      "name": "update_title_blocks",
+      "description": "Write a revision and other fields into the title blocks of every sheet"
+    },
+    {
+      "name": "check_annotations",
+      "description": "Find dimensions written over with the wrong value and area texts that are not their room's area; fix them"
+    },
+    {
+      "name": "list_texts",
+      "description": "List the texts of a drawing (distinct texts, language, handles) for review or translation"
+    },
+    {
+      "name": "update_texts",
+      "description": "Set the text of many entities by handle in one step (translations, corrections)"
+    },
+    {
+      "name": "clean_drawing",
+      "description": "Remove duplicates, zero-length entities and empty texts; merge overlapping lines"
+    },
+    {
+      "name": "describe_folder",
+      "description": "Map every drawing of a folder without opening it: register of sheets and views"
+    },
+    {
+      "name": "describe_drawing",
+      "description": "Read the map of a drawing: sheets, frames, title blocks, views with kind, floor, scale and window"
+    },
+    {
+      "name": "read_plan",
+      "description": "Read the plan of a drawing made by others into a plan description; preview it, or adopt it in place"
+    },
+    {
+      "name": "standardize_layers",
+      "description": "Make the layers of a drawing made by others consistent: map them to one standard (dry run first)"
+    },
+    {
+      "name": "list_views",
+      "description": "The views a drawing keeps (what each tool drew, its arguments, the plan): to update them in place"
+    },
+    {
       "name": "measure_model",
       "description": "Volumes of prisms and of their union, areas of faces with holes, by AutoCAD's solid modeler"
     },
@@ -150,6 +218,10 @@
     {
       "name": "open_drawing",
       "description": "Open a drawing"
+    },
+    {
+      "name": "close_drawing",
+      "description": "Close a drawing (unsaved changes only with discard)"
     },
     {
       "name": "new_drawing",

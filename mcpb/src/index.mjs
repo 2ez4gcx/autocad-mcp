@@ -19,9 +19,9 @@ import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as z from 'zod';
-import { buildBuilding, buildElevation, buildingAssumed, buildSection, floorsOf } from './elevation.mjs';
+import { buildBuilding, buildElevation, buildingAssumed, buildSection, floorsOf, HEIGHT_DEFAULTS } from './elevation.mjs';
 import { buildPlan, planAssumptions, PlanError } from './plan.mjs';
-import { coverSheet, dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, setDrawingLanguage, titleBlock, viewStyles, viewTitle } from './standards.mjs';
+import { capsWidth, coverSheet, dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, setDrawingLanguage, titleBlock, viewStyles, viewTitle } from './standards.mjs';
 import { beamDetail, beamSchedule, footingDetail, framingPlan, rcSection, rebarSchedule, structureNotes } from './structure.mjs';
 import { symbolDef } from './symbols.mjs';
 import { doorSchedule } from './doors.mjs';
@@ -30,6 +30,15 @@ import { stairDetail } from './stair.mjs';
 import { calcCsv, calcSheet, CONCRETE, STEEL, structuralCalc } from './calc.mjs';
 import { boqCsv, boqSheets } from './boq.mjs';
 import { ruleSet } from './rules.mjs';
+import { parseCtb, planCsv, planLayers, readMappingCsv, readStandardCsv } from './layers.mjs';
+import { planAreas, readPlan } from './readplan.mjs';
+import { cloudEntities, clusterBoxes, clipBox, REV_LAYER, regionsOfDiff } from './revision.mjs';
+import { describeDrawing, fitWindows, frameHandles, legacyStyles, viewsWithWindows } from './describe.mjs';
+import { TCVN3, VNI } from './vnfont.mjs';
+import { checkAreas, checkDims, listTexts, REGISTER_COLUMNS, registerRows, toCsv } from './review.mjs';
+import { xlsx as xlsxBook } from './xlsx.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { freeId, hashOf, joinBounds, keptArgs, keptPlan, outgrew, parseViews, PLAN_TOOLS, VIEW_TOOLS, viewId, viewToReplace } from './views.mjs';
 import { structurePrisms } from './solids.mjs';
 import { finishCsv, finishQuantities, finishSheet } from './archboq.mjs';
 import * as SURF from './surfaces.mjs';
@@ -52,7 +61,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // Commands that do not change the drawing (safe to retry after a timeout), and commands without an Undo step.
 const READ_ONLY_CMDS = new Set(['ping', 'drawing_info', 'list_layers', 'list_blocks', 'query_entities', 'selection_info',
-  'quantity_takeoff', 'check_drawing', 'screenshot', 'view_image', 'image_info', 'select_entities']);
+  'quantity_takeoff', 'check_drawing', 'screenshot', 'view_image', 'image_info', 'select_entities', 'view_list', 'view_diff',
+  'layer_survey', 'plan_geometry', 'drawing_diff', 'model_map', 'layout_views', 'view_extents', 'measure_model', 'annotation_data',
+  'text_list']);
 const NO_UNDO_CMDS = new Set(['undo', 'save_drawing', 'open_drawing', 'new_drawing', 'export_pdf']);
 
 function afterSendHint(cmd) {
@@ -125,6 +136,25 @@ function call(cmd, params = {}, label = cmd) {
  * and box (the box only places labels here).
  */
 async function sendNow(cmd, params = {}, label = cmd) {
+  const ctx = viewStore.getStore();
+  if (!ctx || !VIEW_TOOLS.has(ctx.tool) || !(cmd === 'draw_plan' || cmd === 'draw_entities') || params.rooms_only) return sendDraw(cmd, params, label);
+  // the first thing a view tool draws takes the old view away (the same Undo step) and keeps the plan in the drawing;
+  // everything it draws carries the id of its view, whose record follows the places taken so far
+  const first = !ctx.sent;
+  ctx.sent = true;
+  const meta = { id: ctx.id, tool: ctx.tool, key: ctx.base, spots: ctx.spots, plan: ctx.planHash ?? undefined, args: ctx.args, extra: ctx.extra, time: new Date().toISOString() };
+  const store = first && ctx.planJson && ctx.planHash !== ctx.storedHash ? { plan: ctx.planJson, plan_hash: ctx.planHash } : undefined;
+  const r = await sendDraw(cmd, { ...params, view: { id: ctx.id, erase: first && !!ctx.old, meta: JSON.stringify(meta), ...(store ? { store } : {}) } }, label);
+  if (r?.view?.erased !== undefined) {
+    ctx.erased = r.view.erased;
+    ctx.locked = r.view.locked ?? 0;
+    ctx.erasedBounds = r.view.erased_bounds ?? null;
+  }
+  if (r?.bounds) ctx.bounds = joinBounds(ctx.bounds, r.bounds);
+  return r;
+}
+
+async function sendDraw(cmd, params = {}, label = cmd) {
   if (cmd === 'define_blocks' || !Array.isArray(params.entities)) return send(cmd, params, label);
   const defs = new Map();
   let any = false;
@@ -223,8 +253,10 @@ function send(cmd, params = {}, label = cmd) {
     sock.on('error', (e) => {
       if (!connected && (e.code === 'ECONNREFUSED' || e.code === 'ECONNRESET' || e.code === 'EADDRNOTAVAIL')) {
         finish(new AcadError(
-          `Cannot connect to AutoCAD at ${HOST}:${PORT}. Open AutoCAD (full version 2021-2024) and type MCPSTATUS in its command line ` +
-          '(MCPSTART starts the bridge). If the command is unknown, the bridge is not installed: run install_autocad_bridge, then restart AutoCAD.',
+          `Cannot connect to AutoCAD at ${HOST}:${PORT}. If AutoCAD was just started or is opening a drawing, the bridge listens only ` +
+          'once AutoCAD has finished loading (1-2 minutes with a large drawing): wait and retry. Otherwise open AutoCAD (full version ' +
+          '2021-2024) and type MCPSTATUS in its command line (MCPSTART starts the bridge). If the command is unknown, the bridge is not ' +
+          'installed: run install_autocad_bridge, then restart AutoCAD.',
         ));
       } else {
         finish(new AcadError(`AutoCAD connection error (${e.code || e.name}): ${e.message}.${sent ? afterSendHint(label) : ''}`));
@@ -301,6 +333,7 @@ const server = new McpServer(
       '7. Prefer the dedicated tools; run_lisp only when none can do the job.',
       '8. A timed-out edit may already have run: check before repeating.',
       '9. Rooms: give each room a point inside; draw_plan measures its area from the walls (never type areas). quantity_takeoff and check_drawing report QS and QA.',
+      '10. Changing a drawing these tools made (also one reopened later): do not draw it again beside the old one. list_views names its views and, with plan: true, returns the plan description the drawing keeps; change that description and call draw_plan with update: true, then call each tool it lists under stale_views again with update: true (and the arguments list_views shows): every view is replaced where it stands, so its sheet keeps showing it; export the sheets again. A drawing these tools did not make has no views: edit it entity by entity (query_entities, transform_entities, set_properties, delete_entities, draw_entities).',
     ].join('\n'),
   },
 );
@@ -315,18 +348,238 @@ function text(result) {
 }
 
 function bridgeTool(name, description, inputSchema, annotations, prep = (a) => a) {
-// every tool draws in the language of its call (its language argument), else in the language of the session: the
-// view titles of the engines that are not handed a language follow it
-const registerTool = server.registerTool.bind(server);
-server.registerTool = (name, def, handler) => registerTool(name, def, (args, extra) => {
-  setDrawingLanguage(args?.language ?? language);
-  return handler(args, extra);
-});
-
   server.registerTool(name, { description, inputSchema, annotations }, async (args) => text(await call(name, prep(args))));
 }
 
 const opt = (schema) => schema.nullish();
+
+/** Whether acad.exe runs on this machine (to tell a starting AutoCAD from a closed one). */
+function acadRunning() {
+  return new Promise((resolve) => {
+    execFile('tasklist', ['/FI', 'IMAGENAME eq acad.exe', '/NH'], { windowsHide: true, timeout: 5000 }, (err, out) => resolve(!err && /acad\.exe/i.test(String(out))));
+  });
+}
+
+// the heights a plan description is read for (draw_elevation, draw_section, the interior tools)
+const HEIGHT_KEYS = [...Object.keys(HEIGHT_DEFAULTS), 'beam', 'foundation', 'walls_to_roof'];
+const HEIGHT_HINTS = {
+  ceiling: 'top is floor to floor; the ceiling of a room is rooms[].ceiling.level of the interior tools',
+  floor_to_floor: 'top', storey: 'top', height: 'top', sill: 'window_sill', head: 'door_head or window_head', base: 'ground',
+};
+/** Warnings for keys of heights that no tool reads (a misspelt key is otherwise silently ignored). */
+function heightWarnings(h, where = 'heights') {
+  if (!h || typeof h !== 'object' || Array.isArray(h)) return [];
+  return Object.keys(h).filter((k) => !HEIGHT_KEYS.includes(k))
+    .map((k) => `${where}.${k} is not read (keys: ${HEIGHT_KEYS.join(', ')}): ignored${HEIGHT_HINTS[k] ? `; ${HEIGHT_HINTS[k]}` : ''}`);
+}
+
+/**
+ * The styles of a drawing request at a scale. LTSCALE is set only on a drawing with nothing in model space yet, or when
+ * asked (ltscale: a number, or 'set'): views drawn at other scales size their dashes against the LTSCALE they were
+ * drawn with, so changing it later breaks them.
+ */
+function stylesAt(scale, info, ltscale = 'auto') {
+  const st = styleParams({ scale });
+  if (typeof ltscale === 'number') st.ltscale = ltscale;
+  else if (ltscale === 'keep' || (ltscale === 'auto' && (info?.model_space_entities ?? 0) > 0)) delete st.ltscale;
+  return st;
+}
+
+// ---------------------------------------------------------------- views: replace what a tool drew, where it stands
+// The call of a drawing tool runs in a view context: what it draws carries the id of its view, the places it takes
+// are remembered, and with update: true the earlier view goes (in the Undo step of the first thing drawn) and the new
+// one takes its places. The plan a view was drawn from and the plan of the drawing are kept in the drawing itself.
+const viewStore = new AsyncLocalStorage();
+const UpdateArg = opt(z.union([z.boolean(), z.string()])).describe(
+  'true: replace the view this tool drew earlier in this drawing (the same floor, mark, room...) where it stands, so the ' +
+  'sheets that show it keep showing it, instead of drawing a new one beside it; or the id of the view to replace ' +
+  '(list_views). The result names the views still drawn from an older plan (stale_views): update them too');
+const RevisionArg = opt(z.union([z.boolean(), z.number(), z.object({ no: opt(z.union([z.number(), z.string()])), note: opt(z.string()) })])).describe(
+  'With update: cloud what the update changed (khoanh mây chỗ sửa đổi): the entities gone or new against the view as it ' +
+  'was, grouped into regions, each clouded on A-ANNO-REVS with the delta of the revision number. A number, or {no, note} ' +
+  '(note beside the delta, e.g. "Dời tường WC"); the clouds of one revision are one view (revision:<no>), kept when other ' +
+  'views are updated');
+
+/** The revision of a call ({no, note}) or null. */
+const revisionOf = (r) => (r === undefined || r === null || r === false ? null : typeof r === 'object' ? { no: r.no ?? 1, note: r.note ?? '' } : { no: r === true ? 1 : r, note: '' });
+
+/** Clouds around regions, drawn as the view revision:<no> (added to what that revision already has). */
+async function drawClouds(regions, { no, note, scale }, send = call) {
+  const ents = [];
+  regions.forEach((b, i) => ents.push(...cloudEntities(b, { no, note: i === 0 ? note : '', scale })));
+  if (!ents.length) return null;
+  const id = `revision:${no}`;
+  // a later call of the same revision without a note keeps the note the revision was given
+  if (!note) {
+    try {
+      const known = parseViews(await send('view_list', {})).views.find((v) => v.id === id);
+      note = known?.args?.note ?? '';
+    } catch {
+      // no views kept: no note to keep
+    }
+  }
+  const meta = JSON.stringify({ id, tool: 'revision_cloud', key: id, spots: [], args: { no, note }, extra: {}, time: new Date().toISOString() });
+  const r = await send('draw_entities', withStyles({ entities: ents, view: { id, erase: false, meta } }));
+  return { id, clouds: regions.length, bounds: r?.bounds };
+}
+
+// the revision of an edit made entity by entity on a drawing (transform, properties, delete, draw, stretch, text)
+const EditRevisionArg = opt(z.union([z.number(), z.string(), z.object({ no: opt(z.union([z.number(), z.string()])), note: opt(z.string()) })])).describe(
+  'Cloud what this edit changed (khoanh mây chỗ sửa đổi) on A-ANNO-REVS with the delta of the revision: a number, or ' +
+  '{no, note} (note beside the delta). The clouds of one revision are one view (revision:<no>)');
+const EditScaleArg = z.number().positive().default(100).describe('Plot scale of the drawing, for the size of the clouds');
+const editRevisionOf = (r) => (r === undefined || r === null || r === false || r === '' ? null : typeof r === 'object' ? { no: r.no ?? 1, note: r.note ?? '' } : { no: r, note: '' });
+
+/** The extents [x0, y0, x1, y1] of entities of model space, by handle (those that have extents). */
+async function boxesOf(handles, send = call) {
+  if (!handles?.length) return [];
+  const out = [];
+  // detail: the extents of every kind of entity (without it only blocks and hatches carry them)
+  for (let i = 0; i < handles.length; i += 2000) {
+    const part = handles.slice(i, i + 2000);
+    const q = await send('query_entities', { handles: part, limit: part.length, detail: true });
+    for (const e of q.entities || []) if (e.bounds && e.space !== 'paper') out.push([e.bounds.min[0], e.bounds.min[1], e.bounds.max[0], e.bounds.max[1]]);
+  }
+  return out;
+}
+
+/** Clouds around the places an edit touched, merged where they lie close; the result of the edit gets revision. */
+async function cloudEdit(out, rev, boxes, scale = 100, send = call) {
+  if (!rev || !out || typeof out !== 'object') return out;
+  const b = (boxes || []).filter((x) => Array.isArray(x) && x.length === 4 && x.every(Number.isFinite));
+  if (!b.length) {
+    out.revision = { no: rev.no, clouds: 0, note: 'nothing in model space to cloud' };
+    return out;
+  }
+  try {
+    const r = await drawClouds(clusterBoxes(b, 5 * scale), { ...rev, scale }, send);
+    out.revision = { no: rev.no, clouds: r?.clouds ?? 0, view: r?.id, layer: REV_LAYER };
+  } catch (e) {
+    out.revision = { no: rev.no, clouds: 0, error: String(e.message || e) };
+  }
+  return out;
+}
+
+/** The call of a view tool: what the drawing knows of its views, the view to replace, the plan of the drawing. */
+async function viewCall(tool, args, run) {
+  if (args?.dry_run) {
+    // a dry run draws nothing, but reads the plan this drawing keeps when the session has none of it
+    if (!args.plan && tool !== 'draw_plan') {
+      try {
+        const known = parseViews(await call('view_list', { keys: ['plan_hash'] }));
+        if (known.planHash && (!lastPlan || hashOf(specKey(lastPlan)) !== known.planHash)) {
+          const r = await call('view_list', { keys: ['plan'] });
+          lastPlan = JSON.parse(r.values.plan);
+        }
+      } catch {
+        // a bridge that keeps no views
+      }
+    }
+    return run();
+  }
+  let known;
+  try {
+    known = parseViews(await call('view_list', { keys: ['plan_hash'] }));
+  } catch {
+    return run(); // a bridge that keeps no views (older than the server): the tool draws as it always did
+  }
+  const base = viewId(tool, args);
+  const old = args.update ? viewToReplace(known.views, tool, base, args.update) : null;
+  const ctx = {
+    tool, base, old, update: !!args.update, id: old ? old.id : freeId(base, known.ids), args: keptArgs(tool, args),
+    n: 0, spots: [], extra: {}, sent: false, erased: 0, locked: 0, erasedBounds: null, bounds: null,
+    planHash: null, planJson: null, storedHash: known.planHash, planBase: null, floorsBase: null,
+  };
+  if (tool === 'draw_plan') {
+    const kept = keptPlan(args);
+    ctx.planHash = hashOf(specKey(kept));
+    ctx.planJson = JSON.stringify(kept);
+  } else {
+    // the building of this drawing: where draw_plan put its floors, and its plan when the call gives none and the
+    // session's last plan is not the one of this drawing (a drawing reopened, or another drawing made current)
+    const planView = known.views.filter((v) => v.tool === 'draw_plan' && v.entities > 0).sort((a, b) => String(b.time).localeCompare(String(a.time)))[0];
+    if (planView?.extra?.floors) ctx.floorsBase = planView.extra.floors;
+    if (!args.plan && known.planHash && (!lastPlan || hashOf(specKey(lastPlan)) !== known.planHash)) {
+      try {
+        const r = await call('view_list', { keys: ['plan'] });
+        ctx.planBase = JSON.parse(r.values.plan);
+        lastPlan = ctx.planBase;
+        lastFloors = ctx.floorsBase ?? null;
+      } catch {
+        ctx.planBase = null;
+      }
+    }
+  }
+  const res = await viewStore.run(ctx, run);
+  const out = viewResult(res, ctx, known);
+  // the clouds of a revision: where this update changed the view
+  const rev = revisionOf(args.revision);
+  if (rev && ctx.sent && ctx.old) {
+    try {
+      const diff = await call('view_diff', { id: ctx.id, forget: true });
+      const scale = Number(args.scale ?? ctx.args?.scale ?? 100) || 100;
+      const regions = diff.known ? regionsOfDiff(diff, { scale }) : [];
+      const drawn = regions.length ? await drawClouds(regions, { ...rev, scale }) : null;
+      const part = out?.content?.find((c) => c.type === 'text');
+      const o = JSON.parse(part.text);
+      o.revision = drawn ? { no: rev.no, clouds: drawn.clouds, view: drawn.id, changed: { removed: diff.removed.length, added: diff.added.length, same: diff.same } }
+        : { no: rev.no, clouds: 0, note: diff.known ? 'nothing changed in this view' : 'the view as it was is not known (drawn in another session): clouds need an update in this session, or revision_cloud' };
+      part.text = JSON.stringify(o);
+    } catch (e) {
+      // the clouds are a courtesy: the update itself stands
+    }
+  } else if (rev && !ctx.old) {
+    try {
+      const part = out?.content?.find((c) => c.type === 'text');
+      const o = JSON.parse(part.text);
+      o.revision = { no: rev.no, clouds: 0, note: 'revision clouds what an update (update: true) changed; this call drew a new view' };
+      part.text = JSON.stringify(o);
+    } catch {
+      // as is
+    }
+  }
+  return out;
+}
+
+/** The result of a view tool with its view: its id, what it replaced, the views still drawn from another plan. */
+function viewResult(res, ctx, known) {
+  if (!ctx.sent) return res; // nothing was drawn
+  try {
+    const part = res?.content?.find((c) => c.type === 'text');
+    const out = JSON.parse(part.text);
+    if (!out || typeof out !== 'object' || Array.isArray(out)) return res;
+    const v = { id: ctx.id };
+    if (ctx.update && ctx.old) {
+      v.replaced = ctx.erased;
+      if (ctx.locked) v.locked = `${ctx.locked} entities of the old view are on locked layers and were left`;
+      if (outgrew(ctx.bounds, ctx.erasedBounds)) v.note = 'the view reaches past the one it replaced: the sheets that show it may crop it (create_layout with replace: true makes a sheet again)';
+    } else if (ctx.update) v.note = 'no earlier view of this tool with these arguments in this drawing: drawn as a new view';
+    if (ctx.planBase) v.plan = 'the plan kept in this drawing';
+    out.view = v;
+    const now = ctx.planJson ? ctx.planHash : known.planHash;
+    const stale = now ? known.views.filter((x) => x.id !== ctx.id && x.entities > 0 && x.plan && x.plan !== now).map((x) => x.id) : [];
+    if (stale.length) out.stale_views = stale;
+    part.text = JSON.stringify(out);
+  } catch {
+    return res;
+  }
+  return res;
+}
+
+const registerTool = server.registerTool.bind(server);
+const toolHandlers = new Map();
+server.registerTool = (name, def, handler) => {
+  const view = VIEW_TOOLS.has(name);
+  const d = view ? { ...def, inputSchema: { ...def.inputSchema, update: UpdateArg, revision: RevisionArg } } : def;
+  const run = (args, extra) => {
+    // every tool draws in the language of its call (its language argument), else in the language of the session: the
+    // view titles of the engines that are not handed a language follow it
+    setDrawingLanguage(args?.language ?? language);
+    return view || PLAN_TOOLS.has(name) ? viewCall(name, args ?? {}, () => handler(args, extra)) : handler(args, extra);
+  };
+  toolHandlers.set(name, run);
+  return registerTool(name, d, run);
+};
 const jsonish = (schema) => z.preprocess((v) => {
   if (typeof v !== 'string') return v;
   try {
@@ -368,7 +621,16 @@ server.registerTool('ping', {
   inputSchema: {},
   annotations: READ,
 }, async () => {
-  const r = (await call('ping')) || {};
+  let r;
+  try {
+    r = (await call('ping')) || {};
+  } catch (e) {
+    // AutoCAD running but the bridge not listening yet: it is still starting or opening a drawing
+    if (/Cannot connect/.test(String(e.message)) && (await acadRunning())) {
+      throw new Error('Cannot connect to AutoCAD: AutoCAD is running but its bridge does not answer yet; it is probably still starting or opening a drawing (1-2 minutes with a large drawing). Retry in a minute; if it stays so, type MCPSTATUS in AutoCAD (MCPSTART starts the bridge).');
+    }
+    throw e;
+  }
   const out = { ...r, mcp_server: VERSION };
   if (r.bridge && !VERSION.includes('-dev')) {
     const c = compareVersions(r.bridge, VERSION);
@@ -450,6 +712,747 @@ server.registerTool('measure_model', {
   },
   annotations: READ,
 }, async (args) => text(await measureModel({ solids: args.solids ?? [], faces: args.faces ?? [] })));
+
+server.registerTool('list_views', {
+  description:
+    'The views of this drawing: what each drawing tool drew (plans, elevations, sections, schedules, details...), kept in ' +
+    'the drawing itself. Each view: its id, tool, the arguments it was drawn with (give them again, with update: true, to ' +
+    'draw it again where it stands), how many entities it has, its extent, and whether it was drawn from the plan now ' +
+    'kept in the drawing (plan: "current") or from an older one ("stale": update it). plan: true also returns the plan ' +
+    'description kept in the drawing (what draw_plan was given): change it and call draw_plan with update: true to change ' +
+    'the building, then update the stale views. Works on a drawing reopened in another session.',
+  inputSchema: { plan: z.boolean().default(false).describe('Also return the plan description kept in the drawing') },
+  annotations: READ,
+}, async (args) => {
+  const r = await call('view_list', { keys: args.plan ? ['plan_hash', 'plan'] : ['plan_hash'] });
+  const known = parseViews(r);
+  const views = known.views.filter((v) => v.entities > 0).sort((a, b) => String(a.time).localeCompare(String(b.time))).map((v) => ({
+    view: v.id, tool: v.tool, entities: v.entities, bounds: v.bounds ? { min: v.bounds.min, max: v.bounds.max } : undefined,
+    plan: v.plan ? (v.plan === known.planHash ? 'current' : 'stale') : undefined,
+    args: Object.keys(v.args).length ? v.args : undefined,
+  }));
+  const out = { views, stale: views.filter((v) => v.plan === 'stale').map((v) => v.view), plan_kept: !!known.planHash };
+  if (args.plan) {
+    try {
+      out.plan = JSON.parse(r.values.plan);
+    } catch {
+      out.plan = null;
+    }
+  }
+  if (!views.length) out.note = 'no view is recorded in this drawing: it was not drawn by these tools, or by a version that did not keep views; such drawings are edited entity by entity (query_entities, transform_entities, set_properties, delete_entities) or drawn again';
+  return text(out);
+});
+
+// ---------------------------------------------------------------- revision clouds
+
+server.registerTool('revision_cloud', {
+  description:
+    'Cloud the places of a revision (khoanh mây chỗ sửa đổi) on A-ANNO-REVS: a cloud of arcs around each place, the delta ' +
+    '(a triangle with the revision number) at its corner and the note beside the first. Places: windows [[x0,y0],[x1,y1]], ' +
+    'handles (the extents of those entities: what was edited entity by entity with transform_entities, set_properties, ' +
+    'draw_entities on an old drawing) and points; places close together share a cloud. The clouds of one revision are one ' +
+    'view (revision:<no>), so list_views shows them. Every drawing tool also takes revision with update: true, which ' +
+    'clouds what the update changed by itself. For the revision list of the sheets, give create_layout title_block ' +
+    'revisions [{no, text, date}].',
+  inputSchema: {
+    no: z.union([z.number(), z.string()]).default(1), note: opt(Str),
+    windows: opt(jsonish(z.array(z.array(Point).length(2)))), handles: opt(Handles), points: opt(jsonish(z.array(Point))),
+    scale: z.number().positive().default(100).describe('Plot scale of the view (arc size, delta, text)'),
+  },
+  annotations: EDIT,
+}, async (args) => {
+  const boxes = [];
+  for (const w of args.windows || []) boxes.push([Math.min(w[0][0], w[1][0]), Math.min(w[0][1], w[1][1]), Math.max(w[0][0], w[1][0]), Math.max(w[0][1], w[1][1])]);
+  for (const p of args.points || []) boxes.push([p[0], p[1], p[0], p[1]]);
+  if (args.handles?.length) boxes.push(...(await boxesOf(args.handles)));
+  if (!boxes.length) throw new Error('revision_cloud: give windows, handles or points');
+  const regions = clusterBoxes(boxes, 10 * args.scale);
+  const r = await drawClouds(regions, { no: args.no, note: args.note ?? '', scale: args.scale });
+  return text({ revision: args.no, clouds: r.clouds, view: r.id, bounds: r.bounds, layer: REV_LAYER });
+});
+
+// ---------------------------------------------------------------- editing drawings made by others in place
+
+server.registerTool('compare_drawings', {
+  description:
+    'Compare the current drawing with an earlier version on disk and cloud what changed (so sánh hai phiên bản, khoanh mây ' +
+    'chỗ sửa): model space entity by entity (type, layer, geometry to 0.1, text, block and attributes, dimension value); ' +
+    'previous is read in the background, never opened. Returns how many entities are the same, removed, added and ' +
+    'modified (the same handle changed), the layers that changed most and the regions of change; with revision (a ' +
+    'number, or {no, note}) each region is clouded on A-ANNO-REVS with the delta, as the view revision:<no>. A line or ' +
+    'outline that changed is clouded only where its vertices moved. Uses: cloud the hand edits of a revision against the ' +
+    'issued file; check the new version a consultant sent against the old one (open the new one, previous = the old); ' +
+    'layers: false ignores layer changes (against the copy before standardize_layers: nothing should differ). window ' +
+    'limits both to an area; skip_layers leaves layers out. The comparison is with the file as saved, not with the Undo history.',
+  inputSchema: {
+    previous: Str.describe('DWG of the earlier version (a copy, or the saved file of this drawing before the edits)'),
+    revision: EditRevisionArg, window: opt(Window), layers: z.boolean().default(true),
+    skip_layers: opt(jsonish(z.array(Str))), scale: EditScaleArg,
+    max_regions: z.number().int().min(1).max(60).default(12),
+  },
+  annotations: EDIT,
+}, async (args) => {
+  const d = await call('drawing_diff', { previous: path.resolve(args.previous), window: args.window, layers: args.layers, skip_layers: args.skip_layers });
+  const regions = regionsOfDiff(d, { scale: args.scale, max: args.max_regions, fine: true });
+  const out = {
+    previous: d.previous, same: d.same, removed: d.removed_count, added: d.added_count, modified: d.modified,
+    by_layer: d.by_layer, regions: regions.map((b) => [[Math.round(b[0]), Math.round(b[1])], [Math.round(b[2]), Math.round(b[3])]]),
+  };
+  if (!d.removed_count && !d.added_count) out.note = 'no difference in model space';
+  if (d.truncated) out.note = 'many differences: the regions come from the first of them';
+  const rev = editRevisionOf(args.revision);
+  if (rev && regions.length) {
+    const r = await drawClouds(regions, { ...rev, scale: args.scale });
+    out.revision = { no: rev.no, clouds: r?.clouds ?? 0, view: r?.id, layer: REV_LAYER };
+  }
+  return text(out);
+});
+
+server.registerTool('stretch_entities', {
+  description:
+    'Stretch part of a drawing in place, as AutoCAD STRETCH with a crossing window (kéo dài, dời tường tại chỗ trên bản ' +
+    'vẽ cũ): what lies wholly inside window moves by displacement (or from -> to); what crosses its edge has only its ' +
+    'points inside moved: the end of a wall face, the vertices of a polyline, the definition points of a dimension (so ' +
+    'the dimension follows and reads the new length), a block whose insertion point is inside. Use it to move a wall: ' +
+    'a window around the wall (both faces, its hatch, the door in it) and the dimensions that reach it. Entities on ' +
+    'locked layers are left; layers: only those. A room outline (closed polyline) that changes size takes the area ' +
+    'written inside it along ("5,06 m²" becomes the new area, same form; update_areas: false leaves them). One Undo ' +
+    'step. With revision, the area that changed is clouded.',
+  inputSchema: {
+    window: Window.describe('Crossing window [[x0,y0],[x1,y1]]'), displacement: opt(Point), from: opt(Point), to: opt(Point),
+    layers: opt(jsonish(z.array(Str))), update_areas: z.boolean().default(true), revision: EditRevisionArg, scale: EditScaleArg,
+  },
+  annotations: EDIT,
+}, async ({ window, displacement, from, to, layers, update_areas, revision, scale }) => {
+  const d = displacement ?? (from && to ? [to[0] - from[0], to[1] - from[1]] : null);
+  if (!d) throw new Error('stretch_entities: give displacement [dx, dy], or from and to');
+  const out = await call('stretch', { window, displacement: d.slice(0, 2), layers, update_areas });
+  if (!out.moved && !out.stretched) out.note = 'nothing in the window (or only on locked layers)';
+  const rev = editRevisionOf(revision);
+  if (rev && (out.moved || out.stretched)) {
+    const w = [Math.min(window[0][0], window[1][0]), Math.min(window[0][1], window[1][1]), Math.max(window[0][0], window[1][0]), Math.max(window[0][1], window[1][1])];
+    const moved = [w[0] + d[0], w[1] + d[1], w[2] + d[0], w[3] + d[1]];
+    const boxes = [out.before && clipBox(out.before, w), out.after && clipBox(out.after, moved)].filter(Boolean);
+    await cloudEdit(out, rev, boxes.length ? [boxes.reduce((a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])])] : [], scale);
+  }
+  return text(out);
+});
+
+server.registerTool('replace_text', {
+  description:
+    'Find and replace text across the whole drawing (sửa chữ hàng loạt: tên công trình, chủ đầu tư, số bản vẽ, ngày): ' +
+    'texts, mtext, block attributes, attribute defaults, dimension text overrides and table cells of model space, every ' +
+    'layout and the block definitions (blocks: false leaves the definitions). find is literal text unless regex: true ' +
+    '(.NET pattern; replace may use $1); case_sensitive false by default; whole_word; layers: only those. preview: true ' +
+    'lists what would change (from -> to) and changes nothing: use it first. Entities on locked layers are left and ' +
+    'counted. One Undo step. With revision, each changed text in model space is clouded. Mtext keeps its formatting ' +
+    'codes, so a word split by a formatting change is not found.',
+  inputSchema: {
+    find: Str, replace: Str.default(''), regex: z.boolean().default(false), case_sensitive: z.boolean().default(false),
+    whole_word: z.boolean().default(false), layers: opt(jsonish(z.array(Str))), blocks: z.boolean().default(true),
+    preview: z.boolean().default(false), revision: EditRevisionArg, scale: EditScaleArg,
+  },
+  annotations: EDIT,
+}, async ({ revision, scale, ...args }) => {
+  const out = await call('replace_text', args);
+  const rev = editRevisionOf(revision);
+  if (rev && !args.preview && out.count) await cloudEdit(out, rev, (out.changes || []).map((c) => c.b).filter(Boolean), scale);
+  return text(out);
+});
+
+server.registerTool('convert_vietnamese_text', {
+  description:
+    'Turn the texts of an old drawing typed for legacy Vietnamese fonts into Unicode and move their text styles to a ' +
+    'Unicode font (Arial by default), so the drawing reads the same on any machine and can be edited with the other ' +
+    'tools: TCVN3 / ABC fonts (.VnTime, .VnArial...: "MÆt b»ng tÇng 1") and VNI fonts (VNI-Times, VNI-Helve...: "MAËT ' +
+    'BAÈNG TAÀNG 1") become "Mặt bằng tầng 1". Only texts in styles whose font is such a font (or mtext parts in one) ' +
+    'change; the TCVN3 fonts ending in H (.VnTimeH) show capitals, so those texts become capitals. Texts, mtext, ' +
+    'attributes, attribute defaults, dimension overrides and mleaders of every space and block. A text that already ' +
+    'holds Unicode Vietnamese is left. A style whose font has another name (an SHX font, a renamed TrueType) is found ' +
+    'by what its texts read (by_content, on by default: most of its texts read as TCVN3 or VNI); styles names styles ' +
+    'outright ({"STYLE": "vni" | "tcvn3"}). preview: true lists the styles found and samples (from -> to) and changes ' +
+    'nothing: use it first. One Undo step.',
+  inputSchema: {
+    font: Str.default('Arial').describe('Unicode font for the converted styles'),
+    preview: z.boolean().default(false),
+    tcvn3_fonts: opt(jsonish(z.array(Str))).describe('Font name prefixes counted as TCVN3 (default [".Vn"])'),
+    vni_fonts: opt(jsonish(z.array(Str))).describe('Font name prefixes counted as VNI (default ["VNI-", "VNI "])'),
+    by_content: z.boolean().default(true).describe('Also convert the styles whose texts read as TCVN3 or VNI, whatever their font'),
+    styles: opt(jsonish(z.record(z.string(), z.enum(['tcvn3', 'vni'])))).describe('Styles to convert as that encoding'),
+  },
+  annotations: EDIT,
+}, async ({ font, preview, tcvn3_fonts, vni_fonts, by_content, styles }) => {
+  const named = { ...(styles || {}) };
+  if (by_content) {
+    try {
+      for (const [st, enc] of Object.entries(legacyStyles(await call('model_map', {})))) named[st] ??= enc;
+    } catch {
+      // no map: the fonts alone
+    }
+  }
+  const of = (enc) => Object.entries(named).filter(([, e]) => e === enc).map(([st]) => st);
+  const out = await call('convert_text', {
+    font, preview,
+    encodings: [
+      { name: 'TCVN3', prefixes: tcvn3_fonts ?? ['.Vn'], map: TCVN3, capitals_suffix: 'H', styles: of('tcvn3') },
+      { name: 'VNI', prefixes: vni_fonts ?? ['VNI-', 'VNI '], map: VNI, styles: of('vni') },
+    ],
+  });
+  if (!out.styles?.length) out.note = 'no text style uses a TCVN3 (.Vn...) or VNI (VNI-...) font: nothing to convert';
+  return text(out);
+});
+
+server.registerTool('describe_drawing', {
+  description:
+    'Read the map of a drawing made by others (đọc hiểu bản vẽ) before working on it: its sheets (layouts with their ' +
+    'viewports: the model area each shows and its scale; frames drawn in model space: paper size and scale found from ' +
+    'their size), the drawing number and title block of each, and the views on each sheet from their titles (MẶT ' +
+    'BẰNG, MẶT ĐỨNG, MẶT CẮT, CHI TIẾT, BẢNG, SƠ ĐỒ, GHI CHÚ, PHỐI CẢNH... in Vietnamese, English and Chinese, also ' +
+    'titles typed in the old TCVN3 fonts): kind, floor, scale (TỶ LỆ 1/100, SCALE 1:50) and the model window of each, ' +
+    'to hand to read_plan, compare_drawings, stretch_entities or screenshot. Counts the texts in legacy fonts and ' +
+    'names their styles (convert_vietnamese_text). The window of a view is the band its title owns (titles stand under ' +
+    'their views) fitted to what is drawn in it (window_from: drawing), or the band alone (window_from: titles).',
+  inputSchema: {},
+  annotations: READ,
+}, async () => {
+  const map = await call('model_map', {});
+  let layouts = [];
+  try {
+    layouts = (await call('layout_views', {})).layouts || [];
+  } catch {
+    // an older bridge: the model frames only
+  }
+  const out = describeDrawing(map, layouts);
+  // the window of each view fitted to what is drawn in it
+  const views = viewsWithWindows(out);
+  if (views.length) {
+    try {
+      const r = await call('view_extents', { windows: views.map((v) => v.window), skip_handles: frameHandles(map), skip_layers: ['A-ANNO-REVS', 'X-READ-PLAN'] });
+      fitWindows(views, r.windows);
+    } catch {
+      // an older bridge: the windows stay as the titles place them
+    }
+  }
+  const plans = [...out.sheets.flatMap((s) => [...(s.views || []), ...(s.viewports || []).flatMap((v) => v.views)]), ...out.views_outside_sheets].filter((v) => v.kind === 'plan' && v.window);
+  const hints = [];
+  if (plans.length) hints.push(`read_plan with window ${JSON.stringify(plans[0].window)} reads "${plans[0].title}"`);
+  if (out.legacy_font_texts) {
+    const counts = Object.entries(out.legacy_font_texts).filter(([k]) => k !== 'styles').map(([k, n]) => `${n} ${k.toUpperCase()}`).join(', ');
+    const styles = Object.keys(out.legacy_font_texts.styles || {});
+    hints.push(`texts typed for legacy Vietnamese fonts (${counts}${styles.length ? `; styles ${styles.join(', ')}` : ''}): convert_vietnamese_text (preview first)`);
+  }
+  if (hints.length) out.hints = hints;
+  return text(out);
+});
+
+// ---------------------------------------------------------------- titles of views, title blocks of sheets
+
+server.registerTool('retitle_view', {
+  description:
+    'Change the title of views drawn by these tools (đổi tên hình): the title text and its underline, which takes the length ' +
+    'of the new title. old: the title as written (every view titled so changes; or handle: one title text). The view keeps ' +
+    'the arguments it was drawn with: on a later update: true give the new title (title, or titles of draw_interior_elevation) ' +
+    'or the old one comes back.',
+  inputSchema: { old: opt(Str), handle: opt(z.union([Str, z.number()]).transform(String)), text: Str },
+  annotations: EDIT,
+}, async ({ old, handle, text: neu }) => {
+  if (!old && !handle) throw new Error('retitle_view: give old (the title as written) or handle (of the title text)');
+  const list = (await call('text_list', {})).items || [];
+  const found = list.filter((i) => i[1] === 'text' && i[5] === 'model' && (handle ? String(i[0]).toUpperCase() === handle.toUpperCase() : String(i[2]).trim() === String(old).trim()));
+  if (!found.length) throw new Error(`retitle_view: no title ${handle ? `with handle ${handle}` : `"${old}"`} in model space`);
+  const out = [];
+  for (const [h, , , , , , x, y, H] of found) {
+    const s = H / 5;
+    // the underline: a line 1.6 x scale under the title, centred on it
+    const q = await call('query_entities', { types: ['LINE'], window: [[x - 600 * s, y - 2.4 * s], [x + 600 * s, y - 0.8 * s]], window_mode: 'crossing', limit: 30 });
+    const ul = (q.entities || []).filter((e) => Array.isArray(e.from) && Array.isArray(e.to) && Math.abs(e.from[1] - (y - 1.6 * s)) < 0.4 * s && Math.abs(e.to[1] - e.from[1]) < 0.01 * s + 0.01 && Math.abs((e.from[0] + e.to[0]) / 2 - x) < 1.5 * s);
+    await call('set_texts', { items: [{ handle: h, text: neu }] });
+    for (const l of ul) {
+      const half0 = Math.abs(l.to[0] - l.from[0]) / 2, half1 = capsWidth(neu, H) / 2 + s;
+      if (half0 > 0) await call('transform_entities', { handles: [l.handle], op: 'scale', base: [(l.from[0] + l.to[0]) / 2, l.from[1]], factor: half1 / half0 });
+    }
+    out.push({ handle: h, at: [x, y], underline: ul.map((l) => l.handle) });
+  }
+  return text({ titles: out.length, changed: out });
+});
+
+server.registerTool('update_title_blocks', {
+  description:
+    'Write the revision and other fields into the title blocks of the sheets without making the layouts again (cập nhật ' +
+    'lần sửa, ngày, phiên bản trên khung tên): revision {text, date} goes in the first empty revision row (REV1..REV4 and ' +
+    'REV1_DATE.. of the title strip of create_layout; with four rows full the oldest goes up and out), values {TAG: value} ' +
+    'into the attributes of that tag (e.g. PHIEN_BAN, NGAY, GIAI_DOAN, TEN_BAN_VE). layouts: names (default all). A title ' +
+    'block of another office works with values by its own tags (list_texts shows them).',
+  inputSchema: {
+    layouts: opt(jsonish(z.array(Str))), values: opt(Obj),
+    revision: opt(z.object({ no: opt(z.union([z.number(), Str])), text: Str, date: opt(Str) })),
+  },
+  annotations: EDIT,
+}, async ({ layouts, values, revision }) => {
+  if (!values && !revision) throw new Error('update_title_blocks: give revision {text, date} or values {TAG: value}');
+  const info = await call('drawing_info', {});
+  const all = (info.layouts || []).map((l) => (typeof l === 'string' ? l : l.name)).filter((n) => n && n.toLowerCase() !== 'model');
+  const names = layouts?.length ? layouts : all;
+  const missing = names.filter((n) => !all.some((a) => a.toLowerCase() === n.toLowerCase()));
+  if (missing.length) throw new Error(`update_title_blocks: no layout ${missing.join(', ')} (layouts: ${all.join(', ')})`);
+  const want = Object.keys(values || {}).map((k) => k.toUpperCase());
+  const out = [];
+  for (const lay of names) {
+    const q = await call('query_entities', { space: lay, types: ['INSERT'], limit: 200 });
+    const blocks = (q.entities || []).filter((e) => e.attributes && Object.keys(e.attributes).length);
+    const tb = blocks.find((e) => revision && 'REV1' in e.attributes) ?? blocks.find((e) => want.some((t) => t in e.attributes));
+    if (!tb) {
+      out.push({ layout: lay, note: 'no title block with these tags' });
+      continue;
+    }
+    const set = {};
+    for (const [k, v] of Object.entries(values || {})) if (k.toUpperCase() in tb.attributes) set[k.toUpperCase()] = String(v);
+    if (revision && 'REV1' in tb.attributes) {
+      const text0 = revision.no !== undefined ? `${revision.no}. ${revision.text}` : revision.text;
+      const rows = [1, 2, 3, 4].map((i) => ({ text: tb.attributes[`REV${i}`] ?? '', date: tb.attributes[`REV${i}_DATE`] ?? '' }));
+      let i = rows.findIndex((r) => !String(r.text).trim());
+      if (i < 0) {
+        // four rows full: the oldest goes, the others move up
+        for (let k = 0; k < 3; k++) {
+          set[`REV${k + 1}`] = rows[k + 1].text;
+          set[`REV${k + 1}_DATE`] = rows[k + 1].date;
+        }
+        i = 3;
+      }
+      set[`REV${i + 1}`] = text0;
+      if (`REV${i + 1}_DATE` in tb.attributes) set[`REV${i + 1}_DATE`] = revision.date ?? '';
+    }
+    if (!Object.keys(set).length) {
+      out.push({ layout: lay, note: 'none of the tags given is in its title block' });
+      continue;
+    }
+    await call('set_properties', { handles: [tb.handle], attributes: set });
+    out.push({ layout: lay, block: tb.name, set });
+  }
+  return text({ sheets: out.filter((o) => o.set).length, layouts: out });
+});
+
+// ---------------------------------------------------------------- reviewing and tidying drawings made by others
+
+server.registerTool('check_annotations', {
+  description:
+    'Check the annotation of a drawing made by others (kiểm tra kích thước ghi đè, diện tích ghi sai): every dimension ' +
+    'whose text is written over is compared with what it measures (its numbers, "4.000" or "4,000" read as thousands ' +
+    'too, "2x1200" as 2400, with the linear factor; within half the last decimal, 0.2 % or 1 mm), and every area text ' +
+    '(m2, m², S =, DT, DIỆN TÍCH, AREA, 面積) with the area of the smallest closed outline around it (an outline far ' +
+    'from the written area does not count). Lists the mismatches with the fix (the number replaced by <>, the ' +
+    'measured value; the right area in the same form) and the overrides written as words only (VAR, EQ: not checked). ' +
+    'fix: dimensions | areas | all writes the fixes (handles: only those); with revision they are clouded. A detail ' +
+    'drawn not to scale has its dimensions written over on purpose: check before fixing. One Undo step.',
+  inputSchema: {
+    fix: z.enum(['none', 'dimensions', 'areas', 'all']).default('none'), handles: opt(Handles),
+    revision: EditRevisionArg, scale: EditScaleArg, limit: z.number().int().min(1).max(2000).default(200),
+  },
+  annotations: EDIT,
+}, async ({ fix, handles, revision, scale, limit }) => {
+  const d = await call('annotation_data', {});
+  const dims = checkDims(d.dims, d.units_m);
+  const areas = checkAreas(d.areas);
+  const out = {
+    dimensions: d.dims_checked, written_over: d.dims.length, dimension_mismatches: dims.mismatch.length, words_only: dims.words.length,
+    area_texts: d.areas.length, area_mismatches: areas.mismatch.length, area_texts_without_outline: areas.none.length,
+    dimensions_wrong: dims.mismatch.slice(0, limit).map(({ b, ...x }) => x), areas_wrong: areas.mismatch.slice(0, limit).map(({ b, ...x }) => x),
+    words: dims.words.slice(0, 30),
+  };
+  if (fix !== 'none') {
+    const want = (h) => !handles?.length || handles.includes(h);
+    const items = [
+      ...(fix === 'dimensions' || fix === 'all' ? dims.mismatch.filter((x) => want(x.handle)).map((x) => ({ handle: x.handle, text: x.fixed })) : []),
+      ...(fix === 'areas' || fix === 'all' ? areas.mismatch.filter((x) => want(x.handle)).map((x) => ({ handle: x.handle, text: x.fixed })) : []),
+    ];
+    if (items.length) {
+      const r = await call('set_texts', { items });
+      out.fixed = r.set;
+      if (r.locked) out.locked = r.locked;
+      await cloudEdit(out, editRevisionOf(revision), r.boxes, scale);
+    } else out.fixed = 0;
+  }
+  return text(out);
+});
+
+server.registerTool('list_texts', {
+  description:
+    'List the texts of a drawing (liệt kê chữ trên bản vẽ): texts, mtext, attributes, attribute defaults, dimensions ' +
+    'written over, mleaders and table cells of model space and every layout (blocks: true adds block definitions). ' +
+    'unique (default): one row per distinct text with how often it is written, its handles, kinds, layers and ' +
+    'language (vi, zh, en). find (text, or a pattern with regex) and language narrow it. Use it to review the wording ' +
+    'of a drawing or to translate it: translate the rows, then update_texts with each handle and its new text. ' +
+    'save_path writes all rows as CSV (Excel opens it).',
+  inputSchema: {
+    unique: z.boolean().default(true), find: opt(Str), regex: z.boolean().default(false),
+    language: opt(z.enum(['vi', 'zh', 'en', 'other'])), blocks: z.boolean().default(false),
+    limit: z.number().int().min(1).max(5000).default(200), offset: z.number().int().min(0).default(0), save_path: opt(Str),
+  },
+  annotations: READ,
+}, async ({ unique, find, regex, language, blocks, limit, offset, save_path }) => {
+  const r = await call('text_list', { blocks });
+  const rows = listTexts(r.items, { find, regex, language, unique });
+  const out = { total: rows.length, offset, rows: rows.slice(offset, offset + limit) };
+  if (rows.length > offset + limit) out.next_offset = offset + limit;
+  if (r.truncated) out.note = 'more texts than were read';
+  if (save_path) {
+    const cols = unique
+      ? [['text', 'Text'], ['count', 'Count'], ['language', 'Language'], ['kinds', 'Kinds'], ['layers', 'Layers'], ['handles', 'Handles'], ['translation', 'Translation / Bản dịch']]
+      : [['handle', 'Handle'], ['kind', 'Kind'], ['text', 'Text'], ['layer', 'Layer'], ['style', 'Style'], ['space', 'Space'], ['translation', 'Translation / Bản dịch']];
+    const flat = rows.map((x) => ({ ...x, kinds: [].concat(x.kinds ?? []).join(', '), layers: [].concat(x.layers ?? []).join(', '), handles: [].concat(x.handles ?? []).join(' ') }));
+    const file = path.resolve(save_path);
+    await fs.writeFile(file, toCsv(flat, cols), 'utf8');
+    out.saved = file;
+  }
+  return text(out);
+});
+
+server.registerTool('update_texts', {
+  description:
+    'Set the text of many entities by handle in one Undo step (sửa nhiều chữ theo handle, ví dụ bản dịch): items ' +
+    '[{handle, text}] from list_texts or query_entities. Texts, attributes, attribute defaults, mtext (the text is its ' +
+    'contents: \\P is a new line), dimensions (their override; "<>" is the measured value), mleaders, and a table ' +
+    'cell as "handle:row:column". Entities on locked layers are left and named. With revision, those in model space ' +
+    'are clouded.',
+  inputSchema: {
+    items: jsonish(z.array(z.object({ handle: z.union([z.string(), z.number()]).transform(String), text: Str }))).describe('[{handle, text}]'),
+    revision: EditRevisionArg, scale: EditScaleArg,
+  },
+  annotations: EDIT,
+}, async ({ items, revision, scale }) => {
+  const r = await call('set_texts', { items });
+  const { boxes, ...out } = r;
+  await cloudEdit(out, editRevisionOf(revision), boxes, scale);
+  return text(out);
+});
+
+server.registerTool('clean_drawing', {
+  description:
+    'Tidy a drawing made by others (dọn bản vẽ: nét trùng, nét chồng, chữ rỗng) in model space: entities drawn twice ' +
+    '(same type, layer, colour, linetype, lineweight and geometry or text: lines, polylines, arcs, circles, texts, ' +
+    'mtext, block references with their attributes, dimensions) keep one; lines, arcs, circles and polylines of no ' +
+    'size and texts with nothing written go; lines on the same line with the same layer and properties that overlap ' +
+    'or touch become one (as OVERKILL; tolerance in drawing units). Each part can be turned off; layers: only those. ' +
+    'preview: true counts and names samples without changing anything: use it first. Locked layers are left. One Undo step.',
+  inputSchema: {
+    preview: z.boolean().default(false), duplicates: z.boolean().default(true), zero_length: z.boolean().default(true),
+    empty_texts: z.boolean().default(true), overlapping_lines: z.boolean().default(true), layers: opt(jsonish(z.array(Str))),
+    tolerance: z.number().positive().default(0.01),
+  },
+  annotations: DESTRUCTIVE,
+}, async (args) => text(await call('clean', args)));
+
+/** The DWG files of a folder (and its subfolders), backups and temporary copies left out. */
+async function dwgFiles(folder, recursive, max = 500) {
+  const out = [];
+  const walk = async (dir) => {
+    for (const e of await fs.readdir(dir, { withFileTypes: true })) {
+      if (out.length >= max) return;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (recursive) await walk(p);
+      } else if (/\.dwg$/i.test(e.name) && !/^~|\$|\.sv\$$/i.test(e.name)) out.push(p);
+    }
+  };
+  await walk(folder);
+  return out.sort();
+}
+
+server.registerTool('describe_folder', {
+  description:
+    'Read the map of every drawing in a folder (đọc cả bộ hồ sơ: danh mục bản vẽ của một thư mục) without opening them ' +
+    'in AutoCAD: for each DWG its sheets (layouts, frames in model space) with drawing number, sheet title, paper, ' +
+    'scale and the views on it, and the texts in legacy Vietnamese fonts, as describe_drawing reads one drawing. ' +
+    'save_path writes the register of sheets as .xlsx or .csv. A drawing that cannot be read is listed with the reason.',
+  inputSchema: {
+    folder: Str, recursive: z.boolean().default(false), save_path: opt(Str),
+    max_files: z.number().int().min(1).max(500).default(200),
+  },
+  annotations: READ,
+}, async ({ folder, recursive, save_path, max_files }) => {
+  const dir = path.resolve(folder);
+  const files = await dwgFiles(dir, recursive, max_files);
+  if (!files.length) throw new Error(`describe_folder: no .dwg file in ${dir}`);
+  const results = [];
+  for (const file of files) {
+    try {
+      const map = await call('model_map', { path: file });
+      let layouts = [];
+      try {
+        layouts = (await call('layout_views', { path: file })).layouts || [];
+      } catch {
+        // the model frames only
+      }
+      results.push({ file: path.relative(dir, file), map: describeDrawing(map, layouts, { name: file }) });
+    } catch (e) {
+      results.push({ file: path.relative(dir, file), error: String(e.message || e).slice(0, 200) });
+    }
+  }
+  const rows = registerRows(results);
+  const out = {
+    folder: dir, files: files.length, read: results.filter((r) => !r.error).length, sheets: rows.filter((r) => r.source === 'layout' || r.source === 'model frame').length,
+    errors: results.filter((r) => r.error).map((r) => ({ file: r.file, error: r.error })), register: rows.slice(0, 150),
+  };
+  if (rows.length > 150) out.note = `${rows.length} rows: the first 150 are listed; save_path writes them all`;
+  if (save_path) {
+    const file = path.resolve(save_path);
+    if (/\.xlsx$/i.test(file)) {
+      const head = REGISTER_COLUMNS.map(([, t]) => ({ v: t, s: 'head' }));
+      await fs.writeFile(file, xlsxBook([{ name: 'Danh muc ban ve', rows: [head, ...rows.map((r) => REGISTER_COLUMNS.map(([k]) => r[k] ?? ''))], widths: [28, 12, 14, 10, 40, 12, 9, 22, 60, 16, 30], freeze: 2 }]));
+    } else await fs.writeFile(file, toCsv(rows, REGISTER_COLUMNS), 'utf8');
+    out.saved = file;
+  }
+  return text(out);
+});
+
+// ---------------------------------------------------------------- plans of drawings made by others
+
+server.registerTool('read_plan', {
+  description:
+    'Read the plan of a drawing made by others (or of a drawing these tools did not keep) into the plan description of ' +
+    'draw_plan, so it can be changed and updated in place like a plan drawn here: walls (pairs of parallel faces at a ' +
+    'wall thickness, on wall layers or any layer that is not annotation; their ends run on to the wall they meet), ' +
+    'openings (a stretch where both faces stop: a door where a swing arc or a door block is, double when two leaves, ' +
+    'a window where glazing lines or a window block are, else a plain opening; their tag D1 / S1 nearby), columns (small ' +
+    'closed outlines on column layers or filled), grids (long centre lines with their bubbles), rooms (names inside the ' +
+    'walls). A plan inside a block or a bound xref is read through it. Without window it finds the areas of the model ' +
+    'space that hold walls, ranks them by door swings, room names and walls in both directions (a section or an ' +
+    'elevation has parallel faces too) and reads the first: give window to read another. Run standardize_layers first ' +
+    'on a drawing with untidy layers. Returns the plan description, what was found and what was not read. preview: true ' +
+    'draws what was read in red on a layer that does not plot (X-READ-PLAN) over the drawing, to compare (screenshot); ' +
+    'adopt: true moves the entities that were read to the frozen layer X-OLD-PLAN (nothing deleted: thaw it to compare) ' +
+    'and draws the plan in place with draw_plan (its view and plan kept in the drawing, so draw_plan update and the other ' +
+    'tools work on it). Also read: curtain walls (two glass lines 20-80 mm apart: a wall with a window over its length), ' +
+    'walls drawn as one wide polyline, curved walls (concentric arcs), doors drawn as a leaf line or an unnamed block, ' +
+    'straight flights of equal treads (the way up from a LÊN / UP text; a U stair as its two flights) and level texts. ' +
+    'Furniture and notes are not read (they stay on the drawing). To mark what you then change, give revision with ' +
+    'update: true or use revision_cloud.',
+  inputSchema: {
+    window: opt(jsonish(z.array(Point).length(2))).describe('[[x0,y0],[x1,y1]] the area of the plan (drawing units)'),
+    thickness: opt(jsonish(z.array(z.number()).length(2))).describe('[min, max] wall thickness in mm (default [80, 450])'),
+    wall_layers: opt(jsonish(z.array(Str))).describe('Layers to take as wall layers whatever their name'),
+    preview: z.boolean().default(false), adopt: z.boolean().default(false),
+    save_path: opt(Str).describe('Write the plan description (JSON) to this file'),
+    scale: z.number().positive().default(100), language: opt(Lang),
+  },
+  annotations: EDIT,
+}, async (args) => {
+  const tool = 'read_plan';
+  const lang = args.language ?? language;
+  const g = await call('plan_geometry', args.window ? { window: args.window } : {});
+  const opts = { thickness: args.thickness ?? [80, 450], wallLayers: args.wall_layers ?? null };
+  let window = args.window ?? null, candidates;
+  if (!window) {
+    candidates = engine(tool, () => planAreas(g, opts));
+    if (candidates.length) window = candidates[0].window;
+  }
+  const r = engine(tool, () => readPlan(g, { ...opts, window }));
+  const out = {
+    window, found: r.found, unread: r.unread, plan: r.spec,
+    candidates: candidates && candidates.length > 1 ? candidates.slice(0, 8) : undefined,
+    expanded_blocks: g.expanded || undefined,
+  };
+  if (!r.spec.walls.length) {
+    out.note = 'No walls were read here. Give the window of a plan (candidates lists the areas found), wall_layers, or a thickness range; a plan of single lines has no wall faces to pair.';
+    return text(out);
+  }
+  if (args.save_path) {
+    const file = path.resolve(args.save_path.endsWith('.json') ? args.save_path : `${args.save_path}.json`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify(r.spec, null, 1), 'utf8');
+    out.saved = file;
+  }
+  if (args.preview && !args.adopt) {
+    // what was read, in red on a layer that does not plot: the outline of each wall band, a circle at each opening
+    const ents = [];
+    for (const w of r.spec.walls) {
+      const [a, b] = w.points, t = w.thickness / 2, L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const n = [(-(b[1] - a[1]) / L) * t, ((b[0] - a[0]) / L) * t];
+      ents.push({ type: 'polyline', points: [[a[0] + n[0], a[1] + n[1]], [b[0] + n[0], b[1] + n[1]], [b[0] - n[0], b[1] - n[1]], [a[0] - n[0], a[1] - n[1]]], closed: true, layer: 'X-READ-PLAN', color: 1 });
+    }
+    for (const o of r.spec.openings) ents.push({ type: 'circle', center: o.at, radius: o.width / 2, layer: 'X-READ-PLAN', color: o.type === 'window' ? 3 : o.type === 'opening' ? 30 : 5 });
+    for (const rm of r.spec.rooms || []) ents.push({ type: 'text', text: rm.name, at: rm.at, height: 2.5 * args.scale, layer: 'X-READ-PLAN', color: 6 });
+    const pv = await call('draw_entities', { entities: ents, layer_styles: { 'X-READ-PLAN': { color: 1, plot: false, description: 'read_plan: what was read (not plotted)' } } });
+    out.preview = { layer: 'X-READ-PLAN', entities: pv.count, bounds: pv.bounds, note: 'red: walls read, blue: doors, green: windows, orange: openings, magenta: rooms. Compare with screenshot over this window; delete_entities or undo removes it.' };
+  }
+  if (args.adopt) {
+    // the old plan out of the way (frozen, not plotted, nothing deleted), then the plan drawn in place
+    await call('layer_remap', { create: [{ name: 'X-OLD-PLAN', color: 8, plot: false, description: 'read_plan: the plan as it was drawn before it was adopted' }] });
+    // what was read, and the dimensions of the old plan (draw_plan draws its own): an entity read through a block
+    // ("^" + the block's handle) moves the whole block
+    const b = r.bounds, m = 3000 * (g.units === 'm' ? 0.001 : 1);
+    const dims = (g.dims || []).filter((d) => b && d[0] >= b[0][0] - m && d[2] <= b[1][0] + m && d[1] >= b[0][1] - m && d[3] <= b[1][1] + m).map((d) => d[5]);
+    const nested = [...r.used, ...dims].some((h) => String(h).startsWith('^'));
+    const handles = [...new Set([...r.used, ...dims].map((h) => String(h).replace(/^\^/, '')))];
+    let moved = 0;
+    for (let i = 0; i < handles.length; i += 2000) {
+      const res = await call('set_properties', { handles: handles.slice(i, i + 2000), layer: 'X-OLD-PLAN' });
+      moved += res.changed ?? res.count ?? handles.slice(i, i + 2000).length;
+    }
+    await call('layer_remap', { props: [{ name: 'X-OLD-PLAN', frozen: true }] });
+    const draw = toolHandlers.get('draw_plan');
+    const res = await draw({ ...r.spec, scale: args.scale, language: args.language, dimensions: ['bottom', 'left', 'top', 'right'] }, undefined);
+    const drawn = JSON.parse(res.content.find((c) => c.type === 'text').text);
+    out.adopted = {
+      old_entities_moved: moved, old_layer: 'X-OLD-PLAN (frozen, not plotted)', plan_view: drawn.view?.id, rooms: drawn.rooms?.length, warnings: drawn.warnings, assumed: drawn.assumed,
+      old_dimensions_moved: dims.length || undefined,
+      inside_blocks: nested ? 'part of the plan sat inside a block (a bound xref, a plan inserted as a block): that whole block went to X-OLD-PLAN' : undefined,
+      next: 'The plan is now this drawing\'s plan: change it with draw_plan update: true (list_views plan: true gives it), draw elevations, sections and schedules from it. Undo (3 steps) or thaw X-OLD-PLAN to compare with the old drawing.',
+    };
+  }
+  return text(out);
+});
+
+// ---------------------------------------------------------------- layers of drawings made by others
+
+/** The plot style table of the layouts of a drawing (the one most of them use), read from AutoCAD's folder or the drawing's. */
+async function ctbOf(survey) {
+  const names = (survey.plot?.layouts || []).map((l) => l.style_sheet).filter((n) => /\.ctb$/i.test(n || ''));
+  if (!survey.plot?.color_dependent) return { ctb: null, note: 'named plot styles (STB): the weights compared are the lineweights of the objects' };
+  if (!names.length) return { ctb: null, note: 'no plot style table on the layouts: the weights compared are the lineweights of the objects' };
+  const count = new Map();
+  for (const n of names) count.set(n, (count.get(n) ?? 0) + 1);
+  const name = [...count.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  for (const dir of [survey.plot.styles_folder, survey.plot.drawing_folder].filter(Boolean)) {
+    try {
+      const ctb = parseCtb(await fs.readFile(path.join(dir, name)), name);
+      const fixed = ctb.pens.filter((x) => x != null).length;
+      return { ctb, note: `${name}: ${fixed ? `${fixed} colours plot with a fixed weight` : 'every colour plots with the lineweight of the object'}` };
+    } catch {
+      // not there: the next folder
+    }
+  }
+  return { ctb: null, note: `${name} was not found (AutoCAD's plot styles folder, the drawing's folder): the weights compared are the lineweights of the objects` };
+}
+
+/** A company standard: a list of layers, or a .csv (name;color;linetype;lineweight;plot;role;description) or .json file. */
+async function standardOf(arg) {
+  if (!arg) return null;
+  if (Array.isArray(arg)) return arg;
+  const file = path.resolve(String(arg));
+  const text = await fs.readFile(file, 'utf8');
+  return /\.json$/i.test(file) ? JSON.parse(text) : readStandardCsv(text);
+}
+
+/** The layers of the current drawing mapped to the standard: the plan (dry run) or the plan carried out and checked. */
+async function standardizeCurrent(args, lang) {
+  const tool = 'standardize_layers';
+  const before = await sendNow('layer_survey', {});
+  const { ctb, note } = await ctbOf(before);
+  const mapping = { ...(args.mapping || {}) };
+  if (args.mapping_csv) Object.assign(mapping, readMappingCsv(await fs.readFile(path.resolve(args.mapping_csv), 'utf8')));
+  const standard = await standardOf(args.standard);
+  // the weight of "default" lineweights where this AutoCAD plots them (LWDEFAULT, 1/100 mm)
+  let lwDefault = 0.25;
+  try {
+    const v = Number((await sendNow('run_lisp', { code: '(getvar "LWDEFAULT")' }))?.value);
+    if (v > 0) lwDefault = v / 100;
+  } catch {
+    // keep 0.25
+  }
+  const plan = engine(tool, () => planLayers(before, { discipline: args.discipline, keepLook: args.keep_look ?? true, mapping, standard, unknown: args.unknown, ctb, lang, lwDefault }));
+  const out = {
+    drawing: before.drawing || undefined, discipline: plan.discipline, plot_style: note, summary: plan.summary,
+    layers: plan.layers.slice(0, args.list ?? 60).map((l) => ({
+      layer: l.layer, entities: l.entities, ...(l.in_blocks ? { in_blocks: l.in_blocks } : {}), purpose: l.role ?? undefined, read_from: l.by ?? undefined, action: l.action,
+      to: Object.keys(l.targets).length ? l.targets : undefined, ...(l.kept ? { kept: l.kept } : {}),
+    })),
+    more_layers: plan.layers.length > (args.list ?? 60) ? plan.layers.length - (args.list ?? 60) : undefined,
+    warnings: plan.warnings.length ? plan.warnings : undefined,
+  };
+  if (args.csv_path) {
+    const file = path.resolve(args.csv_path.endsWith('.csv') ? args.csv_path : `${args.csv_path}.csv`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, planCsv(plan, { lang }), 'utf8');
+    out.csv = file;
+  }
+  if (!args.apply) {
+    out.dry_run = true;
+    out.next = 'Nothing changed. Review the mapping (csv_path writes it for Excel: fill the column "to" where you disagree and give it back as mapping_csv), then call again with apply: true.';
+    return out;
+  }
+  const r = await sendNow('layer_remap', { create: plan.create, props: plan.props, renames: plan.renames, rules: plan.rules, delete: plan.delete, current: plan.current ?? undefined });
+  // checked against a new survey: nothing lost, every entity where the plan put it
+  const after = await sendNow('layer_survey', {});
+  const tally = (sv) => {
+    const m = new Map();
+    for (const g of sv.groups) if (g.space !== 'block') m.set(`${g.space}|${g.type}`, (m.get(`${g.space}|${g.type}`) ?? 0) + g.count);
+    return m;
+  };
+  const a = tally(before), b = tally(after);
+  const lost = [...new Set([...a.keys(), ...b.keys()])].filter((k) => (a.get(k) ?? 0) !== (b.get(k) ?? 0)).map((k) => `${k}: ${a.get(k) ?? 0} -> ${b.get(k) ?? 0}`);
+  // the layers that should be empty now: those moved away, not a target of the standard themselves
+  const targets = new Set(plan.layers.flatMap((l) => Object.keys(l.targets)).map((n) => n.toLowerCase()));
+  const moved = new Set(plan.layers.filter((l) => ['merge', 'split', 'rename'].includes(l.action) && !l.kept && !targets.has(l.layer.toLowerCase())).map((l) => l.layer.toLowerCase()));
+  const left = after.groups.filter((g) => moved.has(g.layer.toLowerCase()) && !(g.space === 'block' && g.layer === '0')).reduce((n, g) => n + g.count, 0);
+  const ov = after.groups.filter((g) => g.space !== 'block' && ((g.color !== 'bylayer' && g.color !== 'byblock') || !['bylayer', 'byblock'].includes(String(g.linetype).toLowerCase()) || (g.lineweight !== 'bylayer' && g.lineweight !== 'byblock'))).reduce((n, g) => n + g.count, 0);
+  out.applied = {
+    layers_before: before.layers.length, layers_after: after.layers.length, moved: r.moved, overrides_set: r.overrides_set, renamed: r.renamed?.length || undefined,
+    created: r.created?.length || undefined, deleted: r.deleted?.length || undefined, kept: r.kept?.length ? r.kept : undefined, failed: r.failed || undefined,
+    dimension_block_entities: r.dimension_block_entities || undefined,
+    overrides_left: ov, entities_check: lost.length ? lost : 'every entity is still there (same count per space and type)',
+    left_on_old_layers: left || undefined, relocked: r.relocked?.length ? r.relocked : undefined,
+  };
+  out.next = 'One Undo step: undo puts every layer back. Save the drawing (save_drawing) to keep it.';
+  return out;
+}
+
+server.registerTool('standardize_layers', {
+  description:
+    'Make the layers of a drawing made by others consistent (chuẩn hóa layer): every entity of model space, the layouts and ' +
+    'the block definitions goes to one standard set of layers (the A-/S-/E-/P- layers of these tools, or a company ' +
+    'standard), by what it is: the purpose of its layer read from the name (Vietnamese with or without accents, English, ' +
+    'Chinese, AIA-like codes such as A-Wall or A-Text-VN, the prefix of a bound xref dropped), the type of the entity ' +
+    'where the name says nothing or says otherwise (a dimension goes to the dimension layer wherever it was), the block of ' +
+    'an insert (a door, a level mark, a grid bubble, a title block), and the weight it plots with (from the .ctb of the ' +
+    'layouts) for linework on layers named after a pen ("0.3", "net manh") or on layer 0. Colours, linetypes and ' +
+    'lineweights set on the entities become ByLayer, except where the drawing would then plot otherwise (keep_look, ' +
+    'default: a bold line stays bold, a dashed one dashed; keep_look false gives the weights of the standard everywhere); the ' +
+    'target layers take the properties and spelling of the standard; layers that end up empty are purged; layer 0 inside blocks, Defpoints and ' +
+    'xref layers are left as they are. Default dry run: returns the mapping layer by layer (csv_path writes it for Excel: ' +
+    'fill the column "to" to correct a row and give it back as mapping_csv) and changes nothing; apply: true carries it out ' +
+    'in one Undo step and checks that every entity is still there. files: several drawings at once, each opened read-only ' +
+    'and saved as a new file in out_dir (the originals are never written).',
+  inputSchema: {
+    apply: z.boolean().default(false).describe('false (default): only the proposed mapping; true: carry it out'),
+    discipline: z.enum(['auto', 'arch', 'struct']).default('auto').describe('Which annotation layers to use (A-ANNO-* or S-ANNO-*); auto: from the file name (KT / KC) or the layers'),
+    keep_look: opt(z.union([z.boolean(), z.literal('exact')])).describe('true (default): the drawing plots as before - an override stays on an entity that the standard layer would plot in another class of weight (fine, thin, medium, thick) or turn from continuous to dashed or back; false: the weights and linetypes of the standard everywhere (the dry run counts what would plot otherwise); "exact": any other weight is kept too'),
+    mapping: opt(Obj).describe('{"old layer": "new layer" | "keep" | "auto"}: your word over the proposal'),
+    mapping_csv: opt(Str).describe('The CSV of csv_path with the column "to" filled where you disagree'),
+    csv_path: opt(Str).describe('Write the proposed mapping (one row per layer) for Excel'),
+    standard: opt(z.union([Specs, Str])).describe('A company standard: [{name, color, linetype, lineweight, plot, role, description}] or a .csv / .json file; a role it names (wall, door, window, dims, text, symbol, grid, column, beam, rebar, stirrup, hatch, detail, title, furniture...) takes its layer'),
+    unknown: z.enum(['map', 'keep']).default('map').describe('Layers whose name says nothing: map their entities by type (default) or keep them'),
+    files: opt(jsonish(z.array(Str))).describe('Several drawings: each opened read-only, standardised and saved in out_dir as <name><suffix>.dwg'),
+    out_dir: opt(Str), suffix: z.string().default('-layer'),
+    list: z.number().int().positive().default(60).describe('How many layers the result lists (the CSV has them all)'),
+    language: opt(Lang),
+  },
+  annotations: EDIT,
+}, (args) => exclusive(async () => {
+  const lang = args.language ?? language;
+  if (!args.files?.length) return text(await standardizeCurrent(args, lang));
+  if (args.apply && !args.out_dir) throw new Error('standardize_layers: give out_dir for the standardised copies (the originals are never written)');
+  const results = [];
+  for (const f of args.files) {
+    const src = path.resolve(f);
+    const dst = args.out_dir ? path.join(path.resolve(args.out_dir), `${path.basename(src, path.extname(src))}${args.suffix}.dwg`) : null;
+    try {
+      if (dst && dst.toLowerCase() === src.toLowerCase()) throw new Error('the copy would overwrite the original: change out_dir or suffix');
+      await sendNow('open_drawing', { path: src, read_only: true });
+      const r = await standardizeCurrent({ ...args, files: undefined, csv_path: args.csv_path ? path.join(path.resolve(args.csv_path), `${path.basename(src, path.extname(src))}-layers.csv`) : undefined }, lang);
+      if (args.apply) {
+        const saved = await sendNow('save_drawing', { path: dst, overwrite: true, copy: false });
+        r.saved = saved.saved;
+      }
+      await sendNow('close_drawing', { discard: true }).catch(() => {});
+      results.push({ file: src, ...r, layers: undefined, layers_listed: r.layers.length });
+    } catch (e) {
+      await sendNow('close_drawing', { path: src, discard: true }).catch(() => {});
+      results.push({ file: src, error: e.message });
+    }
+  }
+  return text({ files: results.length, done: results.filter((r) => !r.error).length, results });
+}));
 
 server.registerTool('quantity_takeoff', {
   description:
@@ -550,10 +1553,22 @@ server.registerTool('setup_styles', {
     font: z.string().default('Arial').describe('TrueType font family, or an .shx file'),
     text_height: z.number().positive().default(2.5).describe('Dimension text height on paper (mm)'),
     arrow: z.enum(['tick', 'oblique', 'closed', 'dot', 'small_dot', 'open']).default('tick'),
+    ltscale: z.union([z.number().positive(), z.enum(['auto', 'set', 'keep'])]).default('auto').describe(
+      'auto (default): LTSCALE = 0.4 x scale only on a drawing with nothing in model space yet; a drawing that already has views ' +
+      'keeps its LTSCALE (the views of these tools size their own dashes for their scale, and changing LTSCALE would break the ' +
+      'views at other scales). set: 0.4 x scale anyway; keep: never; or a number'),
   },
   annotations: EDIT_IDEMPOTENT,
-}, async ({ scale, units, font, text_height, arrow }) =>
-  text(await call('setup_styles', styleParams({ scale, units, font, textHeight: text_height, arrow }))));
+}, async ({ scale, units, font, text_height, arrow, ltscale }) => {
+  const info = await call('drawing_info', {});
+  const p = { ...styleParams({ scale, units, font, textHeight: text_height, arrow }) };
+  const set = typeof ltscale === 'number' ? ltscale : ltscale === 'set' || (ltscale === 'auto' && !((info?.model_space_entities ?? 0) > 0)) ? p.ltscale : null;
+  if (set === null) delete p.ltscale;
+  else p.ltscale = set;
+  const r = await call('setup_styles', p);
+  if (set === null) r.ltscale_kept = `${info?.ltscale ?? 1} (the drawing already has views; ltscale: "set" or a number changes it)`;
+  return text(r);
+});
 
 // ---------------------------------------------------------------- drawing
 const ENTITY_DOC =
@@ -607,11 +1622,18 @@ server.registerTool('draw_entities', {
     space: z.enum(['model', 'current']).default('model').describe('model (default) or the current space (a layout when one is active)'),
     image_handle: opt(z.union([z.string(), z.number()]).transform(String)),
     language: opt(Lang),
+    revision: EditRevisionArg, scale: EditScaleArg,
   },
   annotations: EDIT,
-}, ({ entities, space, image_handle, language: lang }) => exclusive(async () => {
+}, ({ entities, space, image_handle, language: lang, revision, scale }) => exclusive(async () => {
   const specs = image_handle ? await pixelsToDrawing(image_handle, entities) : entities;
-  return text(await sendNow('draw_entities', withStyles({ entities: specs, space, language: lang })));
+  const out = await sendNow('draw_entities', withStyles({ entities: specs, space, language: lang }));
+  const rev = editRevisionOf(revision);
+  if (rev && space !== 'current') {
+    const handles = (out.results || []).flatMap((r) => r.handles || (r.handle ? [r.handle] : []));
+    await cloudEdit(out, rev, await boxesOf(handles, sendNow), scale, sendNow);
+  }
+  return text(out);
 }));
 
 server.registerTool('draw_plan', {
@@ -675,22 +1697,29 @@ server.registerTool('draw_plan', {
     if (e instanceof PlanError) throw new Error(`draw_plan: ${e.message}`);
     throw e;
   }
-  lastPlan = { ...args };
+  lastPlan = keptPlan(args);
   lastFloors = null;
   if (dry_run) {
+    const hw = heightWarnings(args.heights);
     return dryRun(plan.assumed, {
       walls: plan.walls.length, openings: (args.openings || []).length, rooms: plan.rooms.length, entities: plan.entities.length,
-      notes: plan.notes.length ? plan.notes : undefined,
+      notes: plan.notes.length ? plan.notes : undefined, warnings: hw.length ? hw : undefined,
     });
   }
+  const info = await call('drawing_info', {});
+  const sc = args.scale ?? 100;
+  const styles = stylesAt(sc, info);
+  const dashed = (ents) => ents.map((e) => ([ROLE.grid, ROLE.opening, ROLE.hidden, ROLE.beam].includes(e.layer) ? { ...e, scale_linetype: true } : e));
   const req = withStyles({
     walls: plan.walls, cuts: plan.cuts, columns: plan.columns, rooms: plan.rooms, room_options: plan.room_options,
-    entities: plan.entities, language: args.language,
-    styles: styleParams({ scale: args.scale ?? 100 }),
+    entities: styles.ltscale === undefined ? sizeLinetypes(dashed(plan.entities), sc, info.ltscale) : plan.entities, language: args.language,
+    styles,
   });
   const r = await call('draw_plan', req);
   if (plan.notes.length) r.notes = plan.notes;
   if (plan.assumed.length) r.assumed = plan.assumed;
+  const hw = heightWarnings(args.heights);
+  if (hw.length) r.warnings = [...(r.warnings || []), ...hw];
   return text(r);
 });
 
@@ -710,15 +1739,21 @@ async function drawBuilding(args, dryRunOnly) {
   ];
   const notes = plans.flatMap((p, i) => p.notes.map((n) => `${floors[i].name}: ${n}`));
   const summary = floors.map((f, i) => ({ name: f.name, level: f.level, height: f.height, walls: plans[i].walls.length, rooms: plans[i].rooms.length }));
-  lastPlan = { ...args };
+  lastPlan = keptPlan(args);
   const widths = plans.map((p) => {
     const b = entityBounds(p.entities);
     return b ? b.max[0] - b.min[0] : 20000;
   });
-  const pitch = Math.max(...widths) + 30 * scale;
+  // a plan that replaces an earlier one keeps the pitch of its floors while they still clear each other, so the
+  // sheets of the floors keep showing them
+  const vctx = viewStore.getStore();
+  const was = vctx?.old?.extra?.floors?.offsets?.[1]?.[0];
+  const pitch = was && was >= Math.max(...widths) + 12 * scale ? was : Math.max(...widths) + 30 * scale;
   const offsets = floors.map((f, i) => [i * pitch, 0]);
   lastFloors = { offsets, names: floors.map((f) => f.name) };
-  if (dryRunOnly) return dryRun(assumed, { floors: summary, notes: notes.length ? notes : undefined });
+  if (vctx) vctx.extra.floors = lastFloors;
+  const hw = [...heightWarnings(args.heights), ...(args.floors || []).flatMap((f, i) => heightWarnings(f?.heights, `floors[${i}].heights`))];
+  if (dryRunOnly) return dryRun(assumed, { floors: summary, notes: notes.length ? notes : undefined, warnings: hw.length ? hw : undefined });
   const shifted = floors.map((f, i) => engine('draw_plan', () => buildPlan({ ...shiftSpec(f.spec, offsets[i], true), language: lang })));
   const entities = [];
   // titles on one line under the lowest plan
@@ -730,10 +1765,14 @@ async function drawBuilding(args, dryRunOnly) {
     const cx = (b.min[0] + b.max[0]) / 2;
     entities.push(...viewTitle(lang === 'en' ? `${floors[i].name} PLAN` : `MẶT BẰNG ${floors[i].name}`, cx, yTitle - 14 * scale, scale, ROLE.text, lang));
   }
+  const info = await call('drawing_info', {});
+  const styles = stylesAt(scale, info);
+  const dashed = (ents) => ents.map((e) => ([ROLE.grid, ROLE.opening, ROLE.hidden, ROLE.beam].includes(e.layer) ? { ...e, scale_linetype: true } : e));
   const req = withStyles({
     walls: shifted.flatMap((p) => p.walls), cuts: shifted.flatMap((p) => p.cuts), columns: shifted.flatMap((p) => p.columns),
-    rooms: shifted.flatMap((p) => p.rooms), room_options: shifted[0].room_options, entities, language: args.language,
-    styles: styleParams({ scale }),
+    rooms: shifted.flatMap((p) => p.rooms), room_options: shifted[0].room_options,
+    entities: styles.ltscale === undefined ? sizeLinetypes(dashed(entities), scale, info.ltscale) : entities, language: args.language,
+    styles,
   });
   const r = await call('draw_plan', req);
   // the rooms come back in the order sent: floor by floor
@@ -746,7 +1785,7 @@ async function drawBuilding(args, dryRunOnly) {
   });
   return text({
     floors: out, count: r.count, bounds: r.bounds, unlabelled_spaces: r.unlabelled_spaces,
-    notes: notes.length ? notes : undefined, assumed: assumedOrNone(assumed),
+    notes: notes.length ? notes : undefined, assumed: assumedOrNone(assumed), warnings: hw.length ? hw : undefined,
   });
 }
 
@@ -777,9 +1816,21 @@ server.registerTool('transform_entities', {
     keep_original: opt(z.boolean()), rows: opt(z.number().int()), cols: opt(z.number().int()),
     row_spacing: opt(z.number()), col_spacing: opt(z.number()), rotate_items: opt(z.boolean()),
     distance: opt(z.number()), toward: opt(Point), both_sides: opt(z.boolean()),
+    revision: EditRevisionArg, scale: EditScaleArg,
   },
   annotations: EDIT,
-}, async (args) => text(await call('transform_entities', args)));
+}, async ({ revision, scale, ...args }) => {
+  const rev = editRevisionOf(revision);
+  // the places before (what moved away) and after (where it went, what was made)
+  const kept = ['copy', 'array_rect', 'array_polar', 'offset'].includes(args.op) || (args.op === 'mirror' && args.keep_original !== false);
+  const before = rev && !kept ? await boxesOf(args.handles) : [];
+  const out = await call('transform_entities', args);
+  if (rev) {
+    const after = await boxesOf([...(kept || args.op === 'explode' ? [] : args.handles), ...(out.created || [])]);
+    await cloudEdit(out, rev, [...before, ...after], scale);
+  }
+  return text(out);
+});
 
 server.registerTool('set_properties', {
   description:
@@ -792,13 +1843,28 @@ server.registerTool('set_properties', {
     lineweight: opt(z.union([z.string(), z.number()])), ltscale: opt(z.number().positive()), transparency: opt(z.number()),
     text: opt(Str), height: opt(z.number().positive()), rotation: opt(z.number()), closed: opt(z.boolean()),
     attributes: opt(Obj),
+    revision: EditRevisionArg, scale: EditScaleArg,
   },
   annotations: EDIT,
-}, async (args) => text(await call('set_properties', withStyles(args))));
+}, async ({ revision, scale, ...args }) => {
+  const rev = editRevisionOf(revision);
+  const before = rev ? await boxesOf(args.handles) : [];
+  const out = await call('set_properties', withStyles(args));
+  if (rev) await cloudEdit(out, rev, [...before, ...(await boxesOf(args.handles))], scale);
+  return text(out);
+});
 
-bridgeTool('delete_entities',
-  'Delete entities by explicit handle (never by selection). One Undo step.',
-  { handles: Handles.describe(HANDLES_DESC) }, DESTRUCTIVE);
+server.registerTool('delete_entities', {
+  description: 'Delete entities by explicit handle (never by selection). One Undo step. With revision, the places they took are clouded.',
+  inputSchema: { handles: Handles.describe(HANDLES_DESC), revision: EditRevisionArg, scale: EditScaleArg },
+  annotations: DESTRUCTIVE,
+}, async ({ handles, revision, scale }) => {
+  const rev = editRevisionOf(revision);
+  const before = rev ? await boxesOf(handles) : [];
+  const out = await call('delete_entities', { handles });
+  if (rev) await cloudEdit(out, rev, before, scale);
+  return text(out);
+});
 
 bridgeTool('select_entities',
   'Select entities in AutoCAD (grips) so the user can see them; empty handles clears the selection.',
@@ -924,9 +1990,65 @@ server.registerTool('attach_image', {
     anchor: opt(Obj), at: opt(Point), rotation: z.number().default(0),
     fade: z.number().int().min(0).max(90).default(40),
     layer: z.string().default(ROLE.image),
+    name: opt(Str).describe('Name of the image definition (default the file name, made unique beside another file of that name)'),
+    reload: z.boolean().default(true).describe('The same file attached again (a render written again): read it again'),
   },
   annotations: EDIT,
 }, async (args) => text(await call('attach_image', withStyles({ ...args, path: path.resolve(args.path) }))));
+
+/** A LISP string literal (paths with forward slashes). */
+const lispStr = (s) => `"${String(s).replace(/\\/g, '/').replace(/"/g, '\\"')}"`;
+
+server.registerTool('manage_images', {
+  description:
+    'Manage the images attached to the drawing (ảnh chèn: render, ảnh nền): list (name, file, loaded, references), unload ' +
+    '(AutoCAD lets go of the file, so a render can write it again), reload (read the file again after it changed), replace ' +
+    '(point the image at another file, then reload: every reference of that image follows), detach (remove the image ' +
+    'definition and all its references), purge (detach the definitions no image uses any more: what delete_entities leaves). ' +
+    'The image by handle (of a reference) or name (of the definition). To refresh a render: unload, write the PNG, reload.',
+  inputSchema: {
+    action: z.enum(['list', 'unload', 'reload', 'replace', 'detach', 'purge']),
+    handle: opt(z.union([Str, z.number()]).transform(String)), name: opt(Str), path: opt(Str),
+  },
+  annotations: EDIT,
+}, async ({ action, handle, name, path: file }) => {
+  // the image dictionary holds pairs (3 . name) (350 . def): read the names in order
+  const listDefs = async () => {
+    const code = `(progn (setq r nil) (setq d (dictsearch (namedobjdict) "ACAD_IMAGE_DICT")) (setq ss (ssget "_X" '((0 . "IMAGE"))))
+      (setq nm nil)
+      (if d (foreach x d (cond ((= (car x) 3) (setq nm (cdr x)))
+        ((and (= (car x) 350) nm) (setq e (cdr x)) (setq ed (entget e)) (setq n 0)
+          (if ss (progn (setq i 0) (repeat (sslength ss) (if (equal (cdr (assoc 340 (entget (ssname ss i)))) e) (setq n (1+ n))) (setq i (1+ i)))))
+          (setq r (cons (list nm (cdr (assoc 1 ed)) (cdr (assoc 280 ed)) n) r)) (setq nm nil)))))
+      (reverse r))`;
+    const v = (await call('run_lisp', { code })).value || [];
+    return v.map((x) => ({ name: x[0], file: x[1], loaded: Number(x[2]) === 1, references: Number(x[3]) }));
+  };
+  if (action === 'list') return text({ images: await listDefs() });
+  if (action === 'purge') {
+    const unused = (await listDefs()).filter((d) => d.references === 0);
+    for (const d of unused) await call('run_lisp', { code: `(command "_.-IMAGE" "_Detach" ${lispStr(d.name)})` });
+    return text({ detached: unused.map((d) => d.name) });
+  }
+  let nm = name;
+  if (!nm && handle) nm = (await call('run_lisp', { code: `(vla-get-Name (vlax-ename->vla-object (handent ${lispStr(handle)})))` })).value;
+  if (!nm) throw new Error('manage_images: give the handle of an image or the name of its definition');
+  const defs = await listDefs();
+  const def = defs.find((d) => d.name.toLowerCase() === String(nm).toLowerCase());
+  if (!def) throw new Error(`manage_images: no image named "${nm}" (images: ${defs.map((d) => d.name).join(', ') || 'none'})`);
+  const q = lispStr(def.name);
+  if (action === 'unload') await call('run_lisp', { code: `(command "_.-IMAGE" "_Unload" ${q})` });
+  else if (action === 'reload') await call('run_lisp', { code: `(command "_.-IMAGE" "_Reload" ${q})` });
+  else if (action === 'detach') await call('run_lisp', { code: `(command "_.-IMAGE" "_Detach" ${q})` });
+  else if (action === 'replace') {
+    if (!file) throw new Error('manage_images: replace needs path (the new image file)');
+    const f = path.resolve(file);
+    await fs.access(f).catch(() => { throw new Error(`manage_images: no file ${f}`); });
+    await call('run_lisp', { code: `(progn (command "_.-IMAGE" "_Path" ${q} ${lispStr(f)}) (command "_.-IMAGE" "_Reload" ${q}))` });
+  }
+  const after = (await listDefs()).find((d) => d.name === def.name);
+  return text({ action, image: after ?? { name: def.name, detached: true } });
+});
 
 server.registerTool('import_drawing', {
   description:
@@ -1017,11 +2139,15 @@ server.registerTool('create_layout', {
     orientation: z.enum(['landscape', 'portrait']).default('landscape'),
     window: opt(Window).describe('Model area to show; default: drawing extents'),
     scale: opt(z.number().positive()).describe('100 = 1:100; default: largest standard scale that fits'),
-    views: opt(z.array(z.object({ window: Window, scale: z.number().positive(), at: opt(Point) }))).describe(
+    views: opt(z.array(z.object({ window: opt(Window), view: opt(Str), margin: opt(z.number().min(0)), scale: z.number().positive(), at: opt(Point) }))).describe(
       'Several viewports on the sheet instead of window/scale, each a model window at its own scale (a plan at 1:50 and its ' +
       'details at 1:20): packed in rows left to right, bottoms aligned, the block centred in the drawing area; at = the ' +
-      'centre of a viewport on the paper in mm. The title block scale reads "NHƯ HÌNH" (as shown) when the scales differ.',
+      'centre of a viewport on the paper in mm. view (an id of list_views) instead of window: the extents of that view - its ' +
+      'title, scale line and tags included - plus margin (paper mm, default 5). The title block scale reads "NHƯ HÌNH" (as ' +
+      'shown) when the scales differ.',
     ),
+    view: opt(Str).describe('An id of list_views: the window is the extents of that view plus margin'),
+    margin: opt(z.number().min(0)).describe('Paper mm around a view window (default 5)'),
     title_block: opt(Obj).describe(
       '{style: strip (vertical strip on the right, default on landscape A3-A0) | bottom, company, company_address, project, location, item, ' +
       'client, client_address, title, number (default: a field of the layout name), revision, contract, phase, sheet, date, chief, lead, ' +
@@ -1032,10 +2158,29 @@ server.registerTool('create_layout', {
     activate: z.boolean().default(false).describe('Leave the new layout open in AutoCAD (default: back to Model)'),
   },
   annotations: EDIT,
-}, ({ name, paper, orientation, window, scale, views, title_block, language: lang, replace, activate }) => exclusive(async () => {
+}, ({ name, paper, orientation, window, scale, views, title_block, language: lang, replace, activate, view, margin }) => exclusive(async () => {
   const info0 = await sendNow('drawing_info', {});
-  if (views?.length) return text(await layoutViews({ name, paper, orientation, views, title_block, lang, replace, activate, info0 }));
+  // windows from views: the extents of the view (all it drew) plus a margin on paper
+  let known = null;
+  const viewWindow = async (id, sc, m, where) => {
+    known ??= parseViews(await sendNow('view_list', {})).views;
+    const v = known.find((x) => x.id === id);
+    if (!v) throw new Error(`create_layout: ${where}: no view "${id}" (list_views names them: ${known.map((x) => x.id).slice(0, 12).join(', ')})`);
+    if (!v.bounds) throw new Error(`create_layout: ${where}: view "${id}" has nothing drawn`);
+    const u = { m: 0.001, cm: 0.1 }[info0.units] ?? 1;
+    const d = (m ?? 5) * (sc ?? 100) * u;
+    return [[v.bounds.min[0] - d, v.bounds.min[1] - d], [v.bounds.max[0] + d, v.bounds.max[1] + d]];
+  };
+  if (views?.length) {
+    const vs = [];
+    for (const [i, v] of views.entries()) {
+      if (!v.window && !v.view) throw new Error(`create_layout: views[${i}] needs window or view`);
+      vs.push({ ...v, window: v.window ?? (await viewWindow(v.view, v.scale, v.margin, `views[${i}]`)) });
+    }
+    return text(await layoutViews({ name, paper, orientation, views: vs, title_block, lang, replace, activate, info0 }));
+  }
   let win = window;
+  if (!win && view) win = await viewWindow(view, scale, margin, 'view');
   if (!win) {
     if (!info0.extents) throw new Error('create_layout: model space is empty; draw first or give a window.');
     win = [info0.extents.min, info0.extents.max];
@@ -1085,16 +2230,70 @@ server.registerTool('create_layout', {
   return text({ ...r, scale: `1:${s}`, paper, orientation, ...(warnings.length ? { warnings } : {}) });
 }));
 
-bridgeTool('export_pdf',
-  'Plot to PDF with DWG To PDF.pc3: layouts (names, ["all"], or default the current one) become pages of one PDF; layouts on ' +
-  'different paper sizes give one PDF per size (<name>_A1.pdf, <name>_A3-portrait.pdf: see pdfs). For "Model": paper, ' +
-  'orientation, window (default extents) and scale (default fit). monochrome.ctb unless plot_style is given. Plotting can take ' +
-  '~30 s on machines whose default Windows printer is an unreachable network printer.',
-  {
+/** Whether a file exists and another program holds it open (a PDF viewer keeps the PDF it shows locked). */
+async function fileLocked(file) {
+  try {
+    const fh = await fs.open(file, 'r+');
+    await fh.close();
+    return false;
+  } catch (e) {
+    return ['EBUSY', 'EPERM', 'EACCES'].includes(e.code);
+  }
+}
+
+server.registerTool('export_pdf', {
+  description:
+    'Plot to PDF with DWG To PDF.pc3: layouts (names, ["all"], or default the current one) become pages of one PDF; layouts on ' +
+    'different paper sizes give one PDF per size (<name>_A1.pdf, <name>_A3-portrait.pdf: see pdfs). For "Model": paper, ' +
+    'orientation, window (default extents) and scale (default fit). monochrome.ctb unless plot_style is given. Plotting can take ' +
+    '~30 s on machines whose default Windows printer is an unreachable network printer. A PDF open in a viewer (Nitro, Acrobat) ' +
+    'is locked: the tool says so before plotting; if_locked: rename writes <name>-1.pdf (-2...) instead.',
+  inputSchema: {
     path: Str, layouts: opt(jsonish(z.array(Str))),
     paper: z.enum(['A0', 'A1', 'A2', 'A3', 'A4']).default('A3'), orientation: z.enum(['landscape', 'portrait']).default('landscape'),
     window: opt(Window), scale: opt(z.number().positive()), plot_style: opt(Str),
-  }, DESTRUCTIVE, (a) => ({ ...a, path: path.resolve(a.path) }));
+    if_locked: z.enum(['error', 'rename']).default('error'),
+  },
+  annotations: DESTRUCTIVE,
+}, async ({ if_locked, ...a }) => {
+  let file = path.resolve(a.path);
+  const stem = file.replace(/\.pdf$/i, '');
+  // the PDF and the PDFs per paper size that the plot may write (<name>_A1.pdf ...)
+  const targets = async (f) => {
+    const s = f.replace(/\.pdf$/i, '');
+    const dir = path.dirname(f), base = path.basename(s);
+    let more = [];
+    try {
+      more = (await fs.readdir(dir)).filter((n) => n.toLowerCase().startsWith(`${base.toLowerCase()}_`) && /\.pdf$/i.test(n)).map((n) => path.join(dir, n));
+    } catch {
+      // no folder yet
+    }
+    const out = [];
+    for (const t of [f, ...more]) if (await fileLocked(t)) out.push(t);
+    return out;
+  };
+  let locked = await targets(file);
+  const note = [];
+  if (locked.length && if_locked === 'rename') {
+    for (let i = 1; i < 100 && locked.length; i++) {
+      file = `${stem}-${i}.pdf`;
+      locked = await targets(file);
+    }
+    note.push(`the PDF was open in another program: written to ${file}`);
+  }
+  if (locked.length) {
+    throw new Error(`export_pdf: ${locked.join(', ')} ${locked.length > 1 ? 'are' : 'is'} open in another program (a PDF viewer such as Nitro or Acrobat keeps the file it shows locked, and AutoCAD then cancels the plot with ePageCancelled). Close it there, give another path, or pass if_locked: "rename".`);
+  }
+  try {
+    const r = await call('export_pdf', { ...a, path: file });
+    return text(note.length ? { ...r, note: note.join('; ') } : r);
+  } catch (e) {
+    if (/PageCancelled/i.test(String(e.message))) {
+      throw new Error(`${e.message} - AutoCAD cancels a plot when the PDF (or one of its per-paper PDFs) cannot be written: check that ${file} is not open in a PDF viewer and that its folder can be written.`);
+    }
+    throw e;
+  }
+});
 
 bridgeTool('save_drawing',
   'Save the drawing (DWG, or DXF by extension/format). Empty path = save in place; a new path = Save As (the open drawing takes ' +
@@ -1107,14 +2306,27 @@ bridgeTool('open_drawing',
   'Open a .dwg/.dxf file in AutoCAD (or switch to it if already open). Handles from another drawing are not valid there.',
   { path: Str, read_only: z.boolean().default(false) }, DESTRUCTIVE, (a) => ({ ...a, path: path.resolve(a.path) }));
 
+bridgeTool('close_drawing',
+  'Close a drawing (path, default the current one). A drawing with unsaved changes is closed only with discard=true.',
+  { path: opt(Str), discard: z.boolean().default(false) }, DESTRUCTIVE, (a) => ({ ...a, ...(a.path ? { path: path.resolve(a.path) } : {}) }));
+
 bridgeTool('new_drawing',
   'Create a new drawing from a template (default acadiso.dwt, metric) and make it current.',
   { template: opt(Str) }, DESTRUCTIVE);
 
 // ---------------------------------------------------------------- elevations, sections, structural details
+/** Where draw_plan put the floors of the building: in this session, else as the drawing remembers it. */
+const floorSpots = () => lastFloors ?? viewStore.getStore()?.floorsBase ?? null;
+
 function planFor(args, tool) {
-  const base = args.plan ?? lastPlan;
+  const ctx = viewStore.getStore();
+  const base = args.plan ?? ctx?.planBase ?? lastPlan;
   if (!base) throw new Error(`${tool}: no plan description yet: call draw_plan first in this session, or pass plan (the same object as draw_plan).`);
+  if (ctx && ctx.tool !== 'draw_plan') {
+    // the plan the view is drawn from: kept in the drawing when it is not the one already there
+    ctx.planHash = hashOf(specKey(base));
+    if (ctx.planHash !== ctx.storedHash) ctx.planJson = JSON.stringify(keptPlan(base));
+  }
   return {
     ...base,
     ...(args.heights ? { heights: { ...(base.heights || {}), ...args.heights } } : {}),
@@ -1139,7 +2351,7 @@ const assumedOrNone = (a) => (a?.length ? a : undefined);
 /** The building of a plan description as a key: the plot scale a tool was called with is not part of the building. */
 // what a plan says about how it is drawn, not about the building: two descriptions that differ only there (or in the
 // order of their fields) are the same building, so a calculation made for one serves the other
-const DRAWN_ONLY = new Set(['scale', 'dimensions', 'interior_dimensions', 'entities', 'room_options', 'layers', 'language', 'hatch_walls', 'sections', 'north', 'levels', 'dry_run']);
+const DRAWN_ONLY = new Set(['scale', 'dimensions', 'interior_dimensions', 'entities', 'room_options', 'layers', 'language', 'hatch_walls', 'sections', 'north', 'levels', 'dry_run', 'update']);
 const specKey = (spec) => {
   const strip = (o) => Object.fromEntries(Object.entries(o).filter(([k, v]) => !DRAWN_ONLY.has(k) && v !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([k, v]) => [k, k === 'floors' && Array.isArray(v) ? v.map((f) => (f && typeof f === 'object' && !Array.isArray(f) ? strip(f) : f)) : v]));
@@ -1169,10 +2381,15 @@ function sizeLinetypes(ents, scale, ltscale) {
 /** Place a new view to the right of everything in model space when no position is given. */
 async function freeSpot(at, scale) {
   const info = await sendNow('drawing_info', {});
-  if (at) return { at, info };
-  if (!info.extents) return { at: [0, 0], info };
-  // far enough that a sheet window around the new view does not catch its neighbour (texts run past the bounds)
-  return { at: [info.extents.max[0] + Math.max(40 * scale, 5000), info.extents.min[1] + 80 * scale], info };
+  const ctx = viewStore.getStore();
+  const k = ctx ? ctx.n++ : -1;
+  // a view that replaces an earlier one stands where that one stood (its k-th place)
+  const kept = !at && ctx?.old?.spots?.[k];
+  const spot = at ?? (Array.isArray(kept) ? kept
+    // far enough that a sheet window around the new view does not catch its neighbour (texts run past the bounds)
+    : !info.extents ? [0, 0] : [info.extents.max[0] + Math.max(40 * scale, 5000), info.extents.min[1] + 80 * scale]);
+  if (ctx) ctx.spots[k] = spot;
+  return { at: spot, info };
 }
 
 async function drawView(ents, scale, info, lang) {
@@ -1396,7 +2613,7 @@ function floorFor(args, tool) {
   }
   const k = typeof args.floor === 'number' || /^\d+$/.test(String(args.floor)) ? Number(args.floor) - 1 : floors.findIndex((f) => f.name === String(args.floor));
   if (!floors[k]) throw new Error(`${tool}: no floor ${args.floor} (floors: ${floors.map((f) => f.name).join(', ')})`);
-  const offset = !args.plan && lastFloors?.offsets?.[k] ? lastFloors.offsets[k] : [0, 0];
+  const offset = !args.plan && floorSpots()?.offsets?.[k] ? floorSpots().offsets[k] : [0, 0];
   return { spec: floors[k].spec, offset, key: floors[k].name, height: floors[k].height, label: ` ${floors[k].name}` };
 }
 
@@ -1483,6 +2700,115 @@ let lastFinish = null;
 const NotesArg = z.union([z.boolean(), z.array(Str)]).default(true)
   .describe('General notes of the sheet (GHI CHÚ): true = the standard ones for this kind of plan, a list = these, false = none');
 
+/** The lines of the general notes of a sheet ([] for none). */
+const notesLines = (args, kind, lang) => (args.notes === false ? [] : Array.isArray(args.notes) ? args.notes : generalNotes(kind, lang));
+
+/** Height of a notes block: the heading and the numbered lines of its mtext, 95 x scale wide. */
+function notesHeight(lines, sc) {
+  const rows = lines.reduce((t, l) => t + Math.max(1, Math.ceil((String(l).length + 4) / 62)), 0);
+  return 5 * sc + rows * 2.5 * sc * 1.1 * 1.67;
+}
+
+/** Full bounds of a plan copy: its walls and columns, its entities, the text of its dimensions and its grid bubbles. */
+function copyBounds(base, sc) {
+  const xs = [], ys = [];
+  const add = (p) => {
+    if (Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])) {
+      xs.push(p[0]);
+      ys.push(p[1]);
+    }
+  };
+  for (const g of base.plan?.walls || []) for (const solid of g.solids || []) for (const p of solid) add(p);
+  for (const c of base.plan?.columns || []) for (const p of c) add(p);
+  add(base.bounds.min);
+  add(base.bounds.max);
+  for (const e of base.ents) {
+    if ((e.type === 'dim_chain' || (e.type === 'block' && e.name === 'MCP_TRUC')) && Array.isArray(e.at)) {
+      add([e.at[0] - 6 * sc, e.at[1] - 6 * sc]);
+      add([e.at[0] + 6 * sc, e.at[1] + 6 * sc]);
+    }
+  }
+  return { min: [Math.min(...xs), Math.min(...ys)], max: [Math.max(...xs), Math.max(...ys)] };
+}
+
+/** Whether model space has anything in box [x0, y0, x1, y1] (crossing). */
+async function occupied(box) {
+  try {
+    const q = await sendNow('query_entities', { window: [[box[0], box[1]], [box[2], box[3]]], window_mode: 'crossing', limit: 1, space: 'model' });
+    return (q?.matched ?? q?.entities?.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where the legend and notes of a plan copy go (top-left corner of a block w x h): notes_at when given; the place the
+ * view it replaces had; else right of the plan (past its walls, dimensions and grid bubbles), below its title, left or
+ * above it, the first one where the drawing is free.
+ */
+async function sideSpot(base, sc, args, [w, h]) {
+  const cb = copyBounds(base, sc);
+  const vctx = viewStore.getStore();
+  const vk = vctx ? vctx.n++ : -1;
+  const kept = vctx?.old?.spots?.[vk];
+  const titleBottom = Math.min(cb.min[1], base.bounds.min[1] - 24 * sc);
+  const cands = [
+    ['right', [cb.max[0] + 15 * sc, cb.max[1]]],
+    ['below', [cb.min[0], titleBottom - 10 * sc]],
+    ['left', [cb.min[0] - 15 * sc - w, cb.max[1]]],
+    ['above', [cb.min[0], cb.max[1] + 15 * sc + h]],
+  ];
+  let at = null, where = 'right', warning;
+  if (args.notes_at) {
+    at = args.notes_at;
+    where = 'given';
+  } else if (Array.isArray(kept)) {
+    at = kept;
+    where = 'kept';
+  } else if (vctx?.old) {
+    at = cands[0][1]; // an update: the view it replaces still stands beside the plan
+  } else {
+    for (const [k, c] of cands) {
+      if (!(await occupied([c[0], c[1] - h, c[0] + w, c[1]]))) {
+        at = c;
+        where = k;
+        break;
+      }
+    }
+    if (!at) {
+      at = cands[0][1];
+      warning = 'no free place beside the plan for its legend and notes: they overlap other entities; give notes_at';
+    }
+  }
+  if (vctx) vctx.spots[vk] = at;
+  const r = (v) => Math.round(v);
+  return { at, where, box: [[r(at[0]), r(at[1] - h)], [r(at[0] + w), r(at[1])]], warning };
+}
+
+/**
+ * The legend (run(legendAt) of the plan's engine, or none) and the general notes of a plan copy, placed by sideSpot:
+ * the engine is run once to measure its legend, then again where the block goes.
+ */
+async function sideBlock(base, sc, args, kind, lang, run) {
+  const lines = notesLines(args, kind, lang);
+  let r = run(args.legend ? [0, 0] : undefined);
+  const lh = args.legend && r.legendBottom != null ? -r.legendBottom : 0;
+  const h = lh + (lines.length ? (lh ? 6 * sc : 0) + notesHeight(lines, sc) : 0);
+  if (h <= 0) return { r: args.legend ? run(undefined) : r, notes: [], side: null };
+  const side = await sideSpot(base, sc, args, [100 * sc, h]);
+  r = run(args.legend ? side.at : undefined);
+  const top = args.legend && r.legendBottom != null ? r.legendBottom - 6 * sc : side.at[1];
+  return { r, notes: lines.length ? notesBlock(lines, [side.at[0], top], sc, lang) : [], side };
+}
+
+const sideOut = (side) => (side ? { legend_and_notes: { position: side.where, window: side.box } } : {});
+
+const PlanCopyArgs = {
+  notes_at: opt(Point).describe('Top-left corner of the legend and notes; default: beside the plan (right of its walls, dimensions and grid bubbles; else below its title, left or above) where the drawing is free'),
+  dimensions: opt(z.union([z.literal(false), jsonish(z.array(z.enum(['top', 'bottom', 'left', 'right'])))])).describe('Dimension chains of the plan copy: the sides that get them, or false for none (default: as the plan)'),
+  interior_dimensions: z.boolean().default(false).describe('Clear room dimensions inside the plan copy (off by default: they would cross the room names, tags and finishes of this plan)'),
+};
+
 /** The sheet's general notes under its legend (or right of the plan at the top). */
 function sheetNotes(args, kind, base, sc, lang, below, extra) {
   if (args.notes === false) return;
@@ -1493,12 +2819,17 @@ function sheetNotes(args, kind, base, sc, lang, below, extra) {
 }
 
 /** A copy of the plan (walls, openings, columns, grids, dimensions, room names) at an interior scale, moved by offset. */
-async function planCopy(tool, spec, args, scale, { doors = true, roomLabels = true, labels = {}, levels = true, hideRooms = null, dimensions = undefined, tags: withTags = true, stairLabels = true, front = undefined } = {}) {
+async function planCopy(tool, spec, args, scale, { doors = true, roomLabels = true, labels = {}, levels = true, hideRooms = null, dimensions = undefined, tags: withTags = true, stairLabels = true, front = undefined, interiorDims = undefined } = {}) {
   const info = await sendNow('drawing_info', {});
   const pts = (spec.walls || []).flatMap((w) => w.points || []);
   const x0 = Math.min(...pts.map((p) => p[0])), x1 = Math.max(...pts.map((p) => p[0]));
   const y0 = Math.min(...pts.map((p) => p[1])), y1 = Math.max(...pts.map((p) => p[1]));
-  const offset = args.offset ?? [info.extents ? info.extents.max[0] + 80 * scale - x0 : 0, 0];
+  // a view that replaces an earlier one keeps the offset of its plan (its k-th place), so its sheet keeps showing it
+  const vctx = viewStore.getStore();
+  const vk = vctx ? vctx.n++ : -1;
+  const keptOffset = !args.offset && vctx?.old?.spots?.[vk];
+  const offset = args.offset ?? (Array.isArray(keptOffset) ? keptOffset : [info.extents ? info.extents.max[0] + 80 * scale - x0 : 0, 0]);
+  if (vctx) vctx.spots[vk] = offset;
   // front (a point in front of the house: the meter, the manhole; null: the bottom of the plan): that side stays free,
   // the dimension chains go to two other sides and the grid bubbles on that side are left out
   let frontSide = null;
@@ -1509,6 +2840,7 @@ async function planCopy(tool, spec, args, scale, { doors = true, roomLabels = tr
   }
   // room names where given (clear of the furniture), else where the plan has them
   const moved = { ...spec, rooms: (spec.rooms || []).map((r) => (labels[r.name] ? { ...r, at: labels[r.name] } : r)) };
+  if (interiorDims !== undefined) moved.interior_dimensions = interiorDims;
   // tags false: the doors and windows without their schedule tags (plans of other trades)
   if (!withTags) moved.openings = (spec.openings || []).map(({ tag, ...o }) => o);
   const shifted = shiftSpec(moved, offset);
@@ -2051,14 +3383,16 @@ server.registerTool('draw_furniture_plan', {
     'the plan itself. Place an item with room + wall (A/B/C/D or top/right/bottom/left: its back against that wall) + offset from ' +
     'the left end of the wall seen from inside (default centred) + gap, or at (middle of its back edge) + facing (degrees the front ' +
     'faces), or center + facing (freestanding, e.g. a dining table). width/depth/height override the type size; code (default per ' +
-    'type, e.g. FN-01 bed), description; kitchen_base takes sink and hob (x from its left end) and modules [{w, type: door|doors|' +
+    'type, e.g. FN-01 bed), description; tv_cabinet takes tv: false (the low cabinet alone, no screen in plan or elevation; ' +
+    'sideboard is a credenza of its own); coffee_table and dining_table take shape: "round" or diameter (a round table, the ' +
+    'chairs of a dining table around it); kitchen_base takes sink and hob (x from its left end) and modules [{w, type: door|doors|' +
     'drawers|sink|open|appliance}]; kitchen_wall/hood take z0 (underside). The items are remembered for draw_interior_elevation, ' +
     `draw_ceiling_plan (pendants over tables), draw_joinery_detail and material_schedule. Types (w x d x h): ${FURNITURE_DOC}.`,
   inputSchema: {
     items: Specs, copy: z.boolean().default(true), offset: opt(Point), scale: z.number().positive().default(50),
     tags: z.boolean().default(true),
     elevation_keys: opt(jsonish(z.array(z.union([Str, Obj])))).describe('Rooms that get an elevation key: names, or {room, at}'),
-    notes: NotesArg,
+    notes: NotesArg, ...PlanCopyArgs,
     title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg,
     dry_run: z.boolean().default(false).describe('Resolve the items and list the sizes/codes/positions it would assume, without drawing'),
   },
@@ -2112,19 +3446,20 @@ server.registerTool('draw_furniture_plan', {
     hard.push([p[0] - kr, p[1] - kr, p[0] + kr, p[1] + kr]);
     keys.push([p[0], p[1]]);
   }
-  const base = await planCopy('draw_furniture_plan', spec, args, sc, { labels });
+  const base = await planCopy('draw_furniture_plan', spec, args, sc, { labels, dimensions: args.dimensions ?? undefined, interiorDims: args.interior_dimensions });
   const extra = furniturePlan(r.items, { offset: base.offset, scale: sc, tags: args.tags });
   for (const [i, p] of keys.entries()) {
     const k = args.elevation_keys[i];
     elevationKey([p[0] + base.offset[0], p[1] + base.offset[1]], sc, extra, undefined, typeof k === 'string' ? k : k.room);
   }
-  sheetNotes(args, 'furniture', base, sc, lang, null, extra);
+  const sb = await sideBlock(base, sc, { ...args, legend: false }, 'furniture', lang, () => ({}));
+  extra.push(...sb.notes);
   sheetTitle(base, args.title ?? `${lang === 'en' ? 'FURNITURE LAYOUT PLAN' : 'MẶT BẰNG BỐ TRÍ NỘI THẤT'}${floorLabel}`, sc, extra);
   const res = await drawPlanCopy(base, extra, sc, lang);
-  const warnings = [...r.warnings, ...notes];
+  const warnings = [...r.warnings, ...notes, ...(sb.side?.warning ? [sb.side.warning] : [])];
   return text({
     offset: base.offset, items: summary, assumed: assumedOrNone(r.assumed), warnings: warnings.length ? warnings : undefined,
-    count: res.count, bounds: res.bounds,
+    count: res.count, bounds: res.bounds, ...sideOut(sb.side),
   });
 }));
 
@@ -2135,7 +3470,8 @@ server.registerTool('draw_floor_finish_plan', {
     'tag under each name and the legend (finish, swatch at the real size, area m² and rooms). ' + INTERIOR_DEFAULTS,
   inputSchema: {
     rooms: FinishRooms, offset: opt(Point), scale: z.number().positive().default(50), legend: z.boolean().default(true),
-    title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg,
+    title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg, ...PlanCopyArgs,
+    zones: opt(Specs).describe('Areas of another floor inside a room, e.g. carpet tiles set into the stone floor: [{rect: [[x0,y0],[x1,y1]] | outline: [[x,y]...] (plan coordinates, as furniture items), room? (default the room around it), code (FL-02), description, pattern: tile|plank|none|<hatch>, size (default 500x500), angle, start, note (e.g. "LÁT ÂM SÀN")}]: the joints of the room stop at the zone edge, the zone gets its own joints, tag and area, and its area is taken off the room finish'),
     dry_run: z.boolean().default(false).describe('List the finishes it would assume per room, without drawing'),
   },
   annotations: EDIT,
@@ -2148,18 +3484,18 @@ server.registerTool('draw_floor_finish_plan', {
   if (args.dry_run) return dryRun(assumed, { floors });
   const sc = args.scale;
   const lang = args.language ?? language;
-  const base = await planCopy('draw_floor_finish_plan', spec, args, sc);
+  const base = await planCopy('draw_floor_finish_plan', spec, args, sc, { dimensions: args.dimensions ?? undefined, interiorDims: args.interior_dimensions });
   const labels = Object.fromEntries((spec.rooms || []).map((r) => [String(r.name), r.at]));
-  const ff = engine('draw_floor_finish_plan', () => floorFinishPlan({
-    rooms, finishes, labels, offset: base.offset, scale: sc, lang, spec, items: interiorOf(key).items,
-    legendAt: args.legend ? [base.bounds.max[0] + 15 * sc, base.bounds.max[1]] : undefined,
-  }));
+  const sb = await sideBlock(base, sc, args, 'floor', lang, (legendAt) => engine('draw_floor_finish_plan', () => floorFinishPlan({
+    rooms, finishes, labels, offset: base.offset, scale: sc, lang, spec, items: interiorOf(key).items, legendAt, zones: args.zones,
+  })));
+  const ff = sb.r;
   assumed.push(...ff.assumed);
-  const extra = [...ff.entities];
-  sheetNotes(args, 'floor', base, sc, lang, ff.legendBottom, extra);
+  const extra = [...ff.entities, ...sb.notes];
   sheetTitle(base, args.title ?? `${lang === 'en' ? 'FLOOR FINISH PLAN' : 'MẶT BẰNG HOÀN THIỆN SÀN'}${floorLabel}`, sc, extra);
   const res = await drawPlanCopy(base, extra, sc, lang);
-  return text({ offset: base.offset, floors: ff.legend, assumed: assumedOrNone(assumed), count: res.count, bounds: res.bounds });
+  const warnings = [...(ff.warnings || []), ...(sb.side?.warning ? [sb.side.warning] : [])];
+  return text({ offset: base.offset, floors: ff.legend, assumed: assumedOrNone(assumed), warnings: warnings.length ? warnings : undefined, count: res.count, bounds: res.bounds, ...sideOut(sb.side) });
 }));
 
 server.registerTool('draw_wall_finish_plan', {
@@ -2170,7 +3506,7 @@ server.registerTool('draw_wall_finish_plan', {
     'area of each wall finish (openings and splashback deducted) and the general notes. ' + INTERIOR_DEFAULTS,
   inputSchema: {
     rooms: FinishRooms, offset: opt(Point), scale: z.number().positive().default(50), legend: z.boolean().default(true),
-    title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg,
+    title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg, ...PlanCopyArgs,
     dry_run: z.boolean().default(false).describe('List the wall finishes it would assume per room, without drawing'),
   },
   annotations: EDIT,
@@ -2184,17 +3520,16 @@ server.registerTool('draw_wall_finish_plan', {
   if (args.dry_run) return dryRun(assumed, { walls });
   const sc = args.scale;
   const lang = args.language ?? language;
-  const base = await planCopy('draw_wall_finish_plan', spec, args, sc, { levels: false });
+  const base = await planCopy('draw_wall_finish_plan', spec, args, sc, { levels: false, dimensions: args.dimensions ?? undefined, interiorDims: args.interior_dimensions });
   const labels = Object.fromEntries((spec.rooms || []).map((r) => [String(r.name), r.at]));
-  const wf = engine('draw_wall_finish_plan', () => wallFinishPlan({
-    spec, rooms, finishes, items: st.items, labels, offset: base.offset, scale: sc, lang,
-    legendAt: args.legend ? [base.bounds.max[0] + 15 * sc, base.bounds.max[1]] : undefined,
-  }));
-  const extra = [...wf.entities];
-  sheetNotes(args, 'wall', base, sc, lang, wf.legendBottom, extra);
+  const sb = await sideBlock(base, sc, args, 'wall', lang, (legendAt) => engine('draw_wall_finish_plan', () => wallFinishPlan({
+    spec, rooms, finishes, items: st.items, labels, offset: base.offset, scale: sc, lang, legendAt,
+  })));
+  const wf = sb.r;
+  const extra = [...wf.entities, ...sb.notes];
   sheetTitle(base, args.title ?? `${lang === 'en' ? 'WALL FINISH PLAN' : 'MẶT BẰNG HOÀN THIỆN TƯỜNG'}${floorLabel}`, sc, extra);
   const res = await drawPlanCopy(base, extra, sc, lang);
-  return text({ offset: base.offset, walls: wf.legend, assumed: assumedOrNone(assumed), count: res.count, bounds: res.bounds });
+  return text({ offset: base.offset, walls: wf.legend, assumed: assumedOrNone(assumed), warnings: sb.side?.warning ? [sb.side.warning] : undefined, count: res.count, bounds: res.bounds, ...sideOut(sb.side) });
 }));
 
 server.registerTool('draw_ceiling_plan', {
@@ -2205,9 +3540,10 @@ server.registerTool('draw_ceiling_plan', {
     'field, the room name; then the light legend with counts (remembered for material_schedule). ' + INTERIOR_DEFAULTS,
   inputSchema: {
     rooms: FinishRooms, offset: opt(Point), scale: z.number().positive().default(50), spacing: z.number().positive().default(1200),
-    legend: z.boolean().default(true), title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg,
+    legend: z.boolean().default(true), title: opt(Str), plan: opt(Obj), language: opt(Lang), floor: FloorArg, notes: NotesArg, ...PlanCopyArgs,
     mode: z.enum(['both', 'finish', 'lighting']).default('both')
       .describe('finish = ceiling finish plan (materials, levels, step widths; no lights), lighting = lighting layout (lights and legend; no level tags), both = one reflected ceiling plan'),
+    lights: opt(Specs).describe('The lights where the designer puts them (then no automatic downlights, lamps or pendants; the LED cove of a drop band stays): [{type: downlight | spot | linear | ceiling_lamp | pendant | slot_diffuser | access_panel, at: [x,y] (plan coordinates, as furniture items) | from + to (linear, slot_diffuser) | at + length + angle, aim: [x,y] (spot), width, size (access panel, default 600), code (default LT-01 downlight, LT-05 spot, LT-06 linear, LT-03 lamp, LT-04 pendant, AC-01 diffuser, AP-01 access panel), description}]; the legend counts them by code (linear ones with their length). A T-bar grid ceiling: rooms[].ceiling.grid [600, 600]'),
     dry_run: z.boolean().default(false).describe('List the ceilings it would assume per room, without drawing'),
   },
   annotations: EDIT,
@@ -2221,14 +3557,15 @@ server.registerTool('draw_ceiling_plan', {
   if (args.dry_run) return dryRun(assumed, { ceilings });
   const sc = args.scale;
   const lang = args.language ?? language;
-  const base = await planCopy('draw_ceiling_plan', spec, args, sc, { doors: false, roomLabels: false, levels: false, tags: false });
-  const cp = engine('draw_ceiling_plan', () => ceilingPlan({
-    spec, rooms, finishes, items: st.items, offset: base.offset, scale: sc, spacing: args.spacing, lang, mode: args.mode,
-    legendAt: args.legend ? [base.bounds.max[0] + 15 * sc, base.bounds.max[1]] : undefined,
-  }));
+  const base = await planCopy('draw_ceiling_plan', spec, args, sc, { doors: false, roomLabels: false, levels: false, tags: false, dimensions: args.dimensions ?? undefined, interiorDims: args.interior_dimensions });
+  const sb = await sideBlock(base, sc, args, args.mode === 'lighting' ? 'lighting' : 'ceiling', lang, (legendAt) => engine('draw_ceiling_plan', () => ceilingPlan({
+    spec, rooms, finishes, items: st.items, offset: base.offset, scale: sc, spacing: args.spacing, lang, mode: args.mode, legendAt,
+    lights: args.lights,
+  })));
+  const cp = sb.r;
   if (cp.lights) st.lights = cp.lights;
-  const extra = [...cp.entities];
-  sheetNotes(args, args.mode === 'lighting' ? 'lighting' : 'ceiling', base, sc, lang, cp.legendBottom, extra);
+  const extra = [...cp.entities, ...sb.notes];
+  if (sb.side?.warning) cp.warnings.push(sb.side.warning);
   const TITLES = {
     both: lang === 'en' ? 'REFLECTED CEILING PLAN' : 'MẶT BẰNG TRẦN ĐÈN',
     finish: lang === 'en' ? 'CEILING FINISH PLAN' : 'MẶT BẰNG HOÀN THIỆN TRẦN',
@@ -2238,7 +3575,7 @@ server.registerTool('draw_ceiling_plan', {
   const res = await drawPlanCopy(base, extra, sc, lang);
   return text({
     offset: base.offset, ceilings, lights: cp.lights, assumed: assumedOrNone(assumed), warnings: cp.warnings.length ? cp.warnings : undefined,
-    count: res.count, bounds: res.bounds,
+    count: res.count, bounds: res.bounds, ...sideOut(sb.side),
   });
 }));
 
@@ -2253,6 +3590,8 @@ server.registerTool('draw_interior_elevation', {
     room: Str, walls: jsonish(z.array(z.union([Str, z.number()]))).default(['A', 'B', 'C', 'D']), at: opt(Point),
     scale: z.number().positive().default(30), rooms: FinishRooms,
     items: opt(Specs).describe('Furniture as in draw_furniture_plan; default: the items of the last draw_furniture_plan'),
+    wall_finishes: opt(Obj).describe('The finish of one wall where it differs from the room: {D: {code: "WL-02", description: "Kính sơn mặt sau", pattern: paint|tile|panel, size, height}} (A top, B right, C bottom, D left)'),
+    titles: opt(Obj).describe('The title of an elevation instead of "MẶT ĐỨNG A - <room>": {A: "MẶT ĐỨNG A - SẢNH CHÍNH"}'),
     plan: opt(Obj), language: opt(Lang), floor: FloorArg,
     dry_run: z.boolean().default(false).describe('List the finishes and items it would show per wall, without drawing'),
   },
@@ -2274,8 +3613,15 @@ server.registerTool('draw_interior_elevation', {
   }
   const sc = args.scale;
   const lang = args.language ?? language;
+  const wallKey = (w) => String(w).toUpperCase();
+  const finishOf = (w) => {
+    const own = args.wall_finishes?.[wallKey(w)] ?? args.wall_finishes?.[String(w)];
+    const f = finishes[args.room];
+    return own ? { ...f, wall: { ...(f.wall || {}), ...own } } : f;
+  };
   const build = (wall, at) => engine('draw_interior_elevation', () => interiorElevation({
-    spec, room: args.room, poly, finish: finishes[args.room], items, wall, at, scale: sc, lang,
+    spec, room: args.room, poly, finish: finishOf(wall), items, wall, at, scale: sc, lang,
+    titleText: args.titles?.[wallKey(wall)] ?? args.titles?.[String(wall)] ?? null,
   }));
   if (args.dry_run) {
     const walls = args.walls.map((w) => {
@@ -2613,7 +3959,7 @@ async function mepFloors(args, tool) {
   const assumed = [], floors = [];
   for (const [k, f] of list.entries()) {
     const key = multi ? f.name : '';
-    const offset = !args.plan && lastFloors?.offsets?.[k] ? lastFloors.offsets[k] : [0, 0];
+    const offset = !args.plan && floorSpots()?.offsets?.[k] ? floorSpots().offsets[k] : [0, 0];
     const rooms = await roomOutlines(f.spec, tool, offset).catch(() => ({}));
     const st = interiorOf(key);
     const df = engine(tool, () => defaultFixtures(rooms, f.spec, st.items, args.options?.shaft ?? 400));

@@ -20,6 +20,8 @@ namespace AcadMcp
         public readonly List<string> CreatedLayers = new List<string>();
         public Extents3d? Bounds;
         public int Count;
+        /// <summary>The view what is drawn belongs to (Views): every entity added carries its id.</summary>
+        public string ViewTag;
         /// <summary>Attributes whose field names {viewport}: made by create_layout once the viewport exists.</summary>
         public readonly List<KeyValuePair<ObjectId, string>> PendingFields = new List<KeyValuePair<ObjectId, string>>();
 
@@ -107,6 +109,7 @@ namespace AcadMcp
             ApplyProps(e, s);
             _space.AppendEntity(e);
             _tr.AddNewlyCreatedDBObject(e, true);
+            if (ViewTag != null) Views.Tag(e, ViewTag);
             Count++;
             return e.Handle.ToString();
         }

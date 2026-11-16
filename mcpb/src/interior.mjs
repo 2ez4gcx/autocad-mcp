@@ -506,6 +506,25 @@ function sofaFront(w, d, h) {
   return s;
 }
 
+/** Whether an item is round (shape: round, or given by its diameter). */
+const isRound = (o) => o?.shape === 'round' || o?.diameter !== undefined;
+
+/** A round dining table of diameter w with its chairs around it (o.chairs, default one per 600 of the round). */
+function roundDining(w, o) {
+  const r = w / 2;
+  const s = [sC(r, r, r)];
+  const n = o?.chairs ?? Math.max(2, Math.floor((Math.PI * w) / 600));
+  for (let k = 0; k < n; k++) {
+    const a = (k * 2 * Math.PI) / n - Math.PI / 2;
+    const u = [Math.cos(a), Math.sin(a)], v = [-u[1], u[0]];
+    // the seat 450 x 400 just past the edge, its back 50 further out
+    const at = (t, q) => [r + u[0] * t + v[0] * q, r + u[1] * t + v[1] * q];
+    s.push(sP([at(r + 50, -225), at(r + 450, -225), at(r + 450, 225), at(r + 50, 225)], true));
+    s.push(sP([at(r + 450, -225), at(r + 500, -225), at(r + 500, 225), at(r + 450, 225)], true));
+  }
+  return s;
+}
+
 const sofaSide = (w, d, h) => [sR(60, 0, 120, 80), sR(d - 120, 0, d - 60, 80), sR(0, 80, d, 600), sR(0, 600, 200, h)];
 
 /**
@@ -568,28 +587,50 @@ export const TYPES = {
   },
   coffee_table: {
     code: 'FN-05', vi: 'Bàn trà', en: 'Coffee table', size: [1100, 600, 420], role: 'furniture',
-    plan: (w, d) => [sR(0, 0, w, d), sR(60, 60, w - 60, d - 60)],
-    front: (w, d, h) => [sR(0, h - 40, w, h), sR(40, 0, 90, h - 40), sR(w - 90, 0, w - 40, h - 40), sL(40, 120, w - 40, 120)],
-    side: (w, d, h) => [sR(0, h - 40, d, h), sR(40, 0, 90, h - 40), sR(d - 90, 0, d - 40, h - 40)],
+    plan: (w, d, h, o) => (isRound(o) ? [sC(w / 2, d / 2, w / 2), sC(w / 2, d / 2, w / 2 - 40)] : [sR(0, 0, w, d), sR(60, 60, w - 60, d - 60)]),
+    front: (w, d, h, o) => (isRound(o)
+      ? [sR(0, h - 40, w, h), sR(w / 2 - 40, 60, w / 2 + 40, h - 40), sR(w / 2 - Math.min(250, w / 3), 0, w / 2 + Math.min(250, w / 3), 60)]
+      : [sR(0, h - 40, w, h), sR(40, 0, 90, h - 40), sR(w - 90, 0, w - 40, h - 40), sL(40, 120, w - 40, 120)]),
+    side: (w, d, h, o) => (isRound(o)
+      ? [sR(0, h - 40, d, h), sR(d / 2 - 40, 60, d / 2 + 40, h - 40), sR(d / 2 - Math.min(250, d / 3), 0, d / 2 + Math.min(250, d / 3), 60)]
+      : [sR(0, h - 40, d, h), sR(40, 0, 90, h - 40), sR(d - 90, 0, d - 40, h - 40)]),
     tag: (w, d) => [w / 2, d / 2],
   },
   tv_cabinet: {
     code: 'JN-02', vi: 'Kệ tivi', en: 'TV cabinet', size: [1800, 400, 450], role: 'casework',
-    plan: (w, d) => [sR(0, 0, w, d), sR(w / 2 - 615, 40, w / 2 + 615, 100)],
-    front: (w, d, h) => {
+    // tv: false - the cabinet alone (a low cabinet under a window): no screen in plan, front or side
+    plan: (w, d, h, o) => [sR(0, 0, w, d), ...(o?.tv === false ? [] : [sR(w / 2 - 615, 40, w / 2 + 615, 100)])],
+    front: (w, d, h, o) => {
       const n = Math.max(1, Math.round(w / 600));
       const s = [sR(30, 0, w - 30, 100), sR(0, 100, w, h)];
       for (let i = 1; i < n; i++) s.push(sL((i * w) / n, 100, (i * w) / n, h));
       for (let i = 0; i < n; i++) s.push(sL(((i + 0.5) * w) / n - 100, h - 70, ((i + 0.5) * w) / n + 100, h - 70));
-      s.push(sR(w / 2 - 615, 800, w / 2 + 615, 1520), sR(w / 2 - 600, 815, w / 2 + 600, 1505));
+      if (o?.tv !== false) s.push(sR(w / 2 - 615, 800, w / 2 + 615, 1520), sR(w / 2 - 600, 815, w / 2 + 600, 1505));
       return s;
     },
-    side: (w, d, h) => [sR(0, 100, d, h), sR(0, 0, d - 30, 100), sR(40, 800, 100, 1520)],
+    side: (w, d, h, o) => [sR(0, 100, d, h), sR(0, 0, d - 30, 100), ...(o?.tv === false ? [] : [sR(40, 800, 100, 1520)])],
     tag: (w, d) => [w / 2, d * 0.62],
+  },
+  sideboard: {
+    code: 'JN-09', vi: 'Tủ thấp (credenza)', en: 'Sideboard / credenza', size: [1800, 450, 750], role: 'casework',
+    plan: (w, d) => {
+      const n = Math.max(1, Math.round(w / 450));
+      const s = [sR(0, 0, w, d), sL(0, d - 20, w, d - 20)];
+      for (let i = 1; i < n; i++) s.push(sL((i * w) / n, d - 20, (i * w) / n, d));
+      return s;
+    },
+    front: (w, d, h) => {
+      const s = [sR(30, 0, w - 30, 100), sR(0, h - 30, w, h), sR(0, 100, w, h - 30)];
+      doorsFront(0, w, 100, h - 30, Math.max(1, Math.round(w / 450)), s, 'top');
+      return s;
+    },
+    side: (w, d, h) => [sR(0, h - 30, d, h), sR(0, 100, d - 20, h - 30), sR(0, 0, d - 50, 100)],
+    tag: (w, d) => [w / 2, d * 0.45],
   },
   dining_table: {
     code: 'FN-06', vi: 'Bộ bàn ăn', en: 'Dining set', size: [1600, 900, 750], role: 'furniture',
     plan: (w, d, h, o) => {
+      if (isRound(o)) return roundDining(w, o);
       const s = [sR(0, 0, w, d)];
       const n = o.chairs ?? Math.max(1, Math.floor(w / 600));
       for (let k = 0; k < n; k++) {
@@ -600,12 +641,20 @@ export const TYPES = {
       return s;
     },
     front: (w, d, h, o) => {
+      if (isRound(o)) {
+        // the top on a pedestal, the backs of the two chairs seen beside it
+        const s = [sR(0, h - 40, w, h), sR(w / 2 - 50, 60, w / 2 + 50, h - 40), sR(w / 2 - Math.min(300, w / 3), 0, w / 2 + Math.min(300, w / 3), 60)];
+        for (const x of [-250, w + 250]) s.push(sP([[x - 210, h], [x - 210, 900], [x + 210, 900], [x + 210, h]]));
+        return s;
+      }
       const s = [sR(0, h - 40, w, h), sR(50, 0, 110, h - 40), sR(w - 110, 0, w - 50, h - 40)];
       const n = o.chairs ?? Math.max(1, Math.floor(w / 600));
       for (let k = 0; k < n; k++) s.push(sP([[((k + 0.5) * w) / n - 210, h], [((k + 0.5) * w) / n - 210, 900], [((k + 0.5) * w) / n + 210, 900], [((k + 0.5) * w) / n + 210, h]]));
       return s;
     },
-    side: (w, d, h) => [sR(0, h - 40, d, h), sR(50, 0, 110, h - 40), sR(d - 110, 0, d - 50, h - 40)],
+    side: (w, d, h, o) => (isRound(o)
+      ? [sR(0, h - 40, d, h), sR(d / 2 - 50, 60, d / 2 + 50, h - 40), sR(d / 2 - Math.min(300, d / 3), 0, d / 2 + Math.min(300, d / 3), 60)]
+      : [sR(0, h - 40, d, h), sR(50, 0, 110, h - 40), sR(d - 110, 0, d - 50, h - 40)]),
     tag: (w, d) => [w / 2, d / 2],
   },
   chair: {
@@ -774,10 +823,12 @@ export function resolveItems(list, rooms) {
     const def = TYPES[it.type];
     if (!def) throw new PlanError(`${name}.type must be one of ${Object.keys(TYPES).join(', ')}`);
     const [dw, dd, dh] = def.size;
-    const w = num(it.width ?? dw, `${name}.width`, { positive: true });
-    const d = num(it.depth ?? dd, `${name}.depth`, { positive: true });
+    const round = it.shape === 'round' || it.diameter !== undefined;
+    if (round && !['coffee_table', 'dining_table'].includes(it.type)) throw new PlanError(`${name}: shape round is for coffee_table and dining_table`);
+    const w = num(it.diameter ?? it.width ?? (round ? Math.min(dw, 1200) : dw), round ? `${name}.diameter` : `${name}.width`, { positive: true });
+    const d = round ? w : num(it.depth ?? dd, `${name}.depth`, { positive: true });
     const h = num(it.height ?? dh, `${name}.height`, { positive: true });
-    if (it.width === undefined || it.depth === undefined || it.height === undefined) {
+    if ((round ? it.diameter ?? it.width : it.width) === undefined || (!round && it.depth === undefined) || it.height === undefined) {
       assumed.push({ item: `${name}.size`, value: `${w}x${d}x${h}`, note: itemName(def) });
     }
     const code = String(it.code ?? def.code);
@@ -820,7 +871,7 @@ export function resolveItems(list, rooms) {
     } else {
       throw new PlanError(`${name}: place it with room + wall (+ offset), or at (centre of its back edge) + facing, or center + facing`);
     }
-    const description = String(it.description ?? `${itemName(def)} ${w}x${d}${def.z0 !== undefined || def.role === 'casework' ? `x${h}` : ''}`);
+    const description = String(it.description ?? (round ? `${itemName(def)} Ø${w}` : `${itemName(def)} ${w}x${d}${def.z0 !== undefined || def.role === 'casework' ? `x${h}` : ''}`));
     items.push({ i, type: it.type, def, code, description, w, d, h, o, ex, ey, room, wall: it.wall, opts, name });
   });
   // one code = one item specification (type and size), as in the schedule
@@ -1167,20 +1218,90 @@ function planMarks(spec, scale) {
   return out;
 }
 
+/** Parameter t (0..1) along a-b where it crosses segment c-d, or null. */
+function crossT(a, b, c, d) {
+  const r = sub(b, a), q = sub(d, c);
+  const den = r[0] * q[1] - r[1] * q[0];
+  if (Math.abs(den) < 1e-12) return null;
+  const w = sub(c, a);
+  const t = (w[0] * q[1] - w[1] * q[0]) / den, u = (w[0] * r[1] - w[1] * r[0]) / den;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? t : null;
+}
+
+/** The parts of segments [[a, b]...] that lie outside every polygon of polys. */
+export function outsidePolys(segs, polys) {
+  let cur = segs;
+  for (const poly of polys) {
+    const next = [];
+    for (const [a, b] of cur) {
+      const ts = [0, 1];
+      for (let i = 0; i < poly.length; i++) {
+        const t = crossT(a, b, poly[i], poly[(i + 1) % poly.length]);
+        if (t !== null) ts.push(t);
+      }
+      ts.sort((x, y) => x - y);
+      const d = sub(b, a);
+      for (let i = 0; i < ts.length - 1; i++) {
+        if (ts[i + 1] - ts[i] < 1e-9) continue;
+        if (!inside(add(a, mul(d, (ts[i] + ts[i + 1]) / 2)), poly)) next.push([add(a, mul(d, ts[i])), add(a, mul(d, ts[i + 1]))]);
+      }
+    }
+    cur = next;
+  }
+  return cur.filter(([a, b]) => len(sub(b, a)) > 1);
+}
+
+/**
+ * Zones of another floor inside rooms (carpet tiles set into a stone floor): [{rect: [[x0,y0],[x1,y1]] | outline, room?,
+ * code, description, pattern, size, angle, start, note}] in plan coordinates; each with its room (the one around its
+ * middle) and polygon.
+ */
+export function floorZones(zones, rooms) {
+  const out = [], warnings = [];
+  (zones || []).forEach((z, i) => {
+    const name = `zones[${i}]`;
+    let poly;
+    if (Array.isArray(z.rect)) {
+      const [a, b] = [pt(z.rect[0], `${name}.rect[0]`), pt(z.rect[1], `${name}.rect[1]`)];
+      poly = [[Math.min(a[0], b[0]), Math.min(a[1], b[1])], [Math.max(a[0], b[0]), Math.min(a[1], b[1])], [Math.max(a[0], b[0]), Math.max(a[1], b[1])], [Math.min(a[0], b[0]), Math.max(a[1], b[1])]];
+    } else if (Array.isArray(z.outline) && z.outline.length >= 3) poly = z.outline.map((q, k) => pt(q, `${name}.outline[${k}]`));
+    else throw new PlanError(`${name}: give rect [[x0,y0],[x1,y1]] or outline [[x,y]...]`);
+    if (!z.code) throw new PlanError(`${name}: give its code (e.g. FL-02)`);
+    const c = centroid(poly);
+    const room = z.room ?? Object.keys(rooms).find((k) => inside(c, rooms[k]));
+    if (!room || !rooms[room]) {
+      warnings.push(`${name} (${z.code}) lies in no room: left out`);
+      return;
+    }
+    out.push({ ...z, poly, room, pattern: z.pattern ?? 'tile' });
+  });
+  return { zones: out, warnings };
+}
+
 /**
  * Floor joints of each room with a floor finish, kept clear of the room labels, a code tag under each label and the
- * legend (finish, size, area). rooms {name: outline (plan coords)}, labels {name: label point}.
+ * legend (finish, size, area). rooms {name: outline (plan coords)}, labels {name: label point}. zones: areas of another
+ * floor inside a room (floorZones): the room's joints stop at their edge, they get their own joints, tag and area, and
+ * their area is taken off the room's finish.
  */
-export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scale = 50, legendAt, lang = 'vi', spec = null, items = [] }) {
+export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scale = 50, legendAt, lang = 'vi', spec = null, items = [], zones: zoneSpecs = [] }) {
   const out = [];
   const areas = {};
   const assumed = [];
+  const { zones, warnings } = floorZones(zoneSpecs, rooms);
+  const labelAt = {};
+  const zoneBoxes = zones.map((z) => {
+    const q = shiftPoly(z.poly, offset);
+    const xs = q.map((p) => p[0]), ys = q.map((p) => p[1]);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  });
   const hLabel = 2.5 * scale, hTag = 2 * scale, hSub = 1.8 * scale;
   const M = spec?.walls?.length ? buildModel(spec) : null;
   // what the plan copy draws in the rooms (labels where it moved them, door swings, tags, stair and level texts)
   const marks = planMarks(spec, scale);
   const spots = stairSpots(spec);
-  const busy = [...marks.doors, ...marks.tags, ...marks.texts].map((b) => shiftBox(b, offset));
+  // the zones too: the room's tag keeps off them
+  const busy = [...[...marks.doors, ...marks.tags, ...marks.texts].map((b) => shiftBox(b, offset)), ...zoneBoxes];
   const roomAt = (p) => Object.entries(rooms).find(([, poly]) => inside(p, poly))?.[0];
   // Doors between rooms: a transition strip where the finish or the level changes; door centres per room (drains go
   // to the far side of the room).
@@ -1207,6 +1328,7 @@ export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scal
     // the label where the plan has it (it moves a label off a door swing); a stairwell has its name alone on the landing
     const bare = marks.bare.has(name);
     const at = add(marks.labels[name] ?? labels[name] ?? centroid(poly0), offset);
+    labelAt[name] = marks.bare.has(name) ? null : at;
     const masks = bare ? [] : [labelBox(name, at, hLabel)];
     let tagAt = [at[0], at[1] - 1.75 * hLabel - 0.4 * hTag - 0.95 * hTag];
     // under the tag: how the tiles are set out and, in wet rooms and outdoors, the drop and the fall
@@ -1275,7 +1397,8 @@ export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scal
       else start = sub(sub(centroid(poly), mul(e1, size[0] / 2)), mul(e2, size[1] / 2));
       const tw = textWidth(f.code, hTag) + 1.2 * hTag;
       masks.push([tagAt[0] - tw / 2 - hTag * 0.3, tagAt[1] - hTag * 1.25, tagAt[0] + tw / 2 + hTag * 0.3, tagAt[1] + hTag * 1.25]);
-      const segs = cutBoxes(patternLines(poly, { kind: f.pattern, size, angle, start, stagger: f.stagger ?? 1 / 3 }), masks);
+      const own = zones.filter((z) => z.room === name).map((z) => shiftPoly(z.poly, offset));
+      const segs = outsidePolys(cutBoxes(patternLines(poly, { kind: f.pattern, size, angle, start, stagger: f.stagger ?? 1 / 3 }), masks), own);
       for (const [a, b] of segs) out.push(lineE(a, b, IL.floor));
     } else if (f.pattern && f.pattern !== 'none') {
       out.push({ type: 'hatch', boundary: poly.map(P), pattern: f.pattern, scale: f.hatch_scale ?? scale * 0.5, layer: IL.floor });
@@ -1294,10 +1417,35 @@ export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scal
           : sym('MCP_DOC_NGUOC', add(add(drain, mul(toward, 120)), offset), { scale, rotation: r2(ang + 180), attrs: { I: 'i=1%' }, layer: IL.note }));
       }
     }
-    const a = Math.abs(polyArea(poly0)) / 1e6;
+    const zArea = zones.filter((z) => z.room === name).reduce((t, z) => t + Math.abs(polyArea(z.poly)), 0);
+    const a = (Math.abs(polyArea(poly0)) - zArea) / 1e6;
     areas[f.code] = areas[f.code] || { code: f.code, description: f.description, pattern: f.pattern, size: f.size, area_m2: 0, rooms: [] };
     areas[f.code].area_m2 += a;
     areas[f.code].rooms.push(name);
+  }
+  // the zones: outline, joints, tag (and its note) in the middle, area
+  for (const z of zones) {
+    const q = shiftPoly(z.poly, offset);
+    out.push(polyE(q, true, IL.floor));
+    const c = centroid(q);
+    const tagH = 2 * scale;
+    const masks = [[c[0] - textWidth(z.code, tagH) / 2 - tagH, c[1] - 1.3 * tagH, c[0] + textWidth(z.code, tagH) / 2 + tagH, c[1] + 1.3 * tagH]];
+    if (labelAt[z.room]) masks.push(labelBox(z.room, labelAt[z.room], 2.5 * scale));
+    if (z.note) masks.push([c[0] - textWidth(z.note, 1.8 * scale) / 2 - scale, c[1] - 1.9 * tagH - 1.8 * scale, c[0] + textWidth(z.note, 1.8 * scale) / 2 + scale, c[1] - 1.9 * tagH + 1.8 * scale]);
+    if (z.pattern === 'tile' || z.pattern === 'plank') {
+      const size = z.size ?? (z.pattern === 'plank' ? [900, 150] : [500, 500]);
+      const angle = num(z.angle ?? 0, `${z.code}.angle`);
+      const e1 = [Math.cos(angle * DEG), Math.sin(angle * DEG)], e2 = [-e1[1], e1[0]];
+      const start = Array.isArray(z.start) ? add(pt(z.start, `${z.code}.start`), offset) : z.start === 'corner' ? q.reduce((m, p) => (p[0] + p[1] < m[0] + m[1] ? p : m)) : sub(sub(c, mul(e1, size[0] / 2)), mul(e2, size[1] / 2));
+      for (const [a, b] of cutBoxes(patternLines(q, { kind: z.pattern, size, angle, start, stagger: z.stagger ?? 1 / 3 }), masks)) out.push(lineE(a, b, IL.floor));
+    } else if (z.pattern && z.pattern !== 'none') {
+      out.push({ type: 'hatch', boundary: q.map(P), pattern: z.pattern, scale: z.hatch_scale ?? scale * 0.5, layer: IL.floor });
+    }
+    tagBox(String(z.code), c, tagH, IL.note, out);
+    if (z.note) out.push(textE(String(z.note), [c[0], c[1] - 1.9 * tagH], 1.8 * scale, IL.note, 'middle_center'));
+    const zr = areas[z.code] = areas[z.code] || { code: z.code, description: z.description ?? '', pattern: z.pattern, size: z.size ?? (z.pattern === 'tile' ? [500, 500] : undefined), area_m2: 0, rooms: [] };
+    zr.area_m2 += Math.abs(polyArea(z.poly)) / 1e6;
+    if (!zr.rooms.includes(z.room)) zr.rooms.push(z.room);
   }
   const legend = Object.values(areas).map((x) => ({ ...x, area_m2: r2(x.area_m2) }));
   let legendBottom = null;
@@ -1332,7 +1480,7 @@ export function floorFinishPlan({ rooms, finishes, labels, offset = [0, 0], scal
     }
     legendBottom = y;
   }
-  return { entities: out, legend, assumed, legendBottom };
+  return { entities: out, legend, assumed, legendBottom, warnings };
 }
 
 // ---------------------------------------------------------------- wall finish plan
@@ -1520,9 +1668,74 @@ export const LIGHTS = {
   pendant: { code: 'LT-04', vi: 'Đèn thả', en: 'Pendant' },
 };
 
-function lightSymbol(kind, p, out) {
+function lightSymbol(kind, p, out, code = null) {
   const b = LIGHT_BLOCKS[kind];
-  if (b) out.push(sym(b.name, p, { attrs: { MA: LIGHTS[kind].code }, layer: IL.light, half: [b.half, b.half] }));
+  if (b) out.push(sym(b.name, p, { attrs: { MA: code ?? LIGHTS[kind].code }, layer: IL.light, half: [b.half, b.half] }));
+}
+
+// the lights a designer places by hand (draw_ceiling_plan lights)
+export const USER_LIGHTS = {
+  downlight: { vi: 'Đèn downlight âm trần', en: 'Recessed downlight', code: 'LT-01' },
+  spot: { vi: 'Đèn spot chiếu điểm', en: 'Adjustable spotlight', code: 'LT-05' },
+  linear: { vi: 'Đèn LED thanh âm trần', en: 'Linear LED light', code: 'LT-06' },
+  ceiling_lamp: { vi: 'Đèn ốp trần', en: 'Ceiling lamp', code: 'LT-03' },
+  pendant: { vi: 'Đèn thả', en: 'Pendant', code: 'LT-04' },
+  slot_diffuser: { vi: 'Miệng gió khe dài', en: 'Linear slot diffuser', code: 'AC-01', layer: 'ceiling' },
+  access_panel: { vi: 'Nắp thăm trần 600x600', en: 'Ceiling access panel 600x600', code: 'AP-01', layer: 'ceiling' },
+};
+
+/**
+ * One light placed by the designer, its plan coordinates moved by offset: downlight / ceiling_lamp / pendant (block at
+ * at), spot (a downlight ring with its aim arrow towards aim), linear and slot_diffuser (from -> to, width), access_panel
+ * (a square of size with its diagonals, at its centre). Returns {kind, code, description, length_m?} for the legend.
+ */
+export function userLight(l, offset, scale, out, name = 'lights[]') {
+  const kind = l.type ?? 'downlight';
+  const def = USER_LIGHTS[kind];
+  if (!def) throw new PlanError(`${name}.type must be one of ${Object.keys(USER_LIGHTS).join(', ')}`);
+  const code = String(l.code ?? def.code);
+  const layer = def.layer === 'ceiling' ? IL.ceiling : IL.light;
+  const o = (p) => add(pt(p, name), offset);
+  const res = { kind, code, description: String(l.description ?? def[getDrawingLanguage()] ?? def.vi) };
+  if (kind === 'linear' || kind === 'slot_diffuser') {
+    let a, b;
+    if (l.from && l.to) [a, b] = [o(l.from), o(l.to)];
+    else if (l.at && l.length) {
+      const ang = num(l.angle ?? 0, `${name}.angle`) * DEG, h = num(l.length, `${name}.length`, { positive: true }) / 2;
+      const c = o(l.at), t = [Math.cos(ang), Math.sin(ang)];
+      [a, b] = [sub(c, mul(t, h)), add(c, mul(t, h))];
+    } else throw new PlanError(`${name}: a ${kind} needs from and to, or at + length (+ angle)`);
+    const w = num(l.width ?? (kind === 'linear' ? 60 : 100), `${name}.width`, { positive: true });
+    const t = unit(sub(b, a)), n = [-t[1], t[0]];
+    const rect = [add(a, mul(n, w / 2)), add(b, mul(n, w / 2)), add(b, mul(n, -w / 2)), add(a, mul(n, -w / 2))];
+    out.push(polyE(rect, true, layer));
+    if (kind === 'slot_diffuser') for (const k of [-1, 1]) out.push(lineE(add(a, mul(n, (k * w) / 6)), add(b, mul(n, (k * w) / 6)), layer));
+    else out.push(lineE(a, b, layer));
+    const c = mul(add(a, b), 0.5);
+    tagBox(code, add(c, mul(n, w / 2 + 2.5 * scale)), 1.6 * scale, IL.note, out);
+    res.length_m = len(sub(b, a)) / 1000;
+    return res;
+  }
+  if (!l.at) throw new PlanError(`${name}: a ${kind} needs at`);
+  const c = o(l.at);
+  if (kind === 'access_panel') {
+    const sz = Array.isArray(l.size) ? l.size : [l.size ?? 600, l.size ?? 600];
+    const [hx, hy] = [num(sz[0], `${name}.size`) / 2, num(sz[1], `${name}.size`) / 2];
+    const sq = [[c[0] - hx, c[1] - hy], [c[0] + hx, c[1] - hy], [c[0] + hx, c[1] + hy], [c[0] - hx, c[1] + hy]];
+    out.push(polyE(sq, true, layer), lineE(sq[0], sq[2], layer, HID), lineE(sq[1], sq[3], layer, HID));
+    return res;
+  }
+  if (kind === 'spot') {
+    out.push({ type: 'circle', center: P(c), radius: 45, layer }, { type: 'circle', center: P(c), radius: 75, layer });
+    if (l.aim) {
+      const t = unit(sub(o(l.aim), c));
+      const tip = add(c, mul(t, 75 + 3 * scale)), n = [-t[1], t[0]];
+      out.push(lineE(add(c, mul(t, 75)), tip, layer), polyE([tip, add(sub(tip, mul(t, 1.2 * scale)), mul(n, 0.5 * scale)), add(sub(tip, mul(t, 1.2 * scale)), mul(n, -0.5 * scale))], true, layer));
+    }
+    return res;
+  }
+  lightSymbol(kind, c, out, code);
+  return res;
 }
 
 /** Points along a closed outline, about one per spacing on each edge, none at the corners. */
@@ -1549,8 +1762,10 @@ const fmtLevel = (mm) => (Math.abs(mm) < 0.5 ? '±0.000' : `${mm > 0 ? '+' : '-'
  * downlights in the band (or a grid when there is no band), a ceiling lamp in the middle (a pendant over a dining
  * table), level tags, the room name; then the light legend with counts.
  */
-export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scale = 50, spacing = 1200, legendAt, lang = 'vi', mode = 'both', spec = null }) {
+export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scale = 50, spacing = 1200, legendAt, lang = 'vi', mode = 'both', spec = null, lights: placed = null }) {
   const out = [], warnings = [];
+  // lights placed by the designer replace the automatic ones (the LED cove of a drop band stays)
+  const manual = Array.isArray(placed) && placed.length > 0;
   // spec (the plan of the floor): the stairs, so that the name of a stairwell goes on its half landing, off the treads
   const spots = stairSpots(spec);
   const counts = {};
@@ -1560,7 +1775,7 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
   };
   // the lights are left out of the ceiling finish plan, the level tags out of the lighting plan
   const light = (kind, p) => {
-    if (finishOnly) return;
+    if (finishOnly || manual) return;
     lightSymbol(kind, p, out);
     count(kind);
   };
@@ -1631,7 +1846,14 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
     const fc = centroid(field);
     const xs = field.map((p) => p[0]), ys = field.map((p) => p[1]);
     const gridLights = [];
-    if (!drop || field === poly) {
+    // a T-bar grid ceiling (lưới T): its tiles centred in the field (drawn once the name and tag have their place)
+    let grid = [];
+    if (c.grid) {
+      const size = Array.isArray(c.grid) ? c.grid.map((v) => num(v, `${name}.ceiling.grid`, { positive: true })) : [600, 600];
+      const start = [fc[0] - size[0] / 2, fc[1] - size[1] / 2];
+      grid = patternLines(field, { kind: 'tile', size, start });
+    }
+    if ((!drop || field === poly) && !manual) {
       // flat ceiling: a grid of downlights about one per spacing, evenly in the room
       const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
       const nx = Math.max(1, Math.round(bw / spacing)), ny = Math.max(1, Math.round(bh / spacing));
@@ -1663,12 +1885,36 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
     const nameAt = [fc[0], fc[1] + clear + 0.9 * hName];
     out.push(textE(name, inside(nameAt, field) ? nameAt : fc, hName, IL.room, 'middle_center'));
     const tagAt = [fc[0], fc[1] - clear - 2.2 * hTag];
-    levelTag(c.code, fmtLevel(level), inside(tagAt, field) ? tagAt : [fc[0], fc[1] - 2.2 * hTag], hTag, out);
+    const tagPt = inside(tagAt, field) ? tagAt : [fc[0], fc[1] - 2.2 * hTag];
+    levelTag(c.code, fmtLevel(level), tagPt, hTag, out);
+    if (grid.length) {
+      const namePt = inside(nameAt, field) ? nameAt : fc;
+      const nw = textWidth(name, hName) / 2 + 0.6 * hName, tw = Math.max(textWidth(c.code, hTag), textWidth(fmtLevel(level), hTag)) / 2 + 1.2 * hTag;
+      const masks = [[namePt[0] - nw, namePt[1] - 0.9 * hName, namePt[0] + nw, namePt[1] + 0.9 * hName], ...(lightsOnly ? [] : [[tagPt[0] - tw, tagPt[1] - 2.4 * hTag, tagPt[0] + tw, tagPt[1] + 2.4 * hTag]])];
+      for (const [a, b] of cutBoxes(grid, masks)) out.push(lineE(a, b, IL.ceiling));
+    }
     ar.levels.add(fmtLevel(level));
   }
   const lights = [];
   for (const kind of ['downlight', 'ceiling_lamp', 'pendant']) {
     if (counts[kind]) lights.push({ kind, code: LIGHTS[kind].code, description: LIGHTS[kind][lang] ?? LIGHTS[kind].vi, unit: lang === 'en' ? 'pcs' : 'cái', qty: counts[kind] });
+  }
+  // the designer's lights, counted by code (a linear light also by its length)
+  if (manual && !finishOnly) {
+    const by = new Map();
+    placed.forEach((l, i) => {
+      const r = userLight(l, offset, scale, out, `lights[${i}]`);
+      const k = r.code;
+      if (!by.has(k)) by.set(k, { kind: r.kind, code: r.code, description: r.description, unit: lang === 'en' ? 'pcs' : 'cái', qty: 0, length_m: 0, user: true });
+      const g = by.get(k);
+      g.qty++;
+      if (r.length_m) g.length_m += r.length_m;
+    });
+    for (const g of by.values()) {
+      if (!g.length_m) delete g.length_m;
+      else g.length_m = r2(g.length_m);
+      lights.push(g);
+    }
   }
   if (counts.strip_m) lights.push({ kind: 'strip', code: LIGHTS.strip.code, description: LIGHTS.strip[lang] ?? LIGHTS.strip.vi, unit: 'm', qty: r2(counts.strip_m) });
   let legendBottom = null;
@@ -1695,8 +1941,16 @@ export function ceilingPlan({ rooms, finishes, items = [], offset = [0, 0], scal
       }
       const p = [legendAt[0] + 5 * scale, y];
       if (l.kind === 'strip') out.push(sym(LIGHT_BLOCKS.strip.name, p, { scale: scale / 100, attrs: { MA: LIGHTS.strip.code }, layer: IL.strip }));
-      else lightSymbol(l.kind, p, out);
-      out.push(textE(`${l.code}  ${l.description}: ${l.kind === 'strip' ? fmtM(l.qty, 1) : l.qty} ${l.unit}`, [p[0] + 9 * scale, p[1]], 2.5 * scale, IL.note, 'middle_left'));
+      else if (l.user) {
+        // the designer's light drawn small in the legend (its tag left out)
+        const tmp = [];
+        const sample = l.kind === 'linear' || l.kind === 'slot_diffuser' ? { type: l.kind, at: [0, 0], length: 8 * scale, width: Math.min(1.6 * scale, l.kind === 'linear' ? 60 : 100) }
+          : l.kind === 'access_panel' ? { type: l.kind, at: [0, 0], size: 4 * scale } : { type: l.kind, at: [0, 0], aim: l.kind === 'spot' ? [1, 0] : undefined };
+        userLight({ ...sample, code: l.code }, p, scale, tmp);
+        out.push(...tmp.filter((e) => e.layer !== IL.note));
+      } else lightSymbol(l.kind, p, out);
+      const qty = l.kind === 'strip' ? `${fmtM(l.qty, 1)} ${l.unit}` : `${l.qty} ${l.unit}${l.length_m ? ` (${fmtM(l.length_m, 1)} m)` : ''}`;
+      out.push(textE(`${l.code}  ${l.description}: ${qty}`, [p[0] + 9 * scale, p[1]], 2.5 * scale, IL.note, 'middle_left'));
       y -= 9 * scale;
     }
     legendBottom = y;
@@ -1794,7 +2048,7 @@ function elevationBlock(s, X, Y) {
  * the doors and windows of that wall, items backed on it (front view) and items along the side walls (side view), wall
  * finish joints, kitchen backsplash, skirting, dimension chains and material notes with leaders.
  */
-export function interiorElevation({ spec, room, poly, finish, items = [], wall, at = [0, 0], scale = 30, label, lang = 'vi' }) {
+export function interiorElevation({ spec, room, poly, finish, items = [], wall, at = [0, 0], scale = 30, label, lang = 'vi', titleText = null }) {
   const M = buildModel(spec);
   const e = roomEdge(poly, wall, 'wall');
   const F = wallFrame(e);
@@ -1960,7 +2214,7 @@ export function interiorElevation({ spec, room, poly, finish, items = [], wall, 
   });
   const lbl = label ?? String(wall).toUpperCase();
   const titleY = rows.bottomY - 8 * scale;
-  title(lang === 'en' ? `ELEVATION ${lbl} - ${room}` : `MẶT ĐỨNG ${lbl} - ${room}`, (X(F.u0) + X(F.u1)) / 2, titleY, scale, out);
+  title(titleText ?? (lang === 'en' ? `ELEVATION ${lbl} - ${room}` : `MẶT ĐỨNG ${lbl} - ${room}`), (X(F.u0) + X(F.u1)) / 2, titleY, scale, out);
   return {
     entities: out,
     extent: { min: [Math.min(xDim - 18 * scale, rows.minX), titleY - 10 * scale], max: [Math.max(X(F.u1) + tr + 2 * scale, rows.maxX), rows.topY] },

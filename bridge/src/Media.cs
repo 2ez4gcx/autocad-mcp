@@ -389,13 +389,25 @@ namespace AcadMcp
                 ObjectId dictId = RasterImageDef.GetImageDictionary(db);
                 if (dictId.IsNull) dictId = RasterImageDef.CreateImageDictionary(db);
                 var dict = (DBDictionary)tr.GetObject(dictId, OpenMode.ForWrite);
-                string baseName = Path.GetFileNameWithoutExtension(file);
+                // the name of the image definition: given, else the file's name (made unique beside other files of that name)
+                string baseName = p.Str("name") ?? Path.GetFileNameWithoutExtension(file);
                 string key = baseName;
                 RasterImageDef def = null;
                 for (int i = 1; dict.Contains(key); i++)
                 {
                     var d = (RasterImageDef)tr.GetObject(dict.GetAt(key), OpenMode.ForRead);
-                    if (string.Equals(Path.GetFullPath(d.SourceFileName), file, StringComparison.OrdinalIgnoreCase)) { def = d; break; }
+                    if (string.Equals(Path.GetFullPath(d.SourceFileName), file, StringComparison.OrdinalIgnoreCase))
+                    {
+                        def = d;
+                        // the same file attached again (a render written again): read it again
+                        if (p.Bool("reload", true))
+                        {
+                            def.UpgradeOpen();
+                            try { def.Unload(true); } catch (Exception) { }
+                            def.Load();
+                        }
+                        break;
+                    }
                     key = baseName + "_" + i;
                 }
                 if (def == null)
@@ -564,6 +576,17 @@ namespace AcadMcp
             }
         }
 
+        // drawings saved by save_drawing and not changed since (Database.SaveAs leaves DBMOD set): a bridge write or a
+        // user command afterwards marks them changed again
+        static readonly Dictionary<string, bool> CleanSince = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        static readonly HashSet<Document> Hooked = new HashSet<Document>();
+
+        /// <summary>A write of the bridge on a drawing: it is no longer as it was saved.</summary>
+        public static void Touched(Document doc)
+        {
+            if (doc != null) CleanSince.Remove(doc.Name);
+        }
+
         public static object Save(Ctx ctx, P p)
         {
             Document doc = ctx.Doc;
@@ -600,6 +623,11 @@ namespace AcadMcp
                 }
                 else db.SaveAs(path, true, version, db.SecurityParameters);
             }
+            if (!copy && fmt != "dxf")
+            {
+                CleanSince[doc.Name] = true;
+                if (Hooked.Add(doc)) doc.CommandEnded += (s, e) => { if (s is Document d) CleanSince.Remove(d.Name); };
+            }
             return new Dictionary<string, object>
             {
                 { "saved", path }, { "format", fmt }, { "copy", copy || fmt == "dxf" }, { "bytes", new FileInfo(path).Length },
@@ -623,6 +651,30 @@ namespace AcadMcp
             Document doc = docs.Open(path, p.Bool("read_only", false));
             docs.MdiActiveDocument = doc;
             return new Dictionary<string, object> { { "opened", doc.Name }, { "read_only", doc.IsReadOnly } };
+        }
+
+        /// <summary>close_drawing {path (default: the current drawing), discard}: a drawing with unsaved changes is closed only with discard.</summary>
+        public static object Close(Ctx ctx, P p)
+        {
+            DocumentCollection docs = AcApp.DocumentManager;
+            string path = p.Str("path");
+            Document doc = null;
+            if (string.IsNullOrEmpty(path)) doc = docs.MdiActiveDocument;
+            else
+            {
+                string full = Path.GetFullPath(path);
+                foreach (Document d in docs) if (d.Name.Equals(full, StringComparison.OrdinalIgnoreCase)) doc = d;
+            }
+            if (doc == null) throw new McpError("No open drawing " + (path ?? "") + ": nothing to close.");
+            docs.MdiActiveDocument = doc;
+            bool modified = Convert.ToInt32(AcApp.GetSystemVariable("DBMOD")) != 0 && !CleanSince.ContainsKey(doc.Name);
+            if (modified && !p.Bool("discard", false))
+                throw new McpError("'" + doc.Name + "' has unsaved changes: save it (save_drawing) or pass discard=true to close it without saving.");
+            string name = doc.Name;
+            CleanSince.Remove(name);
+            Hooked.Remove(doc);
+            doc.CloseAndDiscard();
+            return new Dictionary<string, object> { { "closed", name }, { "discarded", modified }, { "open", docs.Count } };
         }
 
         public static object New(Ctx ctx, P p)

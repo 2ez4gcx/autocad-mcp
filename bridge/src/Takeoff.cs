@@ -302,7 +302,9 @@ namespace AcadMcp
                         case Polyline pl:
                             {
                                 // A wall drawn as ONE line made thick (polyline width) instead of its two faces.
-                                double wmax = pl.ConstantWidth;
+                                // ConstantWidth throws on a polyline whose segments have different widths
+                                double wmax = 0;
+                                try { wmax = pl.ConstantWidth; } catch (Autodesk.AutoCAD.Runtime.Exception) { }
                                 for (int k = 0; k < pl.NumberOfVertices && wmax <= 0; k++) wmax = Math.Max(pl.GetStartWidthAt(k), pl.GetEndWidthAt(k));
                                 if (wmax > 0 && wallLayer.IsMatch(e.Layer)) thickWalls.Add(h);
                                 else if (wmax >= 50 && !System.Text.RegularExpressions.Regex.IsMatch(e.Layer, "ANNO|SYMB|TTLB", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) widePolys.Add(h);

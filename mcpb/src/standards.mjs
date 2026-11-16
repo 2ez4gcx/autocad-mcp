@@ -230,7 +230,7 @@ export function titleBlock({ paper = 'A3', orientation = 'landscape', info = {},
 // ---------------------------------------------------------------- view titles
 
 /** Width of a line of capitals of height h (Arial), slightly generous. */
-const capsWidth = (s, h) => [...String(s)].reduce((w, ch) => w + (ch === ' ' ? 0.39 : /[0-9]/.test(ch) ? 0.78 : 0.86), 0) * h;
+export const capsWidth = (s, h) => [...String(s)].reduce((w, ch) => w + (ch === ' ' ? 0.39 : /[0-9]/.test(ch) ? 0.78 : 0.86), 0) * h;
 
 /**
  * The title under a drawing (as Vietnamese construction sets do): the name, a line under it, the scale written 1/50
@@ -381,10 +381,18 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
     label(x0 + 5.5, t - 4.2, T.rev[0], 1.4, 'center');
     label((c1 + c2) / 2, t - 4.2, T.rev[1], 1.4, 'center');
     label(x1 - 6.5, t - 4.2, T.rev[2], 1.4, 'center');
+    // the revisions given (info.revisions [{no, text, date}]) in the rows, the latest four
+    const revs = Array.isArray(info.revisions) ? info.revisions.slice(-4) : [];
     for (let i = 1; i <= 4; i++) {
       const yy = t - 7 - 4 * i;
       if (i < 4) line(x0, yy, x1, yy);
+      const rv = revs[i - 1];
       label(x0 + 5.5, yy + 1.2, String(i), 1.6, 'center');
+      // attributes of the block, so each sheet carries its own revisions
+      const room = Math.max(4, Math.floor((c2 - c1 - 2) / (1.4 * 0.62)));
+      const tx = rv?.text ? String(rv.text) : '';
+      value(c1 + 1, yy + 1.2, `REV${i}`, `${T.rev[1]} ${i}`, tx.length > room ? `${tx.slice(0, room - 1)}…` : tx, 1.4, 'left', c2 - c1 - 2);
+      value(x1 - 6.5, yy + 1.2, `REV${i}_DATE`, `${T.rev[2]} ${i}`, rv?.date ?? '', 1.3, 'center', x1 - c2 - 1);
     }
   }
   label(x0 + 1.5, at.notes[1] - 3, T.notes);
@@ -434,7 +442,8 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
   value(left + 16, m + 2.3, 'GHI_CHU_CHUNG', T.general, info.note ?? T.generalText, 2, 'left', x0 - left - 19);
   const area = [[left + 5, m + band + 5], [x0 - 5, H - m - 5]];
   // one block per paper and orientation (the geometry differs), the same layout of cells on all of them
-  const name = `MCP_KHUNG_TEN_DOC_${P0}_${orientation === 'portrait' ? 'DUNG' : 'NGANG'}${language === 'en' ? '_EN' : ''}`;
+  // _R: the strip with its revision rows as attributes (a drawing that has the strip of before keeps it as it was)
+  const name = `MCP_KHUNG_TEN_DOC_${P0}_${orientation === 'portrait' ? 'DUNG' : 'NGANG'}${language === 'en' ? '_EN' : ''}_R`;
   const insert = {
     type: 'block', name, at: [0, 0], layer, attributes: values, fit,
     def: { name, description: `Khung tên dải dọc ${String(paper).toUpperCase()} ${orientation}`, entities: e, attributes },

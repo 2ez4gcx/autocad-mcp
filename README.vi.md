@@ -12,18 +12,18 @@ Phiên bản: **1.2.1** - [tải tại Releases](https://github.com/2ez4gcx/cons
 
 ## Tính năng
 
-62 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
+80 tool. Chiều dài theo đơn vị bản vẽ (mm với bản vẽ hệ mét), diện tích m², góc độ (ngược chiều kim đồng hồ từ trục +X).
 
 | Nhóm | Tool |
 |---|---|
-| Đọc & khối lượng | `ping`, `drawing_info`, `list_layers`, `list_blocks`, `query_entities`, `selection_info`, `quantity_takeoff`, `check_drawing`, `measure_model`, `verify_quantities` |
+| Đọc & khối lượng | `ping`, `drawing_info`, `list_layers`, `list_blocks`, `query_entities`, `selection_info`, `quantity_takeoff`, `check_drawing`, `measure_model`, `verify_quantities`, `list_views`, `standardize_layers`, `read_plan`, `revision_cloud`, `describe_drawing`, `describe_folder`, `compare_drawings`, `check_annotations`, `list_texts` |
 | Tiêu chuẩn | `setup_layers`, `setup_styles` |
-| Vẽ & sửa | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `set_properties`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
+| Vẽ & sửa | `draw_plan`, `draw_entities`, `define_block`, `transform_entities`, `stretch_entities`, `set_properties`, `replace_text`, `update_texts`, `convert_vietnamese_text`, `clean_drawing`, `delete_entities`, `select_entities`, `undo`, `purge_drawing` |
 | Mặt đứng, mặt cắt & kết cấu | `draw_elevation`, `draw_section`, `draw_roof_plan`, `draw_door_schedule`, `draw_stair_detail`, `draw_finish_quantities`, `draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`, `draw_structure_detail`, `rebar_schedule`, `structural_calc`, `draw_quantity_schedule` |
 | Thiết kế nội thất | `draw_furniture_plan`, `draw_floor_finish_plan`, `draw_wall_finish_plan`, `draw_ceiling_plan`, `draw_interior_elevation`, `draw_joinery_detail`, `material_schedule` |
 | Điện & cấp thoát nước | `draw_electrical_plan`, `draw_electrical_diagram`, `electrical_calc`, `draw_plumbing_plan`, `draw_plumbing_diagram`, `plumbing_calc`, `draw_mep_notes` |
-| Ảnh & nguồn 3D | `view_image`, `attach_image`, `import_drawing`, `screenshot`, `set_view` |
-| Khung tên & file | `create_layout`, `draw_cover_sheet`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `new_drawing` |
+| Ảnh & nguồn 3D | `view_image`, `attach_image`, `manage_images`, `import_drawing`, `screenshot`, `set_view` |
+| Khung tên & file | `create_layout`, `update_title_blocks`, `retitle_view`, `draw_cover_sheet`, `draw_drawing_list`, `export_pdf`, `save_drawing`, `open_drawing`, `close_drawing`, `new_drawing` |
 | Lập trình | `run_lisp` |
 | Cài đặt | `install_autocad_bridge` |
 
@@ -92,6 +92,36 @@ Phiên bản: **1.2.1** - [tải tại Releases](https://github.com/2ez4gcx/cons
   - mỗi dòng có hai con số: khối lượng theo bộ quy tắc đo bóc và khối lượng hình học. Bộ mặc định theo Phụ lục VI Thông tư 13/2021/TT-BXD (lỗ dưới 0,25 m² không trừ khỏi xây và hoàn thiện, dưới 1 m² không trừ khỏi ván khuôn, lỗ rỗng dưới 0,1 m³ không trừ khỏi bê tông; nút cột – dầm tính cho dầm, phần trong chiều dày sàn tính cho sàn; ba số lẻ); `rules: "NET"` cho khối lượng hình học, `rules: {base: "PL6", void: {finish: 0.5}}` cho ngưỡng riêng của công ty;
   - mỗi bảng tự chạy các phép kiểm tra chéo (phòng + tường = mặt sàn tầng, mỗi cửa trừ trên hai mặt tường, tổng thể tích thực = hợp của các khối, đắp trả + phần chôn = đào...) và báo phép nào không đạt; file Excel liệt kê từng mặt, từng cấu kiện bằng công thức sống, kèm sheet kiểm tra;
   - `verify_quantities` dựng lại kết cấu thành khối đặc và các mặt hoàn thiện thành miền (region) bằng chính nhân hình học của AutoCAD rồi so sánh. Trên nhà mẫu: hợp của 166 cấu kiện là 86,146 m³ ở cả AutoCAD và bảng, 127 mặt đo được 1396,652 m² ở cả hai, mặt sàn từng tầng khớp ([`examples/Nha-pho-5x18-kiem-tra-khoi-luong.json`](examples/Nha-pho-5x18-kiem-tra-khoi-luong.json)). `measure_model` cho phép đo độc lập như vậy với bất kỳ khối lăng trụ và mặt nào. Phương pháp và nguồn: [`docs/quantity-model.vi.md`](docs/quantity-model.vi.md).
+- **Chuẩn hóa layer bản vẽ của người khác** (`standardize_layers`): mỗi đối tượng được đưa về một bộ layer chuẩn (bộ A-/S-/E-/P- của công cụ hoặc chuẩn của công ty) theo đúng nó là gì: mục đích đọc từ tên layer (tiếng Việt có dấu hay không dấu, tiếng Anh, tiếng Trung, mã kiểu AIA, bỏ tiền tố xref đã bind), loại đối tượng khi tên không nói gì hoặc nói khác (kích thước luôn về layer kích thước), khối của đối tượng chèn (cửa, cao độ, ký hiệu trục, khung tên), và độ dày khi in (theo bảng .ctb của layout) cho đường nét trên layer đặt theo nét bút ("0.3", "net manh") hoặc layer 0. Màu, nét, độ dày gán riêng trở về ByLayer, trừ chỗ bản vẽ sẽ in khác đi (nét đậm vẫn đậm, nét đứt vẫn đứt; `keep_look: false` lấy độ dày của chuẩn). Layer rỗng bị purge; layer 0 trong khối, Defpoints và layer xref giữ nguyên. Luôn chạy thử trước (bảng chuyển layer theo từng layer, xuất CSV để sửa trong Excel rồi đưa lại bằng `mapping_csv`); `apply: true` làm trong một bước Undo và kiểm lại không mất đối tượng nào; `files` + `out_dir` làm nhiều bản vẽ một lúc, lưu thành bản mới (không bao giờ ghi đè file gốc). Trên 13 bản vẽ thật của các văn phòng khác: 1 487 layer còn 334, không mất đối tượng, tờ in không đổi. Phương pháp và giới hạn: [`docs/layer-standard.vi.md`](docs/layer-standard.vi.md).
+- **Đọc mặt bằng của bản vẽ người khác** (`read_plan`): tường (hai mặt song song cách nhau một chiều dày tường, đầu tường kéo tới tường nó gặp), lỗ cửa (cửa đi khi có cung mở hay khối cửa, hai cánh khi có hai cung, cửa sổ khi có nét kính hay khối cửa sổ, kèm ký hiệu D1/S1), cột, trục kèm tên trục và tên phòng được đọc thành mô tả mặt bằng của `draw_plan`. Mặt bằng nằm trong khối hay xref đã bind vẫn đọc được; không đưa vùng thì công cụ tự tìm và xếp các vùng có tường theo cung cửa, tên phòng và tường hai phương (mặt cắt, mặt đứng cũng có nét song song). `preview` vẽ phần đọc được đè lên bản vẽ trên layer không in để so; `adopt` chuyển phần đọc được và kích thước cũ sang layer đóng băng X-OLD-PLAN (không xóa gì) rồi vẽ lại mặt bằng đúng chỗ, từ đó sửa và cập nhật tại chỗ như bản vẽ do công cụ vẽ. Trên nhà mẫu đọc đủ mọi tường, cửa, trục, phòng; trên bản vẽ văn phòng của đơn vị khác đọc được phần lớn vách trong và tên phòng, chưa đọc được vách kính mỏng bao ngoài. Phương pháp và giới hạn: [`docs/read-plan.vi.md`](docs/read-plan.vi.md).
+- **Bộ nội thất, những điểm rút ra từ một dự án thật:**
+  - Đồ nội thất: `tv_cabinet` nhận `tv: false` (chỉ tủ thấp, không có tivi). Có thêm loại `sideboard` (tủ credenza). Bàn trà, bàn ăn có thể tròn (`shape: "round"` hoặc `diameter`; bàn ăn tròn có ghế xếp quanh).
+  - Chú thích và ghi chú của mặt bằng nội thất, sàn, tường, trần được đặt cạnh mặt bằng, ngoài tường, đường kích thước và bóng trục, ở chỗ bản vẽ còn trống (nếu không thì dưới, trái hoặc trên). `notes_at` để tự đặt; kết quả trả về vùng của khối này.
+  - Bản copy mặt bằng nhận `dimensions` riêng (các phía, hoặc false) và `interior_dimensions` (mặc định tắt).
+  - `draw_floor_finish_plan` nhận `zones`: vùng thảm lát âm trong sàn đá có mạch, mã và diện tích riêng, trừ khỏi diện tích phòng.
+  - `draw_ceiling_plan` nhận `lights` do người thiết kế đặt (downlight, spot có hướng chiếu, đèn thanh, miệng gió khe, nắp thăm), đếm theo mã trong chú thích; `rooms[].ceiling.grid` vẽ trần lưới T.
+  - `draw_interior_elevation` nhận `wall_finishes` (ví dụ một vách ốp kính sơn mặt sau, các vách khác sơn) và `titles`.
+  - `setup_styles` và `draw_plan` giữ LTSCALE của bản vẽ đã có hình. Khoá lạ trong `heights` được báo. Lỗi ô cửa nêu tên ô.
+  - `list_texts` / `update_texts` đọc và sửa được thuộc tính của ghi chú multileader (`handle:TAG`).
+  - `export_pdf` báo rõ khi file PDF đang mở trong trình xem; `if_locked: "rename"` ghi ra tên khác.
+  - `manage_images` gỡ, nạp lại, thay và dọn ảnh chèn. `retitle_view` đổi tên hình kèm gạch chân. `create_layout` nhận id của view thay cho cửa sổ. `update_title_blocks` ghi lần sửa vào khung tên mọi tờ.
+- **Làm việc trên bản vẽ của người khác** (`describe_drawing`, `stretch_entities`, `replace_text`, `convert_vietnamese_text`, `compare_drawings`):
+  - `describe_drawing` đọc bản đồ của bản vẽ: các tờ (layout và viewport của nó, hoặc khung vẽ trong model kể cả khung kéo dài; khổ giấy và tỷ lệ suy ra từ kích thước khung), khung tên, các hình trên từng tờ theo tên hình (mặt bằng, mặt đứng, mặt cắt, chi tiết, bảng... tiếng Việt, Anh, Trung; tên ghi hai thứ tiếng tính là một hình) kèm tầng, tỷ lệ và vùng model thu vừa với nét vẽ.
+  - `stretch_entities` kéo giãn một phần bản vẽ tại chỗ như lệnh STRETCH: dời một bức tường thì mặt tường, hatch (cung giữ độ phồng), cửa và kích thước đi theo; chữ diện tích trong đường bao phòng được tính lại.
+  - `replace_text` tìm và thay chữ trong text, mtext, thuộc tính khối, kích thước ghi đè, ô bảng và định nghĩa khối, có xem trước.
+  - `convert_vietnamese_text` chuyển chữ gõ cho font cũ TCVN3 (.VnTime) và VNI (VNI-Times) sang Unicode, đổi kiểu chữ sang Arial; kiểu chữ dùng font tên khác (font SHX) được nhận theo nội dung chữ.
+  - `compare_drawings` so bản vẽ với phiên bản cũ trên đĩa và khoanh mây chỗ khác.
+  - `transform_entities`, `set_properties`, `delete_entities`, `draw_entities` cũng nhận `revision`: sửa tay đến đâu khoanh mây đến đó.
+  - `check_annotations` tìm kích thước bị ghi đè số không đúng với số đo và chữ diện tích không khớp đường bao phòng; sửa khi được yêu cầu (khoanh mây với `revision`).
+  - `list_texts` liệt kê chữ trên bản vẽ (chữ không trùng, ngôn ngữ, handle; xuất CSV). `update_texts` sửa nhiều chữ theo handle trong một bước: rà câu chữ hoặc dịch bản vẽ song ngữ.
+  - `clean_drawing` xóa nét vẽ trùng, nét dài bằng 0, chữ rỗng và gộp nét chồng nhau (như OVERKILL), có xem trước.
+  - `describe_folder` đọc mọi file DWG trong một thư mục mà không mở chúng, rồi lập danh mục các tờ (Excel hoặc CSV).
+- **Khoanh mây chỗ sửa đổi** (`revision`, `revision_cloud`): mọi công cụ vẽ nhận `revision` (số lần sửa, hoặc `{no, note}`) cùng `update: true`. Hình cũ được so với hình mới từng đối tượng; chỗ thay đổi được khoanh mây trên layer A-ANNO-REVS kèm tam giác số lần sửa. Đường bao đổi một góc thì chỉ khoanh chỗ đỉnh dời đi, không khoanh cả tầng. Mây của một lần sửa là một view riêng. `revision_cloud` khoanh mây theo vùng, theo đối tượng (handle) hoặc theo điểm, dùng cho chỗ sửa bằng tay trên bản vẽ cũ. `create_layout` ghi `title_block.revisions` vào các dòng sửa đổi của khung tên từng tờ.
+- **Sửa bản vẽ cũ thay vì vẽ lại** (`update`, `list_views`): mỗi thứ một công cụ vẽ ra là một hình (view), và chính bản vẽ lưu danh sách các hình cùng mô tả công trình đã dùng để vẽ:
+  - mọi công cụ vẽ đều nhận `update: true`: hình cũ của nó (cùng tầng, cùng ký hiệu mặt cắt, cùng phòng...) bị xóa và hình mới được vẽ đúng chỗ cũ, trong một bước Undo, nên các tờ layout vẫn hiện đúng hình đó; hình nào lớn hơn hình cũ thì được báo để lập lại tờ;
+  - đổi công trình bằng cách gọi `draw_plan` với mô tả đã sửa và `update: true`; kết quả liệt kê các hình còn vẽ theo mặt bằng cũ (`stale_views`): cập nhật lần lượt từng hình là cả bộ hồ sơ, kể cả bảng khối lượng, khớp lại;
+  - `list_views` cho biết các hình trong bản vẽ kèm tham số đã dùng, và với `plan: true` trả về mô tả công trình đang lưu. Cả hai nằm trong file DWG, nên bản vẽ mở lại ở phiên khác, hay vài tuần sau, vẫn sửa được như vậy mà không phải mô tả lại ngôi nhà;
+  - bản vẽ không do các công cụ này vẽ thì không có hình nào được ghi: sửa từng đối tượng (`query_entities`, `transform_entities`, `set_properties`, `delete_entities`, `draw_entities`).
 - **Bộ kết cấu** (`draw_structure_plan`, `draw_beam_schedule`, `draw_structure_notes`):
   - `draw_structure_plan floor=foundation` vẽ mặt bằng móng: móng đơn M1 dưới cột (nét khuất), giằng móng GM dưới tường tầng 1, kích thước và cao độ đáy móng;
   - `draw_structure_plan` vẽ mặt bằng kết cấu từng sàn (tầng 2, 3 … và mái):

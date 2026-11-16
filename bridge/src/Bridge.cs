@@ -92,6 +92,16 @@ namespace AcadMcp
         static Control _ui;
         static TcpListener _listener;
         static Thread _thread;
+        // set on AutoCAD's first idle after start: a command sent while AutoCAD is still starting up (the bridge loads
+        // early) can lock its main thread (a drawing opened then hung AutoCAD), so commands wait for it
+        static readonly ManualResetEvent _ready = new ManualResetEvent(false);
+
+        static void OnFirstIdle(object sender, EventArgs e)
+        {
+            AcApp.Idle -= OnFirstIdle;
+            _ready.Set();
+            Log("Ready (AutoCAD idle)");
+        }
         static volatile bool _running;
         static readonly object _logLock = new object();
 
@@ -125,6 +135,7 @@ namespace AcadMcp
                 _ui = new Control();
                 _ui.CreateControl();
                 IntPtr unused = _ui.Handle; // force the handle on the main thread
+                AcApp.Idle += OnFirstIdle;
             }
         }
 
@@ -249,7 +260,8 @@ namespace AcadMcp
                 try
                 {
                     Document doc = AcApp.DocumentManager.MdiActiveDocument;
-                    if (Def.Mode != Mode.Session && doc == null)
+                    // opening or starting a drawing needs none open (AutoCAD closes its empty Drawing1 when a file opens)
+                    if (Def.Mode != Mode.Session && doc == null && Def.Name != "open_drawing" && Def.Name != "new_drawing")
                         throw new McpError("No drawing is open in AutoCAD: call new_drawing or open_drawing first.");
                     if (doc != null && Def.Mode != Mode.Session && !doc.Editor.IsQuiescent)
                     {
@@ -272,12 +284,13 @@ namespace AcadMcp
                             string undoName = "MCP_" + Def.Name.ToUpperInvariant();
                             using (doc.LockDocument(DocumentLockMode.Write, undoName, undoName, false))
                                 Result = Def.Fn(ctx, Params);
+                            Media.Touched(doc);
                             break;
                         case Mode.CommandContext:
                             deferred = true;
                             AcApp.DocumentManager.ExecuteInCommandContextAsync(obj =>
                             {
-                                try { Result = Def.Fn(new Ctx(AcApp.DocumentManager.MdiActiveDocument, Def.Name), Params); }
+                                try { Result = Def.Fn(new Ctx(AcApp.DocumentManager.MdiActiveDocument, Def.Name), Params); Media.Touched(AcApp.DocumentManager.MdiActiveDocument); }
                                 catch (Exception e) { Error = e; }
                                 finally { Done.Set(); }
                                 return Task.FromResult(0);
@@ -319,6 +332,8 @@ namespace AcadMcp
                 Command run = def.ModeFor == null ? def : new Command { Name = def.Name, Fn = def.Fn, Mode = def.ModeFor(p) };
                 var job = new Job { Def = run, Params = p };
                 if (_ui == null || !_ui.IsHandleCreated) throw new McpError("Bridge is not initialised (no main-thread window).");
+                if (!_ready.WaitOne(TimeSpan.FromSeconds(Math.Max(5, Math.Min(120, p.Num("_timeout", 600))))))
+                    throw new McpError("AutoCAD is still starting (it has not become idle yet): retry in a moment.");
                 _ui.BeginInvoke(new Action(job.RunOnMain));
                 // The MCP server gives up after its own timeout; never block the bridge forever (e.g. LISP waiting for input).
                 if (!job.Done.WaitOne(TimeSpan.FromSeconds(Math.Max(5, p.Num("_timeout", 600)))))

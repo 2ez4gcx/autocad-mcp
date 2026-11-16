@@ -60,7 +60,7 @@ export function buildModel(spec) {
     const isWin = type === 'window';
     const sill = num(o.sill ?? (isWin ? H.window_sill : H.floor), `${name}.sill`);
     const head = num(o.head ?? (isWin ? H.window_head : H.door_head), `${name}.head`);
-    if (head <= sill) throw new PlanError(`${name}: head must be above sill`);
+    if (head <= sill) throw new PlanError(`${name}${o.tag ? ` (${o.tag})` : ''}: its head ${head} must be above its sill ${sill} (sill/head of the opening, else heights.window_sill / window_head / door_head)`);
     return { s, span, type, sill, head, tag: o.tag };
   });
   const colSpecs = [...(spec.columns || [])];

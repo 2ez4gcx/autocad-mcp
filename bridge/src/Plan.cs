@@ -368,6 +368,9 @@ namespace AcadMcp
             {
                 var space = U.ModelSpace(db, tr, OpenMode.ForWrite);
                 var dr = new Drawer(db, tr, space, p.Obj("layer_styles"));
+                // a view that replaces an earlier one: its old entities go first, in this same Undo step
+                P view = roomsOnly ? null : p.Obj("view");
+                var viewOut = Views.Begin(db, tr, space, dr, view);
                 var cuts = Polys(p, "cuts");
                 var columns = Polys(p, "columns");
                 Region all = null;
@@ -554,6 +557,8 @@ namespace AcadMcp
                 if (dr.CreatedLayers.Count > 0) result["created_layers"] = dr.CreatedLayers;
                 result["bounds"] = U.BoundsOut(dr.Bounds);
                 if (roomsOnly) return new Dictionary<string, object> { { "rooms", result.ContainsKey("rooms") ? result["rooms"] : new List<object>() } };
+                Views.End(db, tr, view);
+                if (viewOut != null) result["view"] = viewOut;
                 tr.Commit();
             }
             return result;

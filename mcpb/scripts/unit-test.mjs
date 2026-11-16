@@ -225,13 +225,13 @@ test('standards: layers, styles, title block, scale fitting', () => {
   // one block insert: the values are its attributes, every one defined in the block
   assert.equal(tb.entities.length, 1);
   const ins = tb.entities[0];
-  assert.equal(ins.name, 'MCP_KHUNG_TEN_DOC_A3_NGANG'); // the vertical strip on every sheet
+  assert.equal(ins.name, 'MCP_KHUNG_TEN_DOC_A3_NGANG_R'); // the vertical strip on every sheet (_R: with its revision rows)
   assert.ok(ins.fit.TEN_BAN_VE > 40 && ins.fit.CONG_TRINH > 40 && ins.fit.SO_HD < 30, 'every value has the width of its cell');
   assert.ok(['CHU_DAU_TU', 'DU_AN', 'CONG_TRINH', 'SO_BAN_VE', 'GHI_CHU_CHUNG', 'TEN_BAN_VE_2'].filter((t) => t !== 'DU_AN').every((t) => t in ins.attributes));
   const bottom = titleBlock({ paper: 'A3', style: 'bottom', info: { title: 'X' } }).entities[0];
   assert.equal(bottom.name, 'MCP_KHUNG_TEN_A3_NGANG');
-  assert.equal(titleBlock({ paper: 'A4', orientation: 'portrait' }).entities[0].name, 'MCP_KHUNG_TEN_DOC_A4_DUNG');
-  assert.equal(titleBlock({ paper: 'A2', orientation: 'portrait' }).entities[0].name, 'MCP_KHUNG_TEN_DOC_A2_DUNG');
+  assert.equal(titleBlock({ paper: 'A4', orientation: 'portrait' }).entities[0].name, 'MCP_KHUNG_TEN_DOC_A4_DUNG_R');
+  assert.equal(titleBlock({ paper: 'A2', orientation: 'portrait' }).entities[0].name, 'MCP_KHUNG_TEN_DOC_A2_DUNG_R');
   assert.equal(ins.attributes.TEN_BAN_VE, 'MẶT BẰNG TẦNG 1');
   assert.equal(ins.attributes.TY_LE, '1:100');
   assert.deepEqual(Object.keys(ins.attributes).sort(), ins.def.attributes.map((a) => a.tag).sort());
@@ -471,6 +471,55 @@ test('ceiling plan: drop band, cove, downlights in the band, lamp, tags; WC flat
   assert.ok(r.entities.some((e) => /^MCP_THE_TRAN_/.test(e.name) && e.attributes.COTE === '+2.850'));
   assert.ok(r.entities.filter((e) => e.name === 'MCP_DEN_DOWNLIGHT' && e.attributes.MA === 'LT-01').length >= dl.qty);
   assert.equal(finishes.WC.ceiling.drop, null);
+});
+
+test('furniture: a low cabinet without its television, a sideboard, round tables; an opening named in its error', async () => {
+  const { TYPES } = await import('../src/interior.mjs');
+  const high = (shapes) => Math.max(...shapes.flatMap((s) => (s.pts || [s.a, s.b].filter(Boolean)).map((p) => p[1])));
+  assert.equal(high(TYPES.tv_cabinet.front(1800, 400, 450, {})), 1520);
+  assert.equal(high(TYPES.tv_cabinet.front(1800, 400, 450, { tv: false })), 450);
+  assert.equal(TYPES.tv_cabinet.plan(1800, 400, 450, { tv: false }).length, 1);
+  assert.equal(high(TYPES.sideboard.front(1800, 450, 750, {})), 750);
+  assert.deepEqual(TYPES.coffee_table.plan(900, 900, 420, { shape: 'round' }).map((s) => [s.k, s.r]), [['c', 450], ['c', 410]]);
+  // a round dining table of 1200 with its chairs around: one per 600 of the round (6)
+  assert.equal(TYPES.dining_table.plan(1200, 1200, 750, { shape: 'round' }).length, 1 + 2 * 6);
+  const r = resolveItems([{ type: 'coffee_table', diameter: 900, center: [3000, 2000], facing: -90 }, { type: 'dining_table', shape: 'round', width: 1100, center: [1500, 2000], facing: -90 }], { 'PHÒNG NGỦ': ROOM });
+  assert.deepEqual(r.items.map((i) => [i.w, i.d, i.description]), [[900, 900, 'Bàn trà Ø900'], [1100, 1100, 'Bộ bàn ăn Ø1100']]);
+  assert.throws(() => resolveItems([{ type: 'sofa', shape: 'round', center: [1, 1] }], {}), /round is for coffee_table and dining_table/);
+  const { buildModel } = await import('../src/elevation.mjs');
+  assert.throws(() => buildModel({ walls: [{ points: [[0, 0], [5000, 0]], thickness: 200 }], openings: [{ wall: 0, offset: 1000, width: 1200, type: 'window', tag: 'S2', sill: 2400, head: 2100 }] }), /openings\[0\] \(S2\): its head 2100 must be above its sill 2400/);
+});
+
+test('floor zones, the designer\'s lights, a T-bar grid ceiling', async () => {
+  const { outsidePolys, floorZones } = await import('../src/interior.mjs');
+  // a joint across a zone keeps the parts outside it
+  const cut = outsidePolys([[[0, 500], [6000, 500]]], [[[1000, 0], [2000, 0], [2000, 1000], [1000, 1000]]]);
+  assert.deepEqual(cut.map(([a, b]) => [a[0], b[0]]), [[0, 1000], [2000, 6000]]);
+  assert.equal(floorZones([{ rect: [[100, 100], [200, 200]], code: 'FL-02' }], {}).warnings.length, 1);
+  const fin = { 'PHÒNG NGỦ': resolveFinish('PHÒNG NGỦ') };
+  const zone = { rect: [[1000, 1000], [3000, 3000]], code: 'FL-02', description: 'Thảm tấm 500x500', size: [500, 500], note: 'LÁT ÂM SÀN' };
+  const f = floorFinishPlan({ rooms: { 'PHÒNG NGỦ': ROOM }, finishes: fin, labels: { 'PHÒNG NGỦ': [4500, 2000] }, scale: 50, legendAt: [7000, 4000], zones: [zone] });
+  noNaN(f.entities);
+  // 24 m² room: 4 m² of carpet, 20 of tiles
+  assert.deepEqual(f.legend.map((l) => [l.code, l.area_m2]), [['FL-01', 20], ['FL-02', 4]]);
+  // no joint of the room inside the zone; the zone's own joints every 500 inside it
+  const inZone = (p) => p[0] > 1001 && p[0] < 2999 && p[1] > 1001 && p[1] < 2999;
+  const joints = f.entities.filter((e) => e.type === 'line' && e.layer === 'A-FLOR-PATT');
+  const mids = joints.map((e) => [(e.from[0] + e.to[0]) / 2, (e.from[1] + e.to[1]) / 2]);
+  assert.ok(mids.filter(inZone).length >= 6, 'the zone has its joints');
+  assert.ok(joints.every((e) => !(inZone(e.from) && !inZone(e.to)) || Math.abs(e.from[0] - e.to[0]) <= 2000), 'room joints stop at the zone');
+  assert.ok(f.entities.some((e) => e.type === 'text' && e.text === 'LÁT ÂM SÀN'));
+  // lights placed by hand: no automatic downlights; counted by code, a linear one with its length
+  const c = ceilingPlan({
+    rooms: { 'PHÒNG NGỦ': ROOM }, finishes: { 'PHÒNG NGỦ': { ...resolveFinish('PHÒNG NGỦ'), ceiling: { ...resolveFinish('PHÒNG NGỦ').ceiling, drop: null, grid: [600, 600] } } },
+    scale: 50, legendAt: [7000, 4000],
+    lights: [{ type: 'linear', from: [1000, 2000], to: [5000, 2000] }, { type: 'spot', at: [1500, 3000], aim: [1500, 4000] }, { type: 'spot', at: [4500, 3000] }, { type: 'access_panel', at: [5400, 600] }],
+  });
+  noNaN(c.entities);
+  assert.ok(!c.entities.some((e) => e.name === 'MCP_DEN_DOWNLIGHT'), 'no automatic downlights');
+  assert.deepEqual(c.lights.filter((l) => l.user).map((l) => [l.code, l.qty, l.length_m]), [['LT-06', 1, 4], ['LT-05', 2, undefined], ['AP-01', 1, undefined]]);
+  // the T-bar grid: lines every 600 across the room
+  assert.ok(c.entities.filter((e) => e.type === 'line' && e.layer === ROLE.ceiling).length >= 15);
 });
 
 test('floor finish plan: no joint inside the room label, tags, legend with areas', () => {
@@ -2128,10 +2177,257 @@ const MEP_ROOMS = [
   { 'PHÒNG KHÁCH': [[200, 200], [5800, 200], [5800, 5950], [200, 5950]], 'BẾP': [[2550, 6050], [5800, 6050], [5800, 8800], [2550, 8800]], WC: [[200, 6050], [2450, 6050], [2450, 8800], [200, 8800]] },
   { 'PHÒNG NGỦ': [[200, 200], [5800, 200], [5800, 5950], [200, 5950]], 'SẢNH': [[2550, 6050], [5800, 6050], [5800, 8800], [2550, 8800]], WC: [[200, 6050], [2450, 6050], [2450, 8800], [200, 8800]] },
 ];
+test('old drawings: TCVN3 texts read, titles and floors, papers and scales of frames, the map of a sheet', async () => {
+  const { decodeTcvn3, looksTcvn3 } = await import('../src/vnfont.mjs');
+  assert.equal(decodeTcvn3('MÆt b»ng tÇng 1'), 'Mặt bằng tầng 1');
+  assert.equal(decodeTcvn3('Phßng kh¸ch - n\u00ADíc - ®iÖn - Tû lÖ'), 'Phòng khách - nước - điện - Tỷ lệ');
+  assert.equal(decodeTcvn3('mÆt c¾t a-a %%c12', true), 'MẶT CẮT A-A %%c12');
+  assert.ok(looksTcvn3('MÆt b»ng') && !looksTcvn3('MẶT BẰNG') && !looksTcvn3('PHÒNG KHÁCH') && !looksTcvn3('PLAN'));
+  const { decodeVni, legacyEncoding, decodeLegacy } = await import('../src/vnfont.mjs');
+  assert.equal(decodeVni('MAËT BAÈNG CAÀU THANG TAÀNG 1 LEÂN TAÀNG MAÙI'), 'MẶT BẰNG CẦU THANG TẦNG 1 LÊN TẦNG MÁI');
+  assert.equal(decodeVni('Tröôøng Ñaïi hoïc - ñòa chæ - Baùc só - Vieät Nam'), 'Trường Đại học - địa chỉ - Bác sĩ - Việt Nam');
+  assert.deepEqual(['MAËT BAÈNG', 'MÆt b»ng', 'MẶT BẰNG', 'PHÒNG KHÁCH', 'PLAN'].map(legacyEncoding), ['vni', 'tcvn3', null, null, null]);
+  // Unicode Vietnamese with Latin-1 letters only is not legacy
+  assert.deepEqual(['PHÒNG', 'LÊN', 'CÔNG TRÌNH:', 'Ghi chú thêm', 'TOÀ NHÀ', 'Giá'].map(legacyEncoding), [null, null, null, null, null, null]);
+  // a diameter sign or a lap length in a note, Chinese beside it: not a legacy font
+  assert.deepEqual(['1x2石頭 Ø6@100鋼筋', '40Þ', 'Ø12a200', 'Phßng', '®iÖn'].map(legacyEncoding), [null, null, null, 'tcvn3', 'tcvn3']);
+  assert.equal(decodeLegacy('DANH MUÏC BAÛN VEÕ KIEÁN TRUÙC'), 'DANH MỤC BẢN VẼ KIẾN TRÚC');
+  const { titleOf, floorOf, scaleOf, paperOf, describeDrawing } = await import('../src/describe.mjs');
+  assert.deepEqual([titleOf('MÆt b»ng tÇng 2').kind, titleOf('MÆt b»ng tÇng 2').floor], ['plan', '2']);
+  assert.deepEqual([titleOf('MAËT CAÉT A-A').kind, titleOf('MAËT CAÉT A-A').title, titleOf('MAËT CAÉT A-A').legacy], ['section', 'MẶT CẮT A-A', 'vni']);
+  assert.equal(titleOf('MẶT BẰNG MÁI').kind, 'roof');
+  assert.equal(titleOf('2. MẶT CẮT A-A').kind, 'section');
+  assert.equal(titleOf('SECOND FLOOR PLAN').kind, 'plan');
+  assert.equal(titleOf('一層平面圖').kind, 'plan');
+  assert.equal(titleOf('XEM CHI TIẾT 3'), null);
+  assert.equal(titleOf('PHÒNG NGỦ 1'), null);
+  assert.deepEqual([floorOf('MẶT BẰNG TẦNG TRỆT'), floorOf('3RD FLOOR PLAN'), floorOf('MẶT BẰNG TẦNG 2-5')], ['TRỆT', '3', '2-5']);
+  assert.deepEqual([scaleOf('TỶ LỆ 1/100'), scaleOf('SCALE 1:50'), scaleOf('1/20'), scaleOf('TẦNG 1')], [100, 50, 20, null]);
+  assert.deepEqual(paperOf(42000, 29700), { paper: 'A3', scale: 100 });
+  assert.deepEqual(paperOf(59400, 84100), { paper: 'A1', scale: 100 });
+  assert.equal(paperOf(10000, 1000), null);
+  // a model-space A3 frame at 1:100 (and its inner border) with two plans side by side, a section above, a title block
+  const T = (x, y, h, s, tag) => [x, y, h, s, 'TEXT', 0, ...(tag ? [tag] : [])];
+  const map = {
+    drawing: 'x.dwg', extents: [0, 0, 42000, 29700],
+    rects: [[0, 0, 42000, 29700, 'KHUNG'], [1000, 500, 41500, 29200, 'KHUNG'], [2000, 2000, 2400, 2700, 'COT']],
+    inserts: [{ name: 'TB', box: [30000, 500, 41500, 5000], attributes: { TEN_BV: 'MẶT BẰNG TẦNG 1, 2', SO_BV: 'KT-02' }, handle: '2A' }],
+    texts: [
+      T(5000, 3000, 500, 'MẶT BẰNG TẦNG 1'), T(5000, 2300, 300, 'TỶ LỆ 1/100'),
+      T(20000, 3000, 500, 'MẶT BẰNG TẦNG 2'), T(20000, 2300, 300, 'TỶ LỆ 1/100'),
+      T(8000, 16000, 500, 'MẶT CẮT A-A'), T(8000, 15300, 300, 'TL 1/50'),
+      ...Array.from({ length: 20 }, (_, i) => T(3000 + i * 1000, 8000, 250, 'PHÒNG NGỦ')),
+      T(35000, 2000, 400, 'MẶT BẰNG TẦNG 1, 2', 'TEN_BV'), T(40000, 1000, 700, 'KT-02', 'SO_BV'),
+      T(60000, 3000, 500, 'MẶT ĐỨNG TRỤC 1-5'),
+    ],
+  };
+  const D = describeDrawing(map, [{ name: 'A1-01', paper: 'ISO_A1', viewports: [{ paper_center: [420, 297], scale: 1, window: [[-100, 0], [940, 594]] }, { scale: 100, window: [[59000, 0], [80000, 15000]] }], title_blocks: [{ block: 'TB', attributes: { DRAWING_NO: 'KT-05' } }], texts: ['MẶT ĐỨNG'] }]);
+  assert.equal(D.sheets.length, 2, JSON.stringify(D.sheets));
+  const f = D.sheets[0];
+  assert.deepEqual([f.source, f.paper, f.scale, f.number], ['model frame', 'A3', 100, 'KT-02']);
+  assert.equal(f.title_block?.number, 'KT-02');
+  assert.equal(f.title, 'MẶT BẰNG TẦNG 1, 2');
+  assert.deepEqual(f.views.map((v) => [v.kind, v.floor ?? null, v.scale]), [['plan', '1', 100], ['plan', '2', 100], ['section', null, 50]]);
+  // the two plans split the band at the midpoint of their titles; the section owns the band above
+  const [p1, p2, sA] = f.views;
+  assert.ok(p1.window[1][0] === 12500 && p2.window[0][0] === 12500 && p1.window[1][1] === sA.window[0][1], JSON.stringify(f.views));
+  assert.ok(p1.window[0][1] < 3000 && sA.window[1][1] === 29700);
+  const l = D.sheets[1];
+  assert.deepEqual([l.source, l.number, l.viewports.length, l.viewports[0].views[0].kind], ['layout', 'KT-05', 1, 'elevation']);
+  assert.deepEqual(D.views_outside_sheets, []);
+
+  // a frame drawn as four lines; its sheet name in the title block strip; an empty print boundary is not a sheet
+  const { rectsFromLines } = await import('../src/describe.mjs');
+  const L4 = [[0, 0, 46800, 0, 'K'], [46800, 0, 46800, 29700, 'K'], [46800, 29700, 0, 29700, 'K'], [0, 29700, 0, 0, 'K'], [5000, 5000, 9000, 5000, 'X']];
+  assert.deepEqual(rectsFromLines(L4).map((r) => r.slice(0, 4)), [[0, 0, 46800, 29700]]);
+  const map2 = {
+    rects: [[100000, 0, 142000, 29700, 'IN']],
+    lines: L4,
+    texts: [
+      T(8000, 3000, 500, 'MẶT BẰNG TẦNG 1'), T(8000, 2300, 300, 'TỶ LỆ 1/100'), T(44000, 9000, 450, 'MẶT BẰNG TẦNG 1'),
+      ...Array.from({ length: 10 }, (_, i) => T(3000 + i * 1000, 8000, 250, 'PHÒNG')),
+      ...Array.from({ length: 3 }, (_, i) => T(101000 + i * 1000, 8000, 250, 'GHI')),
+    ],
+  };
+  const D2 = describeDrawing(map2);
+  assert.equal(D2.sheets.length, 1, JSON.stringify(D2.sheets));
+  assert.deepEqual([D2.sheets[0].paper, D2.sheets[0].scale, D2.sheets[0].title, D2.sheets[0].views.length], ['A3 extended', 100, 'MẶT BẰNG TẦNG 1', 1]);
+  assert.equal(D2.frames_without_content, 1);
+
+  // a style whose texts read as VNI is a VNI style whatever its font; a Unicode style is not
+  const { legacyStyles, fitWindows } = await import('../src/describe.mjs');
+  const S = (s, style) => [0, 0, 250, s, 'T', 0, null, style];
+  const LS = legacyStyles({ texts: [S('MAËT BAÈNG', 'SHX1'), S('TAÀNG 1', 'SHX1'), S('MAËT CAÉT A-A', 'SHX1'), S('PHÒNG', 'U'), S('MẶT BẰNG', 'U'), S('LÊN', 'U'), S('KHO', 'U'), S('Phßng', 'V3'), S('Kh¸ch', 'V3')] });
+  assert.deepEqual(LS, { SHX1: 'vni' });
+  // a view window fitted to what is drawn in it, with a margin; left as the band when nothing is there
+  const V = [{ window: [[0, 0], [20000, 15000]] }, { window: [[20000, 0], [40000, 15000]] }];
+  fitWindows(V, [{ box: [2000, 1500, 12000, 11500], count: 40 }, null]);
+  assert.deepEqual([V[0].window, V[0].window_from, V[1].window_from], [[[1800, 1300], [12200, 11700]], 'drawing', 'titles']);
+  // a title in Vietnamese with its Chinese beside it is one view, and its window is the whole sheet, not half of it
+  const D3 = describeDrawing({
+    rects: [[0, 0, 42000, 29700, 'K']],
+    texts: [T(5000, 3000, 500, 'MẶT BẰNG TẦNG 1'), T(10500, 3000, 500, '一樓平面圖'), ...Array.from({ length: 12 }, (_, i) => T(3000 + i * 1500, 9000, 250, 'PHÒNG'))],
+  });
+  const v3 = D3.sheets[0].views;
+  assert.equal(v3.length, 1, JSON.stringify(v3));
+  assert.deepEqual([v3[0].title, v3[0].window], ['MẶT BẰNG TẦNG 1 / 一樓平面圖', [[0, 0], [42000, 29700]]]);
+});
+
+test('compare and stretch: every line vertex by vertex, a clipped box', async () => {
+  const { regionsOfDiff, clipBox } = await import('../src/revision.mjs');
+  // a 6 m wall face whose end moved 300: the cloud is at the end, not along the face
+  const line = (x1) => ({ b: [0, 0, x1, 0], t: 'LINE', l: 'A-WALL', p: [0, 0, x1, 0] });
+  const R = regionsOfDiff({ same: 40, removed: [line(6000)], added: [line(6300)] }, { scale: 100, fine: true });
+  assert.equal(R.length, 1);
+  assert.ok(R[0][0] >= 5900 && R[0][2] <= 6400, JSON.stringify(R));
+  assert.deepEqual(clipBox([0, 0, 100, 100], [50, 50, 200, 200]), [50, 50, 100, 100]);
+  // the wall hatch moved inside its loops: clouded along the band that moved, not around the whole floor
+  const hatch = (y) => ({ b: [0, 0, 5000, 18000], t: 'HATCH', l: 'A-WALL-PATT', q: [[0, 0, 5000, 0, 5000, 18000, 0, 18000], [200, y, 4800, y, 4800, y + 100, 200, y + 100]] });
+  const H = regionsOfDiff({ same: 40, removed: [hatch(15450)], added: [hatch(15750)] }, { scale: 100, fine: true });
+  assert.equal(H.length, 1);
+  assert.ok(H[0][1] >= 15400 && H[0][3] <= 15900 && H[0][2] - H[0][0] > 4000, JSON.stringify(H));
+  // an open polyline whose two ends moved: no box from its last vertex back to its first
+  const open = (d) => ({ b: [0, 0, 20000, 100], t: 'LWPOLYLINE', l: 'A', p: [0 + d, 0, 10000, 0, 10000, 100, 20000 + d, 100] });
+  const O = regionsOfDiff({ same: 40, removed: [open(0)], added: [open(50)] }, { scale: 100, fine: true });
+  assert.ok(O.every((b) => b[2] - b[0] < 1000), JSON.stringify(O));
+  // a dimension that changed: at its text
+  const Dm = regionsOfDiff({ same: 40, removed: [{ b: [0, 0, 100, 4000], t: 'DIMENSION', l: 'D', tp: [50, 2000] }], added: [{ b: [0, 0, 100, 4300], t: 'DIMENSION', l: 'D', tp: [50, 2150] }] }, { scale: 100, fine: true });
+  assert.ok(Dm.length === 1 && Dm[0][3] - Dm[0][1] < 500, JSON.stringify(Dm));
+  assert.equal(clipBox([0, 0, 10, 10], [50, 50, 60, 60]), null);
+});
+
+test('reviewing old drawings: dimensions written over, area texts, texts by language, the register of a folder', async () => {
+  const { numbersIn, checkDims, checkAreas, textLanguage, listTexts, registerRows, toCsv, REGISTER_COLUMNS } = await import('../src/review.mjs');
+  assert.ok(numbersIn('4.000').includes(4000) && numbersIn('4,000').includes(4000) && numbersIn('3,5').includes(3.5));
+  assert.ok(numbersIn('2x1200').includes(2400) && numbersIn('%%c600').includes(600) && numbersIn('{\\fArial|b0;4300}').includes(4300));
+  const D = checkDims([
+    { h: 'A', text: '4000', m: 4300, dec: 0, lfac: 1, kind: 'linear' },          // written over with the old value
+    { h: 'B', text: '4000', m: 3999.6, dec: 0, lfac: 1, kind: 'linear' },        // drafting not exact: fine
+    { h: 'C', text: 'R=500', m: 450, dec: 0, lfac: 1, kind: 'radius' },
+    { h: 'D', text: '3600 (CỬA)', m: 3000, dec: 0, lfac: 1, kind: 'linear' },
+    { h: 'E', text: 'VAR', m: 1234, dec: 0, lfac: 1, kind: 'linear' },
+    { h: 'F', text: '1200', m: 24, dec: 0, lfac: 50, kind: 'linear' },           // a detail scaled with its linear factor
+    { h: 'G', text: '4.000', m: 4000, dec: 0, lfac: 1, kind: 'linear' },
+  ], 0.001);
+  assert.deepEqual(D.mismatch.map((x) => [x.handle, x.fixed, x.measured]), [['A', '<>', 4300], ['C', 'R=<>', 450], ['D', '<> (CỬA)', 3000]]);
+  assert.deepEqual(D.words.map((x) => x.handle), ['E']);
+  assert.deepEqual(D.ok, ['B', 'F', 'G']);
+  const A = checkAreas([
+    { h: '1', text: 'WC\n5,06 m²', area_m2: 4.39 },
+    { h: '2', text: 'BẾP + ĂN 19,78 m2', area_m2: 19.78 },
+    { h: '3', text: 'S = 12.5', area_m2: 96.0 },                                 // only the building around it: no outline
+    { h: '4', text: 'DT: 18,4m2', area_m2: 18.43 },
+  ]);
+  assert.deepEqual(A.mismatch.map((x) => [x.handle, x.fixed]), [['1', 'WC\n4,39 m²']]);
+  assert.deepEqual([A.ok, A.none.map((x) => x.handle)], [['2', '4'], ['3']]);
+  assert.deepEqual(['一樓平面圖', 'PHÒNG KHÁCH', 'LIVING ROOM', '1/100'].map(textLanguage), ['zh', 'vi', 'en', 'other']);
+  const L = listTexts([['1', 'text', 'WC', 'A', 'S', 'model', 0, 0, 250], ['2', 'text', 'WC', 'A', 'S', 'model', 0, 0, 250], ['3', 'attribute TEN', '廁所', 'B', 'S', 'model', 0, 0, 250]], { language: null });
+  assert.deepEqual(L.map((x) => [x.text, x.count, x.language, x.kinds]), [['WC', 2, 'en', ['text']], ['廁所', 1, 'zh', ['attribute']]]);
+  assert.equal(listTexts([['3', 'text', '廁所', 'B', 'S', 'model', 0, 0, 250], ['4', 'text', 'WC', 'B', 'S', 'model', 0, 0, 250]], { language: 'zh', unique: false }).length, 1);
+  const R = registerRows([
+    { file: 'KT.dwg', map: { sheets: [{ source: 'layout', layout: 'KT-01', number: 'KT-01', title: 'MẶT BẰNG', paper: 'A3', viewports: [{ views: [{ kind: 'plan', title: 'MẶT BẰNG TẦNG 1', scale: 100 }] }] }], views_outside_sheets: [] } },
+    { file: 'bad.dwg', error: 'eDwgNeedsRecovery' },
+  ]);
+  assert.deepEqual(R.map((r) => [r.file, r.source, r.number, r.scale, r.views]), [['KT.dwg', 'layout', 'KT-01', '1/100', 'MẶT BẰNG TẦNG 1'], ['bad.dwg', 'error', undefined, undefined, undefined]]);
+  const csv = toCsv(R, REGISTER_COLUMNS);
+  assert.ok(csv.startsWith('\uFEFF') && csv.includes('MẶT BẰNG TẦNG 1') && csv.split('\r\n').length === 4);
+});
+
 const mepFloorsOf = () => floorsOf(MEP_HOUSE).map((f, i) => {
   const rooms = MEP_ROOMS[i];
   const items = resolveItems(defaultFixtures(rooms, f.spec, []).items, rooms).items;
   return { name: f.name, level: f.level, height: f.height, spec: f.spec, rooms, items };
+});
+
+test('revision clouds: regions merged, a cloud of outward arcs, the delta and its number; revisions in the title strip', async () => {
+  const { clusterBoxes, cloudEntities, regionsOfDiff } = await import('../src/revision.mjs');
+  // two changes 500 apart merge at a 1000 gap, a far one stays apart; too many regions merge further
+  assert.equal(clusterBoxes([[0, 0, 100, 100], [600, 0, 700, 100], [9000, 9000, 9100, 9100]], 1000).length, 2);
+  assert.equal(clusterBoxes(Array.from({ length: 30 }, (_, i) => [i * 5000, 0, i * 5000 + 10, 10]), 100, 6).length <= 6, true);
+  const E = cloudEntities([0, 0, 4000, 2000], { no: 2, note: 'Dời tường WC', scale: 100 });
+  const cloud = E[0];
+  assert.equal(cloud.type, 'polyline');
+  assert.ok(cloud.closed && cloud.points.length === cloud.bulges.length && cloud.bulges.every((b) => b > 0));
+  // grown by 3 mm on paper (300 at 1:100), about 8 mm arcs (800)
+  const xs = cloud.points.map((p) => p[0]), ys = cloud.points.map((p) => p[1]);
+  assert.deepEqual([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], [-300, -300, 4300, 2300]);
+  assert.ok(cloud.points.length >= 14 && cloud.points.length <= 20);
+  assert.ok(E.some((e) => e.type === 'text' && e.text === '2') && E.some((e) => e.type === 'text' && e.text === 'Dời tường WC'));
+  assert.ok(E.every((e) => e.layer === 'A-ANNO-REVS'));
+  assert.equal(regionsOfDiff({ removed: [[0, 0, 10, 10]], added: [[50, 0, 60, 10], [90000, 0, 90010, 10]] }, { scale: 100 }).length, 2);
+  assert.deepEqual(regionsOfDiff({ removed: [], added: [] }), []);
+  // a view with nothing as it was: one cloud around what it is now
+  assert.deepEqual(regionsOfDiff({ same: 0, removed: [[0, 0, 10, 10]], added: [[0, 0, 100, 50], [0, 60, 100, 120]] }), [[0, 0, 100, 120]]);
+  // the outline of all the walls of a floor changed at one corner: only that corner is clouded
+  const outline = (y) => ({ b: [0, 0, 5000, 18000], t: 'LWPOLYLINE', l: 'A-WALL', p: [0, 0, 5000, 0, 5000, 18000, 0, 18000, 0, y, 2500, y] });
+  const R = regionsOfDiff({ removed: [outline(15800)], added: [outline(15500), { b: [3000, 15400, 3400, 15600], t: 'TEXT', l: 'A-ANNO-ROOM' }] }, { scale: 100 });
+  assert.equal(R.length, 1);
+  assert.ok(R[0][1] >= 15000 && R[0][3] <= 16000 && R[0][0] >= 0 && R[0][2] <= 3500, JSON.stringify(R));
+  // the revisions of a sheet are attributes of its title strip
+  const tb = titleBlock({ paper: 'A2', orientation: 'landscape', info: { revisions: [{ no: 1, text: 'Phát hành lần đầu', date: '01/11/2026' }, { no: 2, text: 'Dời tường WC tầng 1', date: '13/11/2026' }] } });
+  const ins = tb.entities[0];
+  assert.equal(ins.attributes.REV2, 'Dời tường WC tầng 1');
+  assert.equal(ins.attributes.REV2_DATE, '13/11/2026');
+  assert.equal(ins.attributes.REV3, '');
+  assert.ok(ins.def.attributes.some((a) => a.tag === 'REV4'));
+});
+
+test('views: the id of a view, a free id, what is kept with it, the view an update replaces, a view that outgrew the old one', async () => {
+  const V = await import('../src/views.mjs');
+  // the tool and what names the view; arguments that only say how it is drawn do not change the id
+  assert.equal(V.viewId('draw_roof_plan', { scale: 100, fall: 2 }), 'draw_roof_plan');
+  assert.equal(V.viewId('draw_structure_plan', { floor: 2, scale: 100, plan: { walls: [] } }), 'draw_structure_plan:floor=2');
+  assert.equal(V.viewId('draw_interior_elevation', { floor: 2, room: 'PHÒNG NGỦ 1', walls: ['A', 'B'], scale: 20 }), 'draw_interior_elevation:floor=2,room=PHÒNG NGỦ 1,walls=A+B');
+  assert.equal(V.viewId('draw_section', { mark: 'A' }), V.viewId('draw_section', { mark: 'A', scale: 50, update: true }));
+  assert.notEqual(V.viewId('draw_section', { mark: 'A' }), V.viewId('draw_section', { mark: 'B' }));
+  // an object is not a name (the item of a joinery detail may be one); a long id is cut with a hash: 180 characters at most
+  assert.equal(V.viewId('draw_joinery_detail', { kind: 'kitchen', item: { code: 'JN-01' } }), 'draw_joinery_detail:kind=kitchen');
+  const long = V.viewId('draw_interior_elevation', { room: 'X'.repeat(400) });
+  assert.ok(long.length <= 180 && long !== V.viewId('draw_interior_elevation', { room: 'X'.repeat(401) }));
+  // a view drawn again without update is a view of its own
+  assert.equal(V.freeId('draw_section:mark=A', []), 'draw_section:mark=A');
+  assert.equal(V.freeId('draw_section:mark=A', ['draw_section:mark=A', 'draw_section:mark=A#2']), 'draw_section:mark=A#3');
+  // kept with the view: its arguments without the plan and the run; the building of draw_plan is kept once, as the plan
+  assert.deepEqual(V.keptArgs('draw_ceiling_plan', { floor: 2, mode: 'lighting', plan: { walls: [] }, update: true, at: [0, 0], spacing: 1200, notes: null }), { floor: 2, mode: 'lighting', spacing: 1200 });
+  assert.deepEqual(V.keptArgs('draw_plan', { walls: [1], floors: [2], dimensions: ['bottom'], scale: 100, update: true }), { dimensions: ['bottom'], scale: 100 });
+  assert.deepEqual(V.keptPlan({ walls: [1], scale: 100, update: true, dry_run: false, north: null }), { walls: [1], scale: 100 });
+  assert.equal(V.hashOf('a').length, 12);
+  assert.notEqual(V.hashOf('a'), V.hashOf('b'));
+  // what the bridge lists, as views: a record that is not JSON is skipped, entities and extent come from what is alive
+  const meta = (o) => JSON.stringify(o);
+  const known = V.parseViews({
+    views: [
+      { key: 'V_1', meta: meta({ id: 'draw_section:mark=A', tool: 'draw_section', key: 'draw_section:mark=A', spots: [[10, 20]], plan: 'p1', args: { mark: 'A' }, time: '2026-11-13T01:00:00Z' }) },
+      { key: 'V_2', meta: meta({ id: 'draw_section:mark=A#2', tool: 'draw_section', key: 'draw_section:mark=A', spots: [[90, 20]], plan: 'p2', time: '2026-11-13T02:00:00Z' }) },
+      { key: 'V_3', meta: meta({ id: 'draw_roof_plan', tool: 'draw_roof_plan', key: 'draw_roof_plan', time: '2026-11-13T03:00:00Z' }) },
+      { key: 'V_4', meta: 'not json' },
+    ],
+    live: { 'draw_section:mark=A': { entities: 40, bounds: { min: [0, 0], max: [10, 10] } }, 'draw_section:mark=A#2': { entities: 42, bounds: null }, 'stray': { entities: 1 } },
+    values: { plan_hash: 'p2' },
+  });
+  assert.equal(known.views.length, 3);
+  assert.equal(known.planHash, 'p2');
+  assert.deepEqual(known.ids.sort(), ['draw_roof_plan', 'draw_section:mark=A', 'draw_section:mark=A#2', 'stray']);
+  assert.equal(known.views[0].entities, 40);
+  assert.equal(known.views[2].entities, 0);
+  // an update replaces the newest live view of the tool with the same key; one named by its id; never one of another tool
+  assert.equal(V.viewToReplace(known.views, 'draw_section', 'draw_section:mark=A', true).id, 'draw_section:mark=A#2');
+  assert.equal(V.viewToReplace(known.views, 'draw_section', 'draw_section:mark=A', 'draw_section:mark=A').id, 'draw_section:mark=A');
+  assert.equal(V.viewToReplace(known.views, 'draw_section', 'draw_section:mark=B', true), null);
+  assert.equal(V.viewToReplace(known.views, 'draw_roof_plan', 'draw_roof_plan', true), null); // its entities are gone
+  assert.throws(() => V.viewToReplace(known.views, 'draw_section', 'x', 'nothing'), /no view/);
+  assert.throws(() => V.viewToReplace(known.views, 'draw_roof_plan', 'x', 'draw_section:mark=A'), /drawn by draw_section/);
+  // bounds joined; a view outgrew the old one when it reaches past it by more than a hundredth of its diagonal
+  const B = (x0, y0, x1, y1) => ({ min: [x0, y0], max: [x1, y1] });
+  assert.deepEqual(V.joinBounds(B(0, 0, 10, 10), B(5, -5, 20, 8)), B(0, -5, 20, 10));
+  assert.deepEqual(V.joinBounds(null, B(0, 0, 1, 1)), B(0, 0, 1, 1));
+  assert.equal(V.outgrew(B(0, 0, 1000, 1000), B(0, 0, 1000, 1000)), false);
+  assert.equal(V.outgrew(B(0, 0, 1010, 1000), B(0, 0, 1000, 1000)), false);
+  assert.equal(V.outgrew(B(0, 0, 1300, 1000), B(0, 0, 1000, 1000)), true);
+  assert.equal(V.outgrew(B(100, 100, 900, 900), B(0, 0, 1000, 1000)), false);
+  assert.equal(V.outgrew(B(0, 0, 1, 1), null), false);
+  // every view tool is a registered kind of drawing tool; free drawing is not a view
+  assert.ok(V.VIEW_TOOLS.has('draw_plan') && V.VIEW_TOOLS.has('material_schedule') && !V.VIEW_TOOLS.has('draw_entities'));
 });
 
 test('measurement rules: the sets, the thresholds, a company set over the default, rounding as a spreadsheet does', async () => {
@@ -2161,6 +2457,188 @@ test('measurement rules: the sets, the thresholds, a company set over the defaul
   assert.equal(roundQ(1.0005), 1.001);
   assert.equal(roundQ(2.34549), 2.345);
   assert.equal(roundQ(7), 7);
+});
+
+test('layers of drawings by others: the purpose read from names in Vietnamese, English, Chinese and AIA codes, pens, blocks', async () => {
+  const { layerRole, blockRole, nameParts } = await import('../src/layers.mjs');
+  const role = (n) => layerRole(n).role;
+  // accents or not, any case, separators, the prefix of a bound xref dropped
+  assert.equal(nameParts('Plan-xref$0$A-Wall').base, 'A-Wall');
+  assert.equal(nameParts('Tường xây 200').norm, 'tuong xay 200');
+  for (const [n, r] of [['Tường', 'wall'], ['TUONG', 'wall'], ['A-Wall', 'wall'], ['Plan-xref$0$A-Wall', 'wall'], ['墙体', 'wall'],
+    ['Kích thước', 'dims'], ['KICHTHUOC', 'dims'], ['A- Dimension', 'dims'], ['_Dim', 'dims'], ['DIM', 'dims'],
+    ['Cửa sổ', 'window'], ['CUASO', 'window'], ['A-Glaz', 'window'], ['Cửa đi', 'door'], ['A-Door', 'door'], ['KHCUA', 'symbol'], ['A-Door-Iden', 'symbol'],
+    ['Ghi chú', 'note'], ['GHICHU', 'note'], ['TEXT', 'text'], ['A-Text-VN', 'text'], ['S-25Text-VN', 'text'],
+    ['TRUC', 'grid'], ['A-Grid', 'grid'], ['Cột', 'column'], ['A-Cols', 'column'], ['Dầm', 'beam'], ['THEP', 'rebar'], ['THEP_CHU', 'rebar'], ['DAI', 'stirrup'],
+    ['HACHT', 'hatch'], ['A-Hatch', 'hatch'], ['khungten00', 'title'], ['KHUNGTEN', 'title'], ['Nội thất', 'furniture'], ['A-Eqpm-Fixd', 'fixture'],
+    ['Khuất', 'hidden'], ['A-Detl-Wide', 'detail_cut'], ['A-Detl-Thin', 'detail'], ['修正 範圍', 'revision'], ['A-Revs', 'revision'], ['Cây xanh', 'landscape'],
+    ['A-Road-Curb', 'site'], ['ZL_BuLon', 'steel'], ['MONG', 'concrete'], ['G-Viewport', 'viewport'], ['A-Hral', 'railing'], ['Thang máy', 'equipment']]) {
+    assert.equal(role(n), r, `${n} -> ${role(n)} (expected ${r})`);
+  }
+  // names after a pen: no purpose, a weight; layer 0; Defpoints, xref layers and "not plotted" are kept
+  for (const n of ['0.3', '0.09', 'T0.13', 'manh', 'Nét mảnh', 'NET-THAY', 'netcat', 'medium', '02', '6 LINE']) assert.equal(layerRole(n).by, 'weight', n);
+  assert.equal(layerRole('net cat').thick, true);
+  assert.equal(layerRole('Nét mảnh').thick, false);
+  assert.equal(layerRole('0.35').thick, true);
+  assert.equal(layerRole('0').by, 'zero');
+  assert.equal(layerRole('Defpoints').by, 'keep');
+  assert.equal(layerRole('PLAN|A-WALL').by, 'keep');
+  assert.equal(layerRole('G-Anno-Nplt').by, 'keep');
+  assert.equal(layerRole('MAU').by, null);
+  // blocks by name, then by what they hold; copied anonymous names say nothing
+  for (const [n, r] of [['TRUC A', 'grid_tag'], ['Grid mark', 'grid_tag'], ['CAOTRINH1', 'symbol'], ['Level mark - Plan', 'symbol'], ['Door mark', 'symbol'], ['KHUNGTEN', 'title'],
+    ['A1_TitleFrame -ARC', 'title'], ['D1', 'door'], ['AW5', 'window'], ['MBCUASO', 'window'], ['Toilet', 'fixture'], ['pheu thu', 'fixture'], ['sofa 3', 'furniture'],
+    ['SCREW20', 'steel'], ['_ArchTick', 'dims'], ['COT', 'column'], ['thangmay', 'equipment']]) assert.equal(blockRole(n), r, `${n} -> ${blockRole(n)}`);
+  assert.equal(blockRole('A$C206177D3'), null);
+  assert.equal(blockRole('SADASAS', { attributes: true, count: 60 }), 'title');
+  assert.equal(blockRole('SADASAS', { attributes: true, count: 4 }), 'symbol');
+});
+
+test('layers of drawings by others: the plot style table read, the plan of a drawing (rename, merge, split, keep, purge, look)', async () => {
+  const { parseCtb, planLayers, planCsv, readMappingCsv, readStandardCsv } = await import('../src/layers.mjs');
+  const zlib = await import('node:zlib');
+  // a .ctb: header, then zlib text; lineweight index 0 is "use object lineweight"
+  const body = 'description="\naci_table_available=TRUE\nplot_style{\n 0{\n  name="Color_1\n  lineweight=13\n }\n 1{\n  name="Color_2\n  lineweight=0\n }\n 6{\n  name="Color_7\n  lineweight=6\n }\n}\ncustom_lineweight_table{\n 0=0.0\n 6=0.18\n 13=0.5\n}\n';
+  const head = Buffer.alloc(60, 0x20);
+  head.write('PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcodec');
+  const ctb = parseCtb(Buffer.concat([head, zlib.deflateSync(Buffer.from(body, 'latin1'))]), 'office.ctb');
+  assert.equal(ctb.pens[1], 0.5);
+  assert.equal(ctb.pens[2], null);
+  assert.equal(ctb.pens[7], 0.18);
+  assert.throws(() => parseCtb(Buffer.from('not a ctb')), /not a plot style/);
+
+  const L = (name, extra = {}) => ({ name, color: 7, linetype: 'Continuous', lineweight: 'default', ...extra });
+  const G = (space, layer, type, count, extra = {}) => ({ space, layer, type, color: 'bylayer', linetype: 'ByLayer', lineweight: 'bylayer', count, ...extra });
+  const survey = {
+    drawing: 'D:/Du an/KT-nha pho.dwg',
+    layers: [L('0', { current: true }), L('Defpoints', { plot: false }), L('TUONG', { lineweight: 0.5 }), L('Kich thuoc', { color: 2 }), L('net manh', { lineweight: 0.09 }), L('TEXT'), L('Cây xanh'), L('Trống')],
+    groups: [
+      G('model', '0', 'LINE', 10, { color: 3 }), G('model', 'TUONG', 'LINE', 20), G('model', 'TUONG', 'HATCH', 5), G('block', 'TUONG', 'LINE', 3),
+      G('model', 'Kich thuoc', 'DIMENSION', 7, { color: 1 }), G('model', 'Kich thuoc', 'TEXT', 2), G('model', 'net manh', 'LINE', 4),
+      G('model', 'TEXT', 'MTEXT', 6), G('model', 'TEXT', 'INSERT', 3, { block: 'TRUC A' }), G('paper', 'Defpoints', 'VIEWPORT', 1), G('model', 'Defpoints', 'LINE', 2),
+      G('block', '0', 'LINE', 50), G('model', 'Cây xanh', 'CIRCLE', 9),
+    ],
+    blocks: [{ name: 'TRUC A', count: 3, refs: 3 }], plot: { color_dependent: true, layouts: [] },
+  };
+  const P = planLayers(survey, { keepLook: false });
+  assert.equal(P.discipline, 'arch'); // KT in the file name
+  const of = (n) => P.layers.find((l) => l.layer === n);
+  assert.deepEqual(of('TUONG').targets, { 'A-WALL': 23, 'A-WALL-PATT': 5 });
+  assert.equal(of('TUONG').action, 'split');
+  assert.deepEqual(of('Kich thuoc').targets, { 'A-ANNO-DIMS': 9 });
+  assert.equal(of('0').targets['A-DETL'], 10);
+  assert.equal(of('0').kept, 50); // layer 0 inside blocks stays
+  assert.deepEqual(of('TEXT').targets, { 'A-ANNO-TEXT': 6, 'S-GRID-IDEN': 3 }); // a grid bubble on a text layer
+  assert.equal(of('Defpoints').kept, 2);
+  assert.equal(of('Defpoints').targets['A-ANNO-VPRT'], 1);
+  // a whole layer to a layer the drawing does not have: renamed (no override to clear); the rest moved by rules
+  assert.ok(P.renames.some((r) => r.from === 'Cây xanh' && r.to === 'L-PLNT' && r.props.color === 3));
+  assert.ok(P.rules.some((r) => r.from === 'Kich thuoc' && r.to === 'A-ANNO-DIMS'));
+  assert.ok(P.rules.some((r) => r.from === 'TUONG' && r.type === 'HATCH' && r.to === 'A-WALL-PATT'));
+  assert.ok(P.rules.some((r) => r.from === '0' && r.color === 3 && r.set?.color === 'bylayer'));
+  assert.ok(!P.rules.some((r) => r.from === '0' && r.space === 'block'));
+  // emptied layers and the empty one go; 0, Defpoints and the targets stay
+  for (const n of ['TUONG', 'Kich thuoc', 'TEXT', 'Trống']) assert.ok(P.delete.includes(n), n);
+  // "net manh" holds only linework of no purpose: it becomes the detail layer itself (renamed), layer 0's lines join it
+  assert.ok(P.renames.some((r) => r.from === 'net manh' && r.to === 'A-DETL'));
+  assert.ok(!P.delete.includes('net manh'));
+  for (const n of ['0', 'Defpoints', 'Cây xanh']) assert.ok(!P.delete.includes(n), n);
+  assert.ok(P.create.some((c) => c.name === 'A-WALL' && c.lineweight === 0.5));
+  assert.equal(P.current, null); // layer 0 is current and stays
+  const Q = planLayers({ ...survey, layers: survey.layers.map((l) => ({ ...l, current: l.name === 'TEXT' })) });
+  assert.equal(Q.current, 'A-ANNO-TEXT'); // the current layer purged: the one most of its entities went to
+  assert.equal(P.summary.overrides_after, 0);
+  // with the look kept: the fine pen of "net manh" (0.09) stays where the standard would plot it thin (0.25)
+  const K = planLayers(survey); // the look kept by default
+  assert.ok(K.rules.some((r) => r.from === 'net manh' && r.set?.lineweight === 0.09));
+  assert.ok(K.summary.overrides_after >= 4);
+  // the user's word: a layer kept, a layer sent elsewhere; a structural drawing by its name
+  const U = planLayers(survey, { keepLook: false, mapping: { 'net manh': 'keep', TEXT: 'GHI-CHU' } });
+  assert.equal(U.layers.find((l) => l.layer === 'net manh').action, 'keep');
+  assert.deepEqual(U.layers.find((l) => l.layer === 'TEXT').targets, { 'GHI-CHU': 9 });
+  const S = planLayers({ ...survey, drawing: 'D:/KC-mong.dwg' }, { keepLook: false });
+  assert.equal(S.discipline, 'struct');
+  assert.deepEqual(S.layers.find((l) => l.layer === 'Kich thuoc').targets, { 'S-ANNO-DIMS': 9 });
+  // a company standard takes the roles it names
+  const C = planLayers(survey, { keepLook: false, standard: readStandardCsv('name;color;linetype;lineweight;plot;role\nCT-TUONG;7;Continuous;0.4;1;wall\nCT-KT;1;Continuous;0.13;1;dims\n') });
+  assert.deepEqual(C.layers.find((l) => l.layer === 'Kich thuoc').targets, { 'CT-KT': 9 });
+  assert.equal(C.layers.find((l) => l.layer === 'TUONG').targets['CT-TUONG'], 23);
+  // the CSV for Excel and back: the column "to" filled where the user disagrees
+  const csv = planCsv(P);
+  assert.ok(csv.startsWith('\uFEFF') && csv.includes('TUONG') && csv.split('\r\n')[0].endsWith(';to'));
+  const edited = csv.replace(/^(TUONG;.*);\r$/m, '$1;CT-TUONG\r').replace(/^(TUONG;[^\r]*);$/m, '$1;CT-TUONG');
+  assert.deepEqual(readMappingCsv(edited), { TUONG: 'CT-TUONG' });
+  assert.throws(() => readMappingCsv('a;b\n1;2'), /layer.*to/);
+});
+
+test('read a plan drawn by others: walls from face pairs, openings by swing, glazing or block, grids with bubbles, rooms', async () => {
+  const { readPlan, planAreas } = await import('../src/readplan.mjs');
+  // two rooms 4000 + 3000 wide, 5000 deep, outer walls 200 (axes on 0 / 7000 / 0 / 5000), a 100 partition at x 4000
+  const layers = ['TUONG', 'CUA', 'TRUC', 'TEXT', 'KICH THUOC'];
+  const lines = [];
+  const L = (x1, y1, x2, y2, li = 0, ti = 0, h = `h${lines.length}`) => lines.push([x1, y1, x2, y2, li, ti, h]);
+  // outer faces (-100 / 7100, -100 / 5100) and inner faces (100 / 6900, 100 / 4900); the front wall (y 0) has a door
+  // gap 1500..2400 (900) and a window gap 5000..6200 (1200)
+  L(-100, -100, 1500, -100); L(2400, -100, 5000, -100); L(6200, -100, 7100, -100);
+  L(100, 100, 1500, 100); L(2400, 100, 3950, 100); L(4050, 100, 5000, 100); L(6200, 100, 6900, 100);
+  L(-100, 5100, 7100, 5100); L(100, 4900, 3950, 4900); L(4050, 4900, 6900, 4900);
+  L(-100, -100, -100, 5100); L(100, 100, 100, 4900); L(7100, -100, 7100, 5100); L(6900, 100, 6900, 4900);
+  L(3950, 100, 3950, 4900); L(4050, 100, 4050, 4900);
+  // window glazing in the gap, along the wall; dimension lines that must not count
+  L(5000, -30, 6200, -30, 1); L(5000, 30, 6200, 30, 1);
+  L(-100, -1500, 7100, -1500, 4); L(-100, -1600, 7100, -1600, 4);
+  // grids: centre lines 1 / 2 / 3 and A / B with their bubbles
+  for (const [x, lab] of [[0, '1'], [4000, '2'], [7000, '3']]) L(x, -2500, x, 6500, 2, 1);
+  for (const [y, lab] of [[0, 'A'], [5000, 'B']]) L(-2500, y, 8500, y, 2, 1);
+  const circles = [[0, -3000, 400, 2, 'c1'], [4000, -3000, 400, 2, 'c2'], [7000, -3000, 400, 2, 'c3'], [-3000, 0, 400, 2, 'c4'], [-3000, 5000, 400, 2, 'c5']];
+  const texts = [[0, -3000, 350, '1', 3, 't1'], [4000, -3000, 350, '2', 3, 't2'], [7000, -3000, 350, '3', 3, 't3'], [-3000, 0, 350, 'A', 3, 't4'], [-3000, 5000, 350, 'B', 3, 't5'],
+    [2000, 2500, 300, 'PHÒNG KHÁCH', 3, 't6'], [5500, 2500, 300, 'Phòng ngủ', 3, 't7'], [1950, -700, 250, 'D1', 3, 't8'], [5600, -700, 250, 'S1', 3, 't9'], [2000, 2000, 250, '20.5 m2', 3, 't10']];
+  // the door swing: hinged at x 1500, radius 900, into the room
+  const arcs = [[1500, 0, 900, 0, 90, 1, 'a1']];
+  const g = { units: 'mm', layers, linetypes: ['Continuous', 'CENTER'], lines, polys: [], arcs, circles, texts, inserts: [], hatches: [] };
+  const r = readPlan(g);
+  const W = r.spec.walls;
+  assert.ok(W.every((w) => [100, 200].includes(w.thickness)), JSON.stringify(W));
+  const along = (y) => W.filter((w) => w.points[0][1] === y && w.points[1][1] === y);
+  assert.ok(along(0).length >= 1 && along(5000).length >= 1, JSON.stringify(W));
+  // the partition reaches the axes of the walls it meets
+  const part = W.find((w) => w.points[0][0] === 4000 && w.points[1][0] === 4000);
+  assert.ok(part && part.thickness === 100 && Math.min(part.points[0][1], part.points[1][1]) === 0 && Math.max(part.points[0][1], part.points[1][1]) === 5000, JSON.stringify(part));
+  // the corners meet on the axes
+  assert.ok(W.some((w) => w.points.some((p) => p[0] === 0 && p[1] === 0)));
+  assert.ok(W.some((w) => w.points.some((p) => p[0] === 7000 && p[1] === 5000)));
+  const door = r.spec.openings.find((o) => o.type === 'door');
+  assert.deepEqual([door.at, door.width, door.tag], [[1950, 0], 900, 'D1']);
+  assert.ok(door.toward[1] > 0); // it swings into the room
+  const win = r.spec.openings.find((o) => o.type === 'window');
+  assert.deepEqual([win.at, win.width, win.tag], [[5600, 0], 1200, 'S1']);
+  assert.equal(r.spec.openings.length, 2);
+  assert.deepEqual(r.spec.grids.x, [{ at: 0, label: '1' }, { at: 4000, label: '2' }, { at: 7000, label: '3' }]);
+  assert.deepEqual(r.spec.grids.y, [{ at: 0, label: 'A' }, { at: 5000, label: 'B' }]);
+  assert.deepEqual(r.spec.rooms.map((x) => x.name).sort(), ['PHÒNG KHÁCH', 'PHÒNG NGỦ']);
+  assert.ok(r.used.includes('a1') && r.used.includes('t8'));
+  // the plan sits in one area of the model space, found and ranked with its door and room names
+  const areas = planAreas(g);
+  assert.equal(areas.length, 1);
+  assert.ok(areas[0].doors >= 1 && areas[0].room_names === 2 && areas[0].window[0][0] <= -100);
+  // beyond face pairs: a curtain wall (two glass lines 50 apart), a door drawn as a leaf line, a stair of equal treads
+  // with LÊN at its foot, a level, a wall drawn as one wide polyline
+  const g2 = JSON.parse(JSON.stringify(g));
+  g2.layers.push('A-GLAZ', 'A-FLOR-STRS', 'TUONG DAY');
+  const gl = g2.layers.indexOf('A-GLAZ'), sl = g2.layers.indexOf('A-FLOR-STRS'), wl = g2.layers.indexOf('TUONG DAY');
+  g2.lines.push([-100, 8000, 7000, 8000, gl, 0, 'g1'], [-100, 8050, 7000, 8050, gl, 0, 'g2']);
+  for (let i = 0; i <= 8; i++) g2.lines.push([9000, 1000 + i * 270, 10200, 1000 + i * 270, sl, 0, `s${i}`]);
+  g2.texts.push([9600, 700, 250, 'LÊN', 3, 'up'], [3000, 3500, 250, '+0.000', 3, 'lv']);
+  g2.polys.push([wl, 0, 0, 0, [12000, 0, 12000, 4000], 'wp', 220]);
+  const r2 = readPlan(g2);
+  const cw = r2.spec.walls.find((w) => w.material === 'none');
+  assert.ok(cw && cw.thickness === 50 && r2.spec.openings.some((o) => o.wall === cw.id && o.type === 'window' && o.width > 7000), JSON.stringify(cw));
+  assert.deepEqual(r2.spec.stairs, [{ start: [9600, 1000], direction: 90, width: 1200, treads: 8, going: 270 }]);
+  assert.deepEqual(r2.spec.levels, [{ at: [3000, 3500], value: '+0.000' }]);
+  assert.ok(r2.spec.walls.some((w) => w.thickness === 220 && w.points[0][0] === 12000));
+  assert.equal(r2.found.glazed_walls, 1);
+  // a window that misses the plan reads nothing
+  assert.equal(readPlan(g, { window: [[20000, 20000], [30000, 30000]] }).spec.walls.length, 0);
 });
 
 test('electrical set: boards, switches by the doors, sockets, air conditioners, circuits, breakers and cables', () => {
@@ -2297,8 +2775,8 @@ async function smoke() {
     const list = await rpc('tools/list', {});
     assert.ok(list.result, list.error?.message);
     const names = list.result.tools.map((t) => t.name);
-    assert.equal(names.length, 62, names.join(','));
-    for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff', 'draw_electrical_plan', 'draw_plumbing_plan', 'plumbing_calc', 'measure_model', 'verify_quantities']) assert.ok(names.includes(t));
+    assert.equal(names.length, 80, names.join(','));
+    for (const t of ['draw_plan', 'screenshot', 'install_autocad_bridge', 'quantity_takeoff', 'draw_electrical_plan', 'draw_plumbing_plan', 'plumbing_calc', 'measure_model', 'verify_quantities', 'list_views', 'standardize_layers', 'close_drawing', 'read_plan', 'revision_cloud', 'compare_drawings', 'stretch_entities', 'replace_text', 'convert_vietnamese_text', 'describe_drawing', 'check_annotations', 'list_texts', 'update_texts', 'clean_drawing', 'describe_folder', 'manage_images', 'retitle_view', 'update_title_blocks']) assert.ok(names.includes(t));
     const ping = await rpc('tools/call', { name: 'ping', arguments: {} });
     assert.equal(ping.result.isError, true);
     assert.match(ping.result.content[0].text, /Cannot connect to AutoCAD/);

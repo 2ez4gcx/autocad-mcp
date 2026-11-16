@@ -31,6 +31,22 @@ namespace AcadMcp
             Reg("quantity_takeoff", Mode.Read, Takeoff.Quantity);
             Reg("check_drawing", Mode.Read, Takeoff.Check);
             Reg("measure_model", Mode.Read, Measure.Run);
+            Reg("view_list", Mode.Read, Views.List);
+            Reg("view_diff", Mode.Read, Views.Diff);
+            Reg("layer_survey", Mode.Read, LayerTools.Survey);
+            Reg("layer_remap", Mode.Write, LayerTools.Remap);
+            Reg("plan_geometry", Mode.Read, PlanRead.Run);
+            Reg("stretch", Mode.Write, Edit.Stretch);
+            Reg("replace_text", Mode.Write, Edit.ReplaceText);
+            Reg("drawing_diff", Mode.Read, Edit.Diff);
+            Reg("model_map", Mode.Read, Edit.ModelMap);
+            Reg("view_extents", Mode.Read, Edit.ViewExtents);
+            Reg("annotation_data", Mode.Read, Review.AnnotationData);
+            Reg("set_texts", Mode.Write, Review.SetTexts);
+            Reg("text_list", Mode.Read, Review.TextList);
+            Reg("clean", Mode.Write, Review.Clean);
+            Reg("convert_text", Mode.Write, Edit.ConvertText);
+            Reg("layout_views", Mode.Read, Edit.LayoutViews);
             Reg("draw_entities", Mode.Write, DrawEntities);
             Reg("draw_plan", Mode.Write, Plan.DrawPlan);
             Reg("define_block", Mode.Write, DefineBlock);
@@ -43,6 +59,9 @@ namespace AcadMcp
             Reg("setup_styles", Mode.Write, Styles.Setup);
             Reg("purge_drawing", Mode.Write, Purge);
             Table["purge_drawing"].ModeFor = p => p.Bool("dry_run", false) ? Mode.Read : Mode.Write;
+            // a drawing on disk read in the background needs no drawing open in the editor
+            Table["model_map"].ModeFor = p => p.Has("path") ? Mode.Session : Mode.Read;
+            Table["layout_views"].ModeFor = p => p.Has("path") ? Mode.Session : Mode.Read;
             Reg("undo", Mode.CommandContext, Undo);
             Reg("run_lisp", Mode.Lisp, null);
             Reg("set_view", Mode.Write, Media.SetView);
@@ -55,6 +74,7 @@ namespace AcadMcp
             Reg("export_pdf", Mode.App, Sheets.ExportPdf);
             Reg("save_drawing", Mode.App, Media.Save);
             Reg("open_drawing", Mode.App, Media.Open);
+            Reg("close_drawing", Mode.App, Media.Close);
             Reg("new_drawing", Mode.Session, Media.New);
         }
 
@@ -408,9 +428,13 @@ namespace AcadMcp
                 // Model space by default: after create_layout the current space may be a layout.
                 BlockTableRecord space = p.Str("space") == "current" ? U.CurrentSpace(db, tr, OpenMode.ForWrite) : U.ModelSpace(db, tr, OpenMode.ForWrite);
                 var dr = new Drawer(db, tr, space, p.Obj("layer_styles"));
+                P view = p.Obj("view");
+                var viewOut = Views.Begin(db, tr, space, dr, view);
                 var results = dr.DrawAll(specs, "entities");
+                Views.End(db, tr, view);
                 tr.Commit();
                 var r = new Dictionary<string, object> { { "count", dr.Count }, { "results", results }, { "bounds", U.BoundsOut(dr.Bounds) } };
+                if (viewOut != null) r["view"] = viewOut;
                 if (dr.CreatedLayers.Count > 0) r["created_layers"] = dr.CreatedLayers;
                 return r;
             }
