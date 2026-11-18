@@ -2,7 +2,7 @@
 // elevation with its sizes and opening direction, its count by floor, and the table of types. Pure geometry: returns
 // draw_entities specs. Types come from the openings of the plan description (by tag, kind and size).
 import { buildBuilding, isOutside, roomAt } from './elevation.mjs';
-import { dimStyleName, ROLE, TEXT_STYLE, viewTitle } from './standards.mjs';
+import { dimStyleName, ROLE, TEXT_STYLE, viewTitle, ROOM } from './standards.mjs';
 import { tagSym } from './symbols.mjs';
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -28,8 +28,7 @@ const MATERIAL_EN = {
   door_wet: 'Aluminium system door, 8 mm frosted tempered glass, water resistant (toilet door), matching hardware',
   door_outside: 'Aluminium system door, 8 mm tempered glass (door to a yard, a balcony, the open air), matching hardware',
 };
-const WET = /(WC|VỆ SINH|TẮM|TOILET|BATH|WASH)/i;
-const OUTDOOR = /(SÂN|HIÊN|BAN CÔNG|LÔ GIA|LOGIA|BALCONY|TERRACE|PORCH|YARD)/i;
+const WET = ROOM.wet, OUTDOOR = ROOM.outdoor;
 
 /**
  * What a door serves, from the rooms on its two sides: 'wet' (a toilet or bathroom), 'outside' (the open air, a

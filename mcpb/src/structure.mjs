@@ -3,7 +3,7 @@
 // draw_entities specs. Sizes and reinforcement come from the user / the structural engineer: nothing is calculated
 // here except lengths, counts and weights.
 import { buildWalls, gridList, num, PlanError, pt } from './plan.mjs';
-import { dimStyleName, FIELD, TEXT_STYLE, viewTitle } from './standards.mjs';
+import { dimStyleName, FIELD, TEXT_STYLE, viewTitle, ROOM } from './standards.mjs';
 import { sym } from './symbols.mjs';
 import { freePoint, inside } from './interior.mjs';
 import { lintelRows } from './solids.mjs';
@@ -447,9 +447,7 @@ const dot2 = (a, b) => a[0] * b[0] + a[1] * b[1];
 const cross2 = (a, b) => a[0] * b[1] - a[1] * b[0];
 const leftOf = (d) => [-d[1], d[0]];
 const fmtLv = (mm) => (Math.abs(mm) < 0.5 ? '±0.000' : `${mm > 0 ? '+' : '-'}${(Math.abs(mm) / 1000).toFixed(3)}`);
-const WET_ROOM = /(WC|VỆ SINH|TẮM|TOILET|BATH)/i;
-const OUT_ROOM = /(BAN CÔNG|LÔ GIA|LOGIA|SÂN|BALCONY|TERRACE)/i;
-const STAIR_ROOM = /(CẦU THANG|STAIR)/i;
+const WET_ROOM = ROOM.wet, OUT_ROOM = ROOM.outdoor, STAIR_ROOM = ROOM.stairs;
 
 /** Text along a direction, kept readable (never upside down). */
 const readable = (d) => {

@@ -8,7 +8,7 @@
 // a licensed structural engineer checks it, calculates it again and signs it. Pure computation and draw_entities specs.
 import { buildModel, floorsOf } from './elevation.mjs';
 import { gridList, num, PlanError, uStairGeom } from './plan.mjs';
-import { floorTag, TEXT_STYLE } from './standards.mjs';
+import { floorTag, TEXT_STYLE, ROOM } from './standards.mjs';
 import { framingPlan, SL } from './structure.mjs';
 
 const r1 = (v) => Math.round(v * 10) / 10;
@@ -20,7 +20,7 @@ const area = (d) => (Math.PI * d * d) / 4;
 const sum = (xs) => xs.reduce((s, x) => s + x, 0);
 
 /** TCVN 5574:2018, design strengths in MPa (Table 10 concrete, Table 13 steel). */
-export const CONCRETE = { B15: { Rb: 8.5, Rbt: 0.75 }, B20: { Rb: 11.5, Rbt: 0.9 }, B25: { Rb: 14.5, Rbt: 1.05 }, B30: { Rb: 17, Rbt: 1.15 } };
+export const CONCRETE = { B15: { Rb: 8.5, Rbt: 0.75, Eb: 24000 }, B20: { Rb: 11.5, Rbt: 0.9, Eb: 27500 }, B25: { Rb: 14.5, Rbt: 1.05, Eb: 30000 }, B30: { Rb: 17, Rbt: 1.15, Eb: 32500 } };
 export const STEEL = {
   'CB240-T': { Rs: 210, Rsc: 210, Rsw: 170 }, 'CB300-V': { Rs: 260, Rsc: 260, Rsw: 210 },
   'CB400-V': { Rs: 350, Rsc: 350, Rsw: 280 }, 'CB500-V': { Rs: 435, Rsc: 400, Rsw: 300 },
@@ -29,12 +29,12 @@ const ES = 200000;
 
 /** Live loads (kPa, TCVN 2737:2023 for dwellings) by room name; the first match wins. */
 export const LIVE = [
-  { key: 'stair', re: /(CẦU THANG|STAIR)/i, p: 3, vi: 'Cầu thang', en: 'Stairs' },
-  { key: 'hall', re: /(SẢNH|HÀNH LANG|HALL|CORRIDOR|LOBBY)/i, p: 3, vi: 'Sảnh, hành lang', en: 'Halls, corridors' },
-  { key: 'balcony', re: /(BAN CÔNG|LÔ GIA|LOGIA|SÂN PHƠI|BALCONY|LOGGIA)/i, p: 2, vi: 'Ban công, sân phơi', en: 'Balconies' },
-  { key: 'terrace', re: /(SÂN THƯỢNG|TERRACE)/i, p: 1.5, vi: 'Sân thượng (mái có sử dụng)', en: 'Roof terrace (used)' },
-  { key: 'wet', re: /(WC|VỆ SINH|TẮM|TOILET|BATH)/i, p: 1.5, vi: 'Phòng vệ sinh', en: 'Toilets' },
-  { key: 'store', re: /(KHO|STORE)/i, p: 2, vi: 'Kho nhỏ trong nhà ở', en: 'Small stores' },
+  { key: 'stair', re: ROOM.stairs, p: 3, vi: 'Cầu thang', en: 'Stairs' },
+  { key: 'hall', re: ROOM.hall, p: 3, vi: 'Sảnh, hành lang', en: 'Halls, corridors' },
+  { key: 'balcony', re: ROOM.balcony, p: 2, vi: 'Ban công, sân phơi', en: 'Balconies' },
+  { key: 'terrace', re: ROOM.terrace, p: 1.5, vi: 'Sân thượng (mái có sử dụng)', en: 'Roof terrace (used)' },
+  { key: 'wet', re: ROOM.wet, p: 1.5, vi: 'Phòng vệ sinh', en: 'Toilets' },
+  { key: 'store', re: ROOM.store, p: 2, vi: 'Kho nhỏ trong nhà ở', en: 'Small stores' },
   { key: 'room', re: /.*/, p: 1.5, vi: 'Phòng ở, phòng khách, bếp, phòng thờ', en: 'Rooms, living, kitchen' },
 ];
 /**
@@ -600,6 +600,59 @@ export function buckling(lambda) {
   return Math.max(0.3, 0.7 - 0.026 * (lambda - 20));
 }
 
+/**
+ * A rectangular column in eccentric compression about one axis, bars the same on both faces (TCVN 5574:2018 8.1.2.3,
+ * 8.1.2.4): b across the bending, h along it (mm), N (kN), M (kNm, first order), l0 (mm), AsFace the bars on each of the
+ * two faces (mm²), a their cover to the bar centre. e0 = M/N, at least the random eccentricity ea = max(l0/600, h/30,
+ * 10); η = 1 / (1 - N/Ncr) with D = 0.15 Eb I / (φl (0.3 + δe)) + 0.7 Es Is, φl = 2 (the load is mostly long-term);
+ * x from the equilibrium (σs falling from Rs past ξR), then N e ≤ Rb b x (h0 - x/2) + Rsc As' (h0 - a').
+ * Returns {e0, ea, eta, x, Mu (kNm, the moment about the tension bars the section takes), util = N e / Mu, ok}.
+ */
+export function eccentricColumn({ N, M, b, h, l0, AsFace, a = 40, mat }) {
+  const { Rb, Eb = 27500 } = mat.c, { Rs, Rsc } = mat.s;
+  const h0 = h - a, Nn = N * 1000;
+  if (!(Nn > 0)) return { e0: 0, ea: 0, eta: 1, x: 0, Mu: 0, util: 0, ok: true };
+  const ea = Math.max(l0 / 600, h / 30, 10);
+  const e0 = Math.max((Math.abs(M) * 1e6) / Nn, ea);
+  const de = Math.min(1.5, Math.max(0.15, e0 / h));
+  const I = (b * h ** 3) / 12, Is = 2 * AsFace * (h / 2 - a) ** 2;
+  const D = (0.15 * Eb * I) / (2 * (0.3 + de)) + 0.7 * ES * Is;
+  const Ncr = (Math.PI ** 2 * D) / l0 ** 2;
+  if (Nn >= 0.95 * Ncr) return { e0, ea, eta: Infinity, x: h, Mu: 0, util: Infinity, ok: false, Ncr: Ncr / 1000 };
+  const eta = 1 / (1 - Nn / Ncr);
+  const e = e0 * eta + h / 2 - a;
+  const xiR = 0.8 / (1 + Rs / ES / 0.0035);
+  // equilibrium: N = Rb b x + Rsc As' - σs As, σs = Rs up to ξR h0, then falling to -Rsc at x = h0 (linear in x/h0)
+  const sigma = (x) => (x <= xiR * h0 ? Rs : Math.max(-Rsc, Rs * ((2 * (1 - x / h0)) / (1 - xiR) - 1)));
+  const f = (x) => Rb * b * x + Rsc * AsFace - sigma(x) * AsFace - Nn;
+  let x;
+  const x1 = (Nn - Rsc * AsFace + Rs * AsFace) / (Rb * b);
+  if (x1 <= xiR * h0) x = Math.max(x1, 0);
+  else {
+    let lo = xiR * h0, hi = h;
+    if (f(hi) < 0) x = h;
+    else {
+      for (let i = 0; i < 60; i++) {
+        const mid = (lo + hi) / 2;
+        if (f(mid) > 0) hi = mid;
+        else lo = mid;
+      }
+      x = (lo + hi) / 2;
+    }
+  }
+  // a compression zone thinner than 2a': the compression bars do not yield, moment about them instead
+  let Mu, need;
+  if (x < 2 * a) {
+    Mu = Rs * AsFace * (h0 - a);
+    need = Nn * Math.max(0, e0 * eta - h / 2 + a);
+  } else {
+    Mu = Rb * b * x * (h0 - x / 2) + Rsc * AsFace * (h0 - a);
+    need = Nn * e;
+  }
+  const util = Mu > 0 ? need / Mu : Infinity;
+  return { e0, ea, eta, x, Mu: Mu / 1e6, util, ok: util <= 1 + 1e-9, Ncr: Ncr / 1000 };
+}
+
 /** Column sections tried in turn (short side, long side, bars n, d: about 1.4 to 1.7 % of steel). */
 const COLUMN_SIZES = [[220, 220, 4, 16], [220, 300, 4, 18], [300, 300, 4, 20], [300, 400, 6, 20], [400, 400, 8, 20], [400, 500, 8, 22], [500, 500, 8, 25], [500, 600, 10, 25], [600, 600, 12, 25]];
 const columnBars = (b, h) => {
@@ -825,19 +878,33 @@ export function structuralCalc({ spec, rooms = {}, concrete = 'B20', steel = 'CB
       if (c.on) continue;
       let R = 0;
       const parts = [];
+      // fixed-end moments of the spans on each side of the column (dead load, and dead + live), beam stiffnesses
+      const fem = { x: { neg: [0, 0], pos: [0, 0], Kb: 0 }, y: { neg: [0, 0], pos: [0, 0], Kb: 0 } };
       for (const m of members) {
         m.supports.forEach((u, j) => {
           if (!near([m.A[0] + m.d[0] * u, m.A[1] + m.d[1] * u], c.p)) return;
           // a beam may pull up on a column (a short span beside a long one): the beams meeting there are summed
           R += m.reactions[j];
           parts.push({ beam: m.name, R: m.reactions[j] });
+          if (!m.span || !m.load) return;
+          const F = fem[Math.abs(m.d[0]) >= Math.abs(m.d[1]) ? 'x' : 'y'];
+          const fwd = m.d[0] + m.d[1] >= 0;
+          for (const [s, side] of [[j - 1, fwd ? 'neg' : 'pos'], [j, fwd ? 'pos' : 'neg']]) {
+            const L = m.span[s], q = m.load[s];
+            if (!(L > 0) || !q) continue;
+            F[side][0] += (q.g * L * L) / 12;
+            F[side][1] += ((q.g + q.p) * L * L) / 12;
+            F.Kb += ((m.b * m.h ** 3) / 12) / (L * 1000);
+          }
         });
       }
+      // the worst unbalance: the live load on one side only
+      const unb = (F) => Math.max(Math.abs(F.pos[1] - F.neg[0]), Math.abs(F.neg[1] - F.pos[0]));
       R = Math.max(0, R);
       c.R += R;
       c.H += storey;
       if (i > 0) c.hs.push(storey);
-      c.levels.push({ slab: S.name, R, parts });
+      c.levels.push({ slab: S.name, R, parts, h: storey, dM: { x: unb(fem.x), y: unb(fem.y) }, Kb: { x: fem.x.Kb, y: fem.y.Kb } });
       if (c.top === null) c.top = S.level;
       c.bottom = i > 0 ? slabs[i - 1].level : -(depth - fH);
     }
@@ -905,12 +972,33 @@ export function structuralCalc({ spec, rooms = {}, concrete = 'B20', steel = 'CB
   const baseArea = base[0] * base[1];
   const tries = [{ size: base, bars: column.bars ?? columnBars(base[0], base[1]) },
     ...COLUMN_SIZES.filter((q) => q[0] * q[1] > baseArea && q[0] >= Math.min(...base)).map((q) => ({ size: orient(q[0], q[1]), bars: { n: q[2], d: q[3] } }))];
+  // bars on one face of a section: 2 of 4, 3 of 8 (and of 6 on the long faces), 4 of 12, in proportion beyond
+  const faceBars = (n) => (n <= 4 ? 2 : n <= 8 ? 3 : Math.round(n / 4) + 1);
   const check = (c, t) => {
     const N = c.R + colKN(t.size) * c.H;
     const l0 = 700 * Math.max(...c.hs, 0), lambda = l0 / Math.min(...t.size), phi = buckling(lambda);
     const As = t.bars.n * area(t.bars.d);
     const cap = (phi * (mat.c.Rb * t.size[0] * t.size[1] + mat.s.Rsc * As)) / 1000;
-    return { N, l0, lambda, phi, As, cap, ok: N <= cap, size: t.size, bars: t.bars };
+    // eccentric compression storey by storey (levels from the top down): the moment the beams at the top of the storey
+    // cannot balance, shared between the column above, the column below and the beams by their stiffness
+    let ecc = null, Ncum = 0, Hcum = 0;
+    const AsFace = faceBars(t.bars.n) * area(t.bars.d), aBar = cover + 8 + t.bars.d / 2;
+    c.levels.forEach((lv, k) => {
+      Ncum += lv.R;
+      Hcum += lv.h;
+      if (!(lv.h > 0)) return;
+      const Nk = Ncum + colKN(t.size) * Hcum;
+      const above = k > 0 ? c.levels[k - 1].h : 0;
+      for (const [dir, hh, bb] of [['x', t.size[0], t.size[1]], ['y', t.size[1], t.size[0]]]) {
+        const Ic = (bb * hh ** 3) / 12;
+        const Kc = Ic / (lv.h * 1000), Ka = above > 0 ? Ic / (above * 1000) : 0;
+        // the stub under the ground beams: their moments go to the footing (its pad is checked for the load); ea only
+        const M = lv.dM?.[dir] && lv.slab !== FOUND ? (lv.dM[dir] * Kc) / (Kc + Ka + (lv.Kb?.[dir] ?? 0)) : 0;
+        const e = eccentricColumn({ N: Nk, M, b: bb, h: hh, l0: 700 * lv.h, AsFace, a: aBar, mat });
+        if (!ecc || e.util > ecc.util) ecc = { ...e, N: Nk, M, dir, slab: lv.slab };
+      }
+    });
+    return { N, l0, lambda, phi, As, cap, ecc, ok: N <= cap && (!ecc || ecc.ok), size: t.size, bars: t.bars };
   };
   const designed = stacks.filter((c) => c.levels.length).map((c) => {
     const first = check(c, tries[0]);
@@ -923,7 +1011,7 @@ export function structuralCalc({ spec, rooms = {}, concrete = 'B20', steel = 'CB
     const [a0, a1] = a.split('x').map(Number), [b0, b1] = b.split('x').map(Number);
     return a0 * a1 - b0 * b1 || a0 - b0;
   });
-  assumed.push({ item: 'column', value: `${keyOf(base)}, ${tries[0].bars.n}Ø${tries[0].bars.d}, φ by l0/h (l0 = 0.7 H)`, note: 'axial load only, the frame moments are not taken; a size that fails goes up to the next one' });
+  assumed.push({ item: 'column', value: `${keyOf(base)}, ${tries[0].bars.n}Ø${tries[0].bars.d}, φ by l0/h (l0 = 0.7 H)`, note: 'axial load at the base, and eccentric compression storey by storey: the moment the beams at a column cannot balance (fixed-end moments, live load on one side) shared with the columns by stiffness, random eccentricity max(l0/600, h/30, 10 mm), η by Ncr; no sway (wind, earthquake) moments; a size that fails goes up to the next one' });
   // ---- pad footings: side from the bearing pressure, thickness from punching, mesh from bending
   const fB = num(footing.B ?? 1200, 'footing.B', { positive: true }), fL = num(footing.L ?? footing.B ?? 1200, 'footing.L', { positive: true });
   const minSide = Math.max(fB, fL);
@@ -950,15 +1038,19 @@ export function structuralCalc({ spec, rooms = {}, concrete = 'B20', steel = 'CB
     return {
       name: c.name, N: r1(use.N), size: use.size, bars: use.bars, As: Math.round(use.As), mark: `C${sizeKeys.indexOf(keyOf(use.size)) + 1}`,
       lambda: r1(use.lambda), phi: Math.round(use.phi * 1000) / 1000, cap: r1(use.cap), colOk: use.ok,
+      ecc: use.ecc ? { slab: use.ecc.slab, dir: use.ecc.dir, N: r1(use.ecc.N), M: r1(use.ecc.M), e0: r1(use.ecc.e0), eta: Number.isFinite(use.ecc.eta) ? r2(use.ecc.eta) : null, util: Number.isFinite(use.ecc.util) ? r2(use.ecc.util) : null, ok: use.ecc.ok } : null,
       // the preliminary size, when it had to go up
-      first: keyOf(first.size) === keyOf(use.size) ? null : { size: first.size, N: r1(first.N), cap: r1(first.cap) },
+      first: keyOf(first.size) === keyOf(use.size) ? null : { size: first.size, N: r1(first.N), cap: r1(first.cap), ecc: first.ecc ? { slab: first.ecc.slab, N: r1(first.ecc.N), M: r1(first.ecc.M) } : null },
       on: c.on, Areq: pad ? r2(pad.Areq) : 0, A: pad ? r2(pad.A) : 0, footOk: !pad || (type.ok && pad.Areq <= pad.A + 1e-9), side: pad ? pad.side : 0,
       foot: type ? { mark: type.mark, B: type.B, L: type.L, H: type.H, mesh: type.mesh } : null,
       at: c.p, top: c.top, bottom: c.bottom, storeys: c.levels.filter((x) => x.slab !== FOUND).length, R: c.R, H: c.H, hs: c.hs, levels: c.levels,
     };
   });
   for (const c of columns) {
-    if (c.first) warnings.push(`column ${c.name}: N = ${c.first.N} kN is over the ${r1(c.first.cap)} kN of ${keyOf(c.first.size)}: designed ${keyOf(c.size)} with ${c.bars.n}Ø${c.bars.d} (${c.cap} kN)`);
+    if (c.first) warnings.push(c.first.N > c.first.cap
+      ? `column ${c.name}: N = ${c.first.N} kN is over the ${r1(c.first.cap)} kN of ${keyOf(c.first.size)}: designed ${keyOf(c.size)} with ${c.bars.n}Ø${c.bars.d} (${c.cap} kN)`
+      : `column ${c.name}: ${keyOf(c.first.size)} fails in eccentric compression (N = ${c.first.ecc?.N} kN with M = ${c.first.ecc?.M} kNm under ${c.first.ecc?.slab}): designed ${keyOf(c.size)} with ${c.bars.n}Ø${c.bars.d}`);
+    if (c.colOk === false && c.ecc && !c.ecc.ok && c.N <= c.cap) warnings.push(`column ${c.name}: ${keyOf(c.size)} fails in eccentric compression under ${c.ecc.slab} (N = ${c.ecc.N} kN, M = ${c.ecc.M} kNm): the engineer designs it`);
     if (!c.colOk) warnings.push(`column ${c.name}: N = ${c.N} kN over the capacity ${c.cap} kN of the largest size tried (${keyOf(c.size)}): the engineer designs it`);
     if (c.lambda > 20) warnings.push(`column ${c.name}: l0/h = ${c.lambda} is over 20: slender, the engineer designs it`);
     if (!c.footOk) warnings.push(`footing under ${c.name}: ${c.foot ? `${c.foot.B}x${c.foot.L}x${c.foot.H}` : ''} does not pass (bearing, punching or bending): the engineer designs it`);
@@ -1088,16 +1180,16 @@ export function calcTables(R, lang = 'vi') {
   }
   t.push({ side: 'right', order: 0, title: en ? 'BEAMS: FORCES AND REINFORCEMENT' : 'DẦM: NỘI LỰC VÀ CỐT THÉP', widths: [26, 18, 46, 18, 18, 12, 20, 18, 12, 20, 16, 26, 24], rows: br });
   // columns and footings as designed
-  const cr = [[en ? 'COLUMN' : 'CỘT', 'N (kN)', en ? 'SECTION' : 'TIẾT DIỆN', en ? 'BARS' : 'THÉP DỌC', 'l0/h', 'φ', en ? 'CAPACITY (kN)' : 'KHẢ NĂNG (kN)', en ? 'COLUMN' : 'KẾT LUẬN CỘT',
+  const cr = [[en ? 'COLUMN' : 'CỘT', 'N (kN)', en ? 'SECTION' : 'TIẾT DIỆN', en ? 'BARS' : 'THÉP DỌC', 'l0/h', 'φ', en ? 'CAPACITY (kN)' : 'KHẢ NĂNG (kN)', en ? 'M (kNm); N e / [M]' : 'M (kNm); N e / [M]', en ? 'COLUMN' : 'KẾT LUẬN CỘT',
     en ? 'A REQ. (m²)' : 'A CẦN (m²)', en ? 'FOOTING' : 'MÓNG CHỌN', en ? 'H, MESH' : 'H, LƯỚI THÉP', en ? 'FOOTING' : 'KẾT LUẬN MÓNG']];
   for (const col of R.columns) {
     const on = col.on ? (en ? `on the ${col.on} beams` : `trên dầm sàn ${col.on}`) : null;
     const okc = col.colOk ? (col.first ? (en ? `OK (was ${col.first.size.join('x')})` : `ĐẠT (tăng từ ${col.first.size.join('x')})`) : (en ? 'OK' : 'ĐẠT')) : (en ? 'NO' : 'KHÔNG ĐẠT');
-    cr.push([`${col.name} (${col.mark})`, f(col.N, 1), col.size.join('x'), bar(col.bars), f(col.lambda, 1), f(col.phi, 2), f(col.cap, 1), okc,
+    cr.push([`${col.name} (${col.mark})`, f(col.N, 1), col.size.join('x'), bar(col.bars), f(col.lambda, 1), f(col.phi, 2), f(col.cap, 1), col.ecc ? `${f(col.ecc.M, 1)}; ${col.ecc.util === null ? '> 1' : f(col.ecc.util, 2)}` : '-', okc,
       on ? '-' : f(col.Areq, 2), on ? '-' : `${col.foot.mark} ${col.foot.B}x${col.foot.L}`, on ? '-' : `${col.foot.H}, Ø${col.foot.mesh.d}a${col.foot.mesh.spacing}`,
       on ?? (col.footOk ? (en ? 'OK' : 'ĐẠT') : (en ? 'NO' : 'KHÔNG ĐẠT'))]);
   }
-  t.push({ side: 'right', order: 1, title: en ? `COLUMNS AND PAD FOOTINGS (R = ${R.soil} kPa assumed)` : `CỘT VÀ MÓNG ĐƠN (giả thiết R = ${R.soil} kPa)`, widths: [30, 16, 18, 16, 11, 11, 22, 34, 18, 30, 30, 38], rows: cr });
+  t.push({ side: 'right', order: 1, title: en ? `COLUMNS AND PAD FOOTINGS (R = ${R.soil} kPa assumed)` : `CỘT VÀ MÓNG ĐƠN (giả thiết R = ${R.soil} kPa)`, widths: [30, 16, 18, 16, 11, 11, 22, 26, 34, 18, 30, 30, 38], rows: cr });
   return t;
 }
 
@@ -1120,7 +1212,7 @@ export function calcNotes(R, lang = 'vi') {
     'Walls on the beams and partitions on the slab with their openings deducted; partitions spread over their panel.',
     'Continuous beams, elastic: live load on all, odd and even spans; end supports (framing into columns) qL²/24. A beam resting on a beam is hinged there and its reaction is a point load on the carrying beam (+P).',
     'Stirrups: Q ≤ Qb + Qsw with c = 2h0; s ≤ h0/2 and 300 near the supports.',
-    'Columns: axial load N ≤ φ (Rb A + Rsc As), φ by l0/h with l0 = 0.7 H, no frame moments; a size that fails goes up to the next one.',
+    'Columns: axial load N ≤ φ (Rb A + Rsc As), φ by l0/h with l0 = 0.7 H; and eccentric compression in each storey (TCVN 5574:2018 8.1.2.3): M from the fixed-end moments the beams at the column cannot balance (live load on one side), shared by stiffness, e0 ≥ ea = max(l0/600, h/30, 10), η = 1/(1 - N/Ncr), N e ≤ [M]. No sway moments (wind, earthquake). A size that fails goes up to the next one.',
     'Pad footings: A = Ntc / (R - γtb Hm), Ntc = N / 1.15; thickness by punching, mesh by the bending of the cantilever; no settlement check.',
     ...fnd,
     'Slabs: two-way panels by the Marcus method (load shared by equal deflection, span moments reduced for twisting), one-way panels as strips (span qL²/8, /11, /16; supports qL²/8, /12); one set of bars per slab for its worst panel. Stairs: flight and landing as one simply supported strip. Balconies: cantilevers, top bars run into the floor slab by the cantilever length at least.',
@@ -1131,7 +1223,7 @@ export function calcNotes(R, lang = 'vi') {
     'Tường trên dầm và tường ngăn trên sàn đã trừ lỗ cửa; tường ngăn quy về phân bố đều trên ô sàn.',
     'Dầm liên tục, tính đàn hồi: hoạt tải đặt toàn bộ, nhịp lẻ, nhịp chẵn; mô men gối biên (liên kết cột) qL²/24. Dầm gác lên dầm: đầu gác là khớp, phản lực là lực tập trung trên dầm đỡ (+P).',
     'Cốt đai: Q ≤ Qb + Qsw với c = 2h0; s ≤ h0/2 và 300 ở vùng gối.',
-    'Cột: nén đúng tâm N ≤ φ (Rb A + Rsc As), φ theo l0/h với l0 = 0,7 H, chưa xét mô men khung; tiết diện không đạt được tăng lên cỡ kế tiếp.',
+    'Cột: nén đúng tâm N ≤ φ (Rb A + Rsc As), φ theo l0/h với l0 = 0,7 H; và nén lệch tâm từng tầng (TCVN 5574:2018 mục 8.1.2.3): M lấy từ mô men ngàm của dầm không cân bằng tại cột (hoạt tải một phía), chia theo độ cứng, e0 ≥ ea = max(l0/600; h/30; 10), η = 1/(1 - N/Ncr), N e ≤ [M]. Chưa xét mô men do tải ngang (gió, động đất). Tiết diện không đạt được tăng lên cỡ kế tiếp.',
     'Móng đơn: A = Ntc / (R - γtb Hm), Ntc = N / 1,15; chiều cao theo chọc thủng, lưới thép theo mô men công xôn; chưa kiểm tra lún.',
     ...fnd,
     'Sàn: ô bản kê 4 cạnh theo phương pháp Marcus (chia tải theo độ võng bằng nhau, giảm mô men nhịp do xoắn), ô bản dầm tính theo dải (nhịp qL²/8, /11, /16; gối qL²/8, /12); mỗi sàn một loại thép theo ô bất lợi nhất. Cầu thang: vế thang và chiếu nghỉ là một dải kê đơn giản. Ban công: công xôn, thép mũ neo vào sàn trong tối thiểu bằng chiều dài vươn.',

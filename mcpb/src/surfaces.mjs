@@ -24,16 +24,16 @@
 // of a column that stands out of a wall or free in a room, with the wall finish of the room). The reveals (má
 // cửa) are additions of the wall or exterior face they open in (kind: reveal, with the perimeter and the depth);
 // revealFaces lists them as records of their own.
+import { ROOM } from './standards.mjs';
 import { buildModel, FLOOR_DEFAULTS } from './elevation.mjs';
 import {
   BACKSPLASH, boxInterval, boxMid, clipSeg, clipToBox, dejog, edgesOf, inside, offsetPoly, openingsOn, perimeter, polyArea, resolveFinish, stairSpots, tooNarrow, wallFrame,
   wallHeightBehind,
 } from './interior.mjs';
-import { segRect, uStairFinish, uStairGeom } from './plan.mjs';
+import { expandStairs, segRect, spiralGeom, uStairFinish, uStairGeom } from './plan.mjs';
 import { measured as byRule, net as geometric, ruleSet } from './rules.mjs';
 
-const WET = /(WC|VỆ SINH|TẮM|TOILET|BATH|WASH)/i;
-const OUTDOOR = /(SÂN|HIÊN|BAN CÔNG|LÔ GIA|LOGIA|BALCONY|TERRACE|PORCH|YARD)/i;
+const WET = ROOM.wet, OUTDOOR = ROOM.outdoor;
 /** Depth of a door or window frame in its wall (mm): a reveal is half the wall thickness less half a frame. */
 export const FRAME = 50;
 /** Height of the waterproofing turned up the walls (mm). */
@@ -55,6 +55,8 @@ const r6 = (v) => Math.round(v * 1e6) / 1e6;
 const sum = (list, f) => list.reduce((s, x) => s + f(x), 0);
 
 // the order of the faces of a room or location
+// clear height under which a flight needs the ceiling open above it
+const HEADROOM = 2000;
 const KIND_ORDER = ['floor', 'landing', 'tread', 'riser', 'ceiling', 'ceiling_drop', 'soffit', 'wall', 'column', 'splashback', 'skirting', 'stair_skirting', 'handrail', 'railing', 'waterproof', 'screed',
   'exterior', 'parapet_top', 'roof', 'roof_pitched'];
 
@@ -64,7 +66,7 @@ const WORDS = {
     balcony: 'BAN CÔNG', roof: 'MÁI', flight: 'vế', halfLanding: 'chiếu nghỉ', aroundLanding: 'quanh chiếu nghỉ', gap: 'khe thang', guard: 'lan can ô thang', top: '(đỉnh tường)',
     notOff: 'không trừ, nhỏ hơn', noFinish: 'không hoàn thiện', goings: 'mặt bậc', risers: 'cổ bậc', onSlope: 'theo dốc', slope: 'mái dốc', drop: 'mặt đứng giật cấp', sides: 'bên tường',
     soffit: 'đáy sàn', flightSoffit: 'đáy bản thang', landingSoffit: 'đáy chiếu nghỉ',
-    under: 'ngưỡng', foot: 'chân thang', toSoffit: 'cao đến đáy sàn', toRoof: 'cao đến đáy mái', openWell: 'ô thang thông tầng, cao tầng', throughSlab: 'qua chiều dày sàn tại ô thang',
+    hipRoof: 'mái hông bốn mái, dốc', spiral: 'thang xoắn, bậc', under: 'ngưỡng', stairHole: 'lỗ trần chỗ thang đi qua', foot: 'chân thang', toSoffit: 'cao đến đáy sàn', toRoof: 'cao đến đáy mái', openWell: 'ô thang thông tầng, cao tầng', throughSlab: 'qua chiều dày sàn tại ô thang',
     beamSide: 'thành dầm', column: 'cột', colFree: 'cột giữa phòng', colWall: 'cột nhô khỏi tường', perim: 'chu vi', doors: 'cửa',
   },
   en: {
@@ -72,7 +74,7 @@ const WORDS = {
     balcony: 'BALCONY', roof: 'ROOF', flight: 'flight', halfLanding: 'half landing', aroundLanding: 'around the landing', gap: 'well', guard: 'guard at the stairwell', top: '(top)',
     notOff: 'not deducted, under', noFinish: 'no finish', goings: 'goings', risers: 'risers', onSlope: 'on the slope', slope: 'slope', drop: 'drop face', sides: 'wall sides',
     soffit: 'soffit', flightSoffit: 'flight soffit', landingSoffit: 'landing soffit',
-    under: 'under', foot: 'stair footprint', toSoffit: 'up to the slab soffit', toRoof: 'up to the roof soffit', openWell: 'open stairwell, storey', throughSlab: 'through the slab at the stairwell',
+    hipRoof: 'hip roof, four slopes at', spiral: 'spiral stair, treads', under: 'under', stairHole: 'opening where the stair passes', foot: 'stair footprint', toSoffit: 'up to the slab soffit', toRoof: 'up to the roof soffit', openWell: 'open stairwell, storey', throughSlab: 'through the slab at the stairwell',
     beamSide: 'beam sides', column: 'column', colFree: 'free column', colWall: 'column standing out of the wall', perim: 'perimeter', doors: 'doors',
   },
 };
@@ -148,7 +150,16 @@ function wallCover(M, p, q) {
 /** The stairs that start on a floor: U stairs (geometry of the plan engine) and straight flights. */
 function stairsOf(spec, height, warnings) {
   const out = [];
-  (spec?.stairs || []).forEach((st, i) => {
+  expandStairs(spec?.stairs).forEach((st, i) => {
+    if (st.type === 'spiral') {
+      try {
+        const G = spiralGeom(st, `stairs[${i}]`), h = Number(st.height ?? height);
+        out.push({ type: 'spiral', st, G, height: h, riser: h / G.risers, mid: G.c, box: G.box, z0: 0 });
+      } catch (e) {
+        warnings.push(`stairs[${i}]: not measured (${e.message})`);
+      }
+      return;
+    }
     if (st.type === 'u') {
       if (!Array.isArray(st.region)) return;
       try {
@@ -164,14 +175,15 @@ function stairsOf(spec, height, warnings) {
     const u = [Math.cos(a), Math.sin(a)], n = left(u);
     const w = Number(st.width ?? 1200), k = Math.round(Number(st.treads ?? 10)), going = Number(st.going ?? 270);
     if (!(w > 0 && k > 0 && going > 0)) return;
-    const risers = Math.round(Number(st.risers ?? k + 1)), h = Number(st.height ?? height);
+    // a flight of an L stair takes its share of the storey; its quarter landing has no riser
+    const risers = Math.round(Number(st.risers ?? k + 1)), full = Number(st.height ?? height), h = full * (st.rise_share ?? 1);
     const c0 = add([Number(st.start[0]), Number(st.start[1])], mul(n, -w / 2));
     const at = (x, y) => add(add(c0, mul(u, x)), mul(n, y));
     const run = k * going, pts = [at(0, 0), at(run, 0), at(run, w), at(0, w)];
     const axis = Math.abs(u[0]) < 1e-6 || Math.abs(u[1]) < 1e-6;
     const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
     out.push({
-      type: 'straight', st, k, going, w, risers, riser: h / risers, run, at, height: h, mid: at(run / 2, w / 2),
+      type: 'straight', st, k, going, w, risers, riser: risers > 0 ? h / risers : 0, run, at, height: h, mid: at(run / 2, w / 2), z0: full * (st.rise_from ?? 0), landing: !!st.landing,
       box: axis ? [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] : null,
     });
   });
@@ -287,8 +299,11 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
     // head of the stair); the flights are measured on their real surfaces on the floor they start from (below)
     // (a straight flight takes its footprint off the floor of whatever room it stands in)
     const wells = [
-      ...(stair && spec ? stairSpots(spec).filter((x) => inside(boxMid(x.well), poly)) : []),
-      ...stairs.filter((S) => S.type === 'straight' && S.box && inside(S.mid, poly)).map((S) => ({ well: S.box, up: true, flight: true })),
+      // (a U stair standing in a room that is not a stair room takes its well off that room too)
+      ...(spec ? stairSpots(spec).filter((x) => inside(boxMid(x.well), poly)) : []),
+      ...stairs.filter((S) => S.type === 'straight' && S.box && inside(S.mid, poly)).map((S) => ({ well: S.box, up: true, flight: true, S })),
+      // a spiral stair: its circle (the box for what lies along it, the area of the circle off the floor)
+      ...stairs.filter((S) => S.type === 'spiral' && inside(S.mid, poly)).map((S) => ({ well: S.box, up: true, flight: true, S, area: (Math.PI * S.G.R ** 2) / 1e6 })),
     ];
     // the floor under the doors and plain openings of the room: their clear width x half the wall, on this side
     const sills = E.flatMap((e, k) => {
@@ -325,7 +340,7 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
     const kind = { kind: f.kind ?? '', outdoor: OUTDOOR.test(name), wet: WET.test(name) };
     const base = { room: name, finishKind: f.kind ?? '' };
     // floor
-    const wellArea = wells.map((x) => Math.abs(polyArea(clipToBox(poly, x.well))) / 1e6);
+    const wellArea = wells.map((x) => x.area ?? Math.abs(polyArea(clipToBox(poly, x.well))) / 1e6);
     const floorNet = Math.max(0, area - sum(wellArea, (a) => a));
     if (f.floor ? floorNet > 1e-6 || sills.length > 0 : true) {
       face({
@@ -339,7 +354,19 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
     const band = f.ceiling?.drop && !tooNarrow(f.ceiling.drop, poly) ? f.ceiling.drop : null;
     if (f.ceiling) {
       const cl = { ...base, part: 'ceiling', code: f.ceiling.code, desc: f.ceiling.description };
-      face({ ...cl, kind: 'ceiling', gross: area, outline: poly, deductions: cols.map((x) => ({ what: `${t.column} ${colName(x.c)}`, area: x.area, column: x.c.name, poly: boxPoly(x.c.box) })) });
+      // a straight flight goes up through the ceiling: the ceiling is open from where the treads come within the
+      // headroom (2 m) of it to the head of the flight
+      const cz = (f.ceiling.level ?? 3000) - (band?.depth ?? 0);
+      const holes = wells.filter((x) => x.flight && x.S && (x.S.z0 ?? 0) + x.S.height > cz - HEADROOM).map((x) => {
+        const S = x.S;
+        if (S.type === 'spiral') return { what: t.stairHole, area: Math.min(x.area, area), always: true, poly: boxPoly(S.box) };
+        // from where the treads come within the headroom of the ceiling (a flight of an L stair starts at its own level)
+        const u0 = S.height > 0 ? S.run * Math.min(1, Math.max(0, (cz - HEADROOM - (S.z0 ?? 0)) / S.height)) : 0;
+        const hole = [S.at(u0, 0), S.at(S.run, 0), S.at(S.run, S.w), S.at(u0, S.w)];
+        const a2 = Math.abs(polyArea(hole)) / 1e6;
+        return a2 > 1e-6 ? { what: t.stairHole, area: Math.min(a2, area), always: true, poly: hole } : null;
+      }).filter(Boolean);
+      face({ ...cl, kind: 'ceiling', gross: area, outline: poly, deductions: [...holes, ...cols.map((x) => ({ what: `${t.column} ${colName(x.c)}`, area: x.area, column: x.c.name, poly: boxPoly(x.c.box) }))] });
       if (band && band.depth > 0) {
         const inner = offsetPoly(dejog(poly), band.width);
         const Lin = inner ? perimeter(inner) / 1000 : Math.max(0, per - (8 * band.width) / 1000);
@@ -420,7 +447,7 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
     }
     // skirting: a run per edge less the doors and plain openings on it (and, in a stair room, less what lies along
     // the wells: the skirting there steps with the flights)
-    let wellRun = 0;
+    let wellRun = 0, colSkirt = 0;
     if (f.skirting) {
       E.forEach((e, k) => {
         const s = face({ ...base, kind: 'skirting', part: 'skirting', code: f.skirting.code, desc: f.skirting.description, unit: 'm', L: e.L / 1000, edge: k, from: e.a, to: e.b, stairRoom: stair });
@@ -434,9 +461,16 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
         }
         if (s.L - sum(s.deductions, (d) => d.len) < 1e-6) faces.splice(faces.indexOf(s), 1);
       });
+      // round the columns: what of their outline lies in the room, less the wall face they cover
+      for (const x of cols) {
+        const more = (x.girth - x.hidden) / 1000;
+        if (!(more > 1e-3) || inWell(x.mid)) continue;
+        face({ ...base, kind: 'skirting', part: 'skirting', code: f.skirting.code, desc: f.skirting.description, unit: 'm', L: r6(more), what: `${t.column} ${colName(x.c)}`, column: x.c.name, stairRoom: stair });
+        colSkirt += more;
+      }
     }
     measures.push({
-      floor: fl, room: name, kind: f.kind ?? '', area, per, doorW, wellRun, finish: f, edges: E.length, wells, wet: kind.wet, outdoor: kind.outdoor, sills, cols, colOff,
+      floor: fl, room: name, kind: f.kind ?? '', area, per, doorW, wellRun, colSkirt, finish: f, edges: E.length, wells, wet: kind.wet, outdoor: kind.outdoor, sills, cols, colOff,
       wall: f.wall ? { gross: sum(walls, (w) => w.L * w.H), opArea: sum(walls, (w) => sum(w.deductions.filter((d) => d.opening), (d) => d.area)), splash: sum(walls, (w) => sum(w.deductions.filter((d) => !d.opening), (d) => d.area)) } : null,
     });
   }
@@ -485,6 +519,21 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
       stairRows.push({ floor: fl, type: 'u', room, n1: g.n1, n2: g.n2, riser, going, w, landing, B, gap, c1, c2, wall: cl, height: S.height / 1000, fin: S.fin, area: 0, skirt: 0, guard: 0 });
       return;
     }
+    if (S.type === 'spiral') {
+      // a spiral stair: wedge treads (the ring it sweeps), risers from the post to the edge, the handrail on the outer
+      // helix, the soffit on the helix at mid radius
+      const G = S.G, R = G.R / 1000, r = G.r / 1000, H = S.height / 1000, riser = S.riser / 1000;
+      const ring = (G.sweep / 2) * (R * R - r * r), rm = (R + r) / 2;
+      if (fin) {
+        face({ ...fin, ...st, room, kind: 'tread', what: `${t.spiral} ${G.k} x ${nf(G.sweepDeg / G.k, en)}°`, L: ring / (R - r), H: R - r });
+        face({ ...fin, ...st, room, kind: 'riser', n: G.risers, L: R - r, H: riser });
+      }
+      if (shell) {
+        face({ ...st, room, kind: 'handrail', code: 'RAIL', unit: 'm', what: t.onSlope, L: Math.hypot(G.sweep * R, H) });
+        face({ ...st, room, kind: 'soffit', part: 'soffit', code: 'SLAB', what: t.flightSoffit, L: Math.hypot(G.sweep * rm, H), H: R - r });
+      }
+      return;
+    }
     // a straight flight: its treads, risers (one more than the treads: the last one meets the floor above), the
     // skirting on the sides that lie along a wall, one handrail on the slope, the sloped soffit
     const going = S.going / 1000, w = S.w / 1000, riser = S.riser / 1000;
@@ -494,7 +543,7 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
     const L1 = (k) => (regular ? k : undefined);
     if (fin) {
       face({ ...fin, ...st, room, kind: 'tread', n: S.k, L: going, H: w, link: L1({ n: '{n1}-1', L: '{going}', H: '{w}' }) });
-      face({ ...fin, ...st, room, kind: 'riser', n: S.risers, L: w, H: riser, link: { n: '{n1}', L: '{w}', H: '{riser}' } });
+      if (S.risers > 0) face({ ...fin, ...st, room, kind: 'riser', n: S.risers, L: w, H: riser, link: L1({ n: '{n1}', L: '{w}', H: '{riser}' }) });
     }
     if (sk && c > 0) {
       face({
@@ -506,7 +555,7 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
       face({ ...st, room, kind: 'handrail', code: 'RAIL', unit: 'm', what: t.onSlope, L: sl, link: L1({ L: slopeX('n1') }) });
       face({ ...st, room, kind: 'soffit', part: 'soffit', code: 'SLAB', what: t.flightSoffit, L: sl, H: w, link: L1({ L: slopeX('n1'), H: '{w}' }) });
     }
-    stairRows.push({ floor: fl, type: 'straight', room, n1: S.risers, n2: 0, treads: S.k, riser, going, w, landing: 0, B: 0, gap: 0, c1: c, c2: 0, wall: 0, height: S.height / 1000, fin: null, area: 0, skirt: 0, guard: 0 });
+    if (!S.landing) stairRows.push({ floor: fl, type: 'straight', room, n1: S.risers, n2: 0, treads: S.k, riser, going, w, landing: 0, B: 0, gap: 0, c1: c, c2: 0, wall: 0, height: S.height / 1000, fin: null, area: 0, skirt: 0, guard: 0 });
   });
 
   // ---- balconies: the floor finish (a material of the schedule as well)
@@ -547,7 +596,7 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
       const poly = rooms[m.room], f = m.finish;
       if (!f.ceiling && !(m.outdoor && top)) {
         const up = m.wells.filter((x) => x.up && stairs.some((S) => inside(S.mid, poly)));
-        const off = up.map((x) => Math.abs(polyArea(clipToBox(poly, x.well))) / 1e6);
+        const off = up.map((x) => x.area ?? Math.abs(polyArea(clipToBox(poly, x.well))) / 1e6);
         if (m.area - sum(off, (a) => a) > 1e-6) {
           const sf = face({
             room: m.room, finishKind: m.kind, kind: 'soffit', part: 'soffit', code: 'SLAB', what: t.soffit, gross: m.area, outline: poly,
@@ -581,7 +630,31 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
               run += (L * Math.max(0, free)) / 1000;
             }
             run = r6(run);
-            if (run > 1e-6) sf.additions.push({ what: `${t.beamSide} ${bm.name}`, kind: 'beam_side', area: 2 * run * (depth / 1000), n: 2, L: run, H: depth / 1000, beam: bm.name });
+            // where another beam meets this one in the room (clear of walls and columns) its section covers the side:
+            // one side at a T, both at a crossing, by the shallower of the two depths
+            let covered2 = 0;
+            const dir = sub(bm.B, bm.A), Lb = len(dir);
+            for (const o of Lb > 1 ? ST.beams : []) {
+              if (o === bm) continue;
+              const od = sub(o.B, o.A), Lo = len(od), den = cross(dir, od);
+              if (Lo < 1 || Math.abs(den) < 1e-6 * Lb * Lo) continue;
+              const s1 = cross(sub(o.A, bm.A), od) / den, s2 = cross(sub(o.A, bm.A), dir) / den;
+              const tolB = (o.b ?? 220) / 2 / Lb, tolO = (bm.b ?? 220) / 2 / Lo;
+              if (s1 < -tolB || s1 > 1 + tolB || s2 < -tolO || s2 > 1 + tolO) continue;
+              const X = add(bm.A, mul(dir, Math.max(0, Math.min(1, s1))));
+              if (!inside(X, poly)) continue;
+              if (M && M.walls.some((w) => w.segs.some((sg) => inside(X, segRect(sg))))) continue;
+              if ((ST.columns ?? []).some((c) => X[0] > c.box[0] - 1 && X[0] < c.box[2] + 1 && X[1] > c.box[1] - 1 && X[1] < c.box[3] + 1)) continue;
+              if (up.some((w) => X[0] > w.well[0] && X[0] < w.well[2] && X[1] > w.well[1] && X[1] < w.well[3])) continue;
+              // the other beam runs on past this one (a crossing: both sides) or ends on it (a T: one side)
+              const through = s2 > tolO && s2 < 1 - tolO;
+              const od2 = Math.min(depth, o.h - (ST.slab ?? 0));
+              // at an end of this beam its two sides stop at the face of the other: half its width off each
+              const atEnd = s1 < tolB || s1 > 1 - tolB;
+              if (od2 > 0) covered2 += (atEnd ? 1 : through ? 2 : 1) * ((o.b ?? 220) / 1000) * (od2 / 1000);
+            }
+            const sideArea = Math.max(0, 2 * run * (depth / 1000) - covered2);
+            if (run > 1e-6) sf.additions.push({ what: `${t.beamSide} ${bm.name}`, kind: 'beam_side', area: r6(sideArea), n: 2, L: run, H: depth / 1000, beam: bm.name, ...(covered2 > 0 ? { less: r6(covered2) } : {}) });
           }
         }
       }
@@ -717,6 +790,13 @@ export function floorSurfaces({ spec, rooms = {}, finishes = {}, items = [], flo
         if (Rf.type === 'flat') {
           if (!(Array.isArray(spec.roofs?.[i]?.region) || (top && full))) return;
           face({ room: t.roof, kind: 'roof', code: 'ROOF', L: (x1 - x0 + 2 * ov) / 1000, H: (y1 - y0 + 2 * ov) / 1000 });
+        } else if (Rf.type === 'hip') {
+          // four slopes of one pitch: the plan of the roof (overhang included) over the cosine of the pitch; the ridge
+          // and the four hips for their capping
+          const X = x1 - x0 + 2 * ov, Y = y1 - y0 + 2 * ov, m = Math.min(X, Y) / 2;
+          const hipL = Math.hypot(m * Math.SQRT2, m * Math.tan(Rf.pitch * DEG)), ridgeL = Math.abs(X - Y);
+          face({ room: t.roof, kind: 'roof_pitched', code: 'PITCH', what: `${t.hipRoof} ${nf(Rf.pitch, en)}°`, L: X / 1000, H: Y / Math.cos(Rf.pitch * DEG) / 1000, pitch: Rf.pitch, hips_m: r6((4 * hipL) / 1000), ridge_m: r6(ridgeL / 1000) });
+          if (!spec.roofs) assumed.push(...M.assumed.filter((a) => String(a.item).startsWith('roofs')));
         } else {
           const along = Rf.ridge === 'x' ? x1 - x0 : y1 - y0, span = Rf.ridge === 'x' ? y1 - y0 : x1 - x0;
           face({ room: t.roof, kind: 'roof_pitched', code: 'PITCH', what: `${t.slope} ${nf(Rf.pitch, en)}°`, n: 2, L: (along + 2 * ov) / 1000, H: (span / 2 + ov) / Math.cos(Rf.pitch * DEG) / 1000, pitch: Rf.pitch });
@@ -867,7 +947,7 @@ const CHECKS = {
   vi: {
     plate: 'Diện tích các phòng + chân tường, cột = mặt sàn trong mép ngoài tường (m²)',
     perimeter: 'Tổng chiều dài các mặt tường của phòng = chu vi phòng (m)',
-    skirting: 'Len chân tường = chu vi - bề rộng cửa đi, ô trống - đoạn dọc ô thang (m)',
+    skirting: 'Len chân tường = chu vi - bề rộng cửa đi, ô trống - đoạn dọc ô thang + phần quấn quanh cột lộ (m)',
     openings: 'Mỗi lỗ cửa được trừ trên đúng hai mặt (hai phòng, hoặc phòng và mặt ngoài) với cùng diện tích (m²)',
     reveals: 'Má cửa = chu vi lỗ cửa (cửa đi không tính ngưỡng) x chiều sâu má (m²)',
     ledger: 'Mỗi bề mặt: gộp - trừ + cộng = ròng, gộp = số bộ phận x dài x cao (số mặt đạt / tổng số mặt)',
@@ -885,7 +965,7 @@ const CHECKS = {
   en: {
     plate: 'Room areas + wall and column footprints = the floor plate inside the outer faces (m²)',
     perimeter: 'The wall faces of a room add up to its perimeter (m)',
-    skirting: 'Skirting = perimeter - doors and plain openings - what lies along a stairwell (m)',
+    skirting: 'Skirting = perimeter - doors and plain openings - what lies along a stairwell + round the columns that stand out (m)',
     openings: 'Every opening is deducted on exactly two faces (two rooms, or a room and the outside) by the same area (m²)',
     reveals: 'Reveals = perimeter of the opening (no sill for a door) x depth (m²)',
     ledger: 'Every face: gross - deductions + additions = net, gross = like parts x length x height (faces that pass / faces)',
@@ -927,7 +1007,7 @@ export function surfaceChecks(floors, { lang = 'vi' } = {}) {
     for (const m of S.measures) {
       const mine = S.faces.filter((f) => f.room === m.room);
       push('perimeter', at(m.room), sum(mine.filter((f) => f.kind === 'wall'), (f) => f.L), perimeter(rooms[m.room]) / 1000, 0.001);
-      if (m.finish.skirting) push('skirting', at(m.room), sum(mine.filter((f) => f.kind === 'skirting'), (f) => f.measured), Math.max(0, m.per - m.doorW - m.wellRun), 0.001);
+      if (m.finish.skirting) push('skirting', at(m.room), sum(mine.filter((f) => f.kind === 'skirting'), (f) => f.measured), Math.max(0, m.per - m.doorW - m.wellRun) + (m.colSkirt ?? 0), 0.001);
     }
     // 4. every opening on two faces, by the same area (by the same width where a finish stops under its head)
     const sided = S.faces.filter((f) => f.kind === 'wall' || f.kind === 'exterior');

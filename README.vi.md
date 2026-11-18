@@ -14,7 +14,7 @@ AutoCAD MCP cho phép Claude làm việc trực tiếp trên bản vẽ đang m�
 
 Cách hoạt động giống [SketchUp MCP](https://github.com/2ez4gcx/sketchup-mcp): một extension cho Claude Desktop (`.mcpb`, chạy trên Node.js có sẵn trong Claude Desktop) và một add-in nhỏ chạy bên trong AutoCAD (**ACAD MCP Bridge**, add-in .NET). Không cần cài Python hay Node.js.
 
-Phiên bản: **1.3.1** - [tải tại Releases](https://github.com/2ez4gcx/autocad-mcp/releases/latest). Có trong [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.2ez4gcx/autocad-mcp) chính thức với tên `io.github.2ez4gcx/autocad-mcp`.
+Phiên bản: **1.4.0** - [tải tại Releases](https://github.com/2ez4gcx/autocad-mcp/releases/latest). Có trong [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.2ez4gcx/autocad-mcp) chính thức với tên `io.github.2ez4gcx/autocad-mcp`.
 
 ## Tính năng
 
@@ -109,6 +109,21 @@ Phiên bản: **1.3.1** - [tải tại Releases](https://github.com/2ez4gcx/auto
     - kết cấu: dầm B2./GB./RB., móng F1.
   - Tên phòng đặt bằng ngôn ngữ nào cũng được nhận: BEDROOM, KITCHEN, BATHROOM, OFFICE cũng như PHÒNG NGỦ, BẾP, WC, VĂN PHÒNG. So khớp nguyên từ: "ĂN" không bị đọc trong "VĂN PHÒNG".
   - Đã kiểm tra bằng cách vẽ năm bộ hồ sơ mẫu bằng tiếng Anh: không còn chữ tiếng Việt nào ngoài tên do người dùng nhập.
+- **Các bước kiểm tra độ chính xác có sẵn:**
+  - `attach_image` căn tỉ lệ ảnh scan hoặc ảnh chụp theo nhiều kích thước in trên ảnh, báo từng kích thước lệch bao nhiêu và ảnh có bị méo không. `dimension_chains` kiểm tra tổng các kích thước lẻ có bằng kích thước tổng trước khi vẽ.
+  - `lighting_calc`:
+    - đọc file quang học của từng đèn (IES LM-63 hoặc EULUMDAT) thay cho chùm sáng lý tưởng;
+    - tính đồ đạc cao hơn mặt phẳng làm việc che sáng;
+    - phần ánh sáng phản xạ tính theo mặt nhận sáng đầu tiên (cách tính cũ cho kết quả cao hơn 6 đến 8%).
+  - `structural_calc` kiểm tra từng cột chịu nén lệch tâm theo từng tầng (TCVN 5574:2018 mục 8.1.2.3): mô men dầm không cân bằng tại cột, độ lệch tâm ngẫu nhiên, ảnh hưởng uốn dọc. Cột biên, cột góc không đạt được tăng tiết diện. Chưa xét mô men do gió, động đất: vẫn là tính toán sơ bộ.
+  - Khối lượng: len chân tường quấn quanh cột lộ, mặt bên dầm dừng ở chỗ dầm khác giao vào, trần thạch cao khoét ở chỗ thang thẳng đi qua.
+  - `material_schedule` với `compare_with` đặt bảng thống kê cạnh một bảng khác của cùng công trình theo mã (bảng bóc từ SketchUp MCP, bảng của kỹ sư dự toán) và liệt kê chênh lệch.
+  - Một bộ nhận tên phòng dùng chung (khớp nguyên từ, tiếng Việt hoặc tiếng Anh) cho hoàn thiện, cửa, tải trọng, khối lượng, điện và nước.
+  - `read_plan` nhận khe trống rộng cỡ cửa là cửa đi và báo rõ trong kết quả.
+- **Thêm hình học:**
+  - Tường cong: khai `bulges` cho tường (như polyline). Cung được dựng bằng các đoạn dây ngắn, lệch khỏi cung thật tối đa 5 mm, nên mặt đứng, diện tích phòng và khối lượng đều tính theo. Cửa trên tường cong nằm trên một đoạn thẳng riêng.
+  - Mái hông (`type: "hip"`): mặt đứng từ mọi phía, mặt cắt ở vị trí bất kỳ, diện tích theo mặt dốc kèm chiều dài sống mái và nóc.
+  - Thang chữ L (hai vế và chiếu nghỉ vuông) và thang xoắn: có trên mặt bằng và trong khối lượng (mặt bậc, cổ bậc, tay vịn, đáy thang, trừ sàn ở chân thang, khoét trần phía trên). Mặt cắt và chi tiết thang hiện chỉ vẽ thang chữ U.
 - **Bộ nội thất, những điểm rút ra từ một dự án thật:**
   - Đồ nội thất: `tv_cabinet` nhận `tv: false` (chỉ tủ thấp, không có tivi). Có thêm loại `sideboard` (tủ credenza). Bàn trà, bàn ăn có thể tròn (`shape: "round"` hoặc `diameter`; bàn ăn tròn có ghế xếp quanh).
   - Chú thích và ghi chú của mặt bằng nội thất, sàn, tường, trần được đặt cạnh mặt bằng, ngoài tường, đường kích thước và bóng trục, ở chỗ bản vẽ còn trống (nếu không thì dưới, trái hoặc trên). `notes_at` để tự đặt; kết quả trả về vùng của khối này.
@@ -236,7 +251,7 @@ Phiên bản: **1.3.1** - [tải tại Releases](https://github.com/2ez4gcx/auto
 Claude Desktop
     |  MCP qua stdio
     v
-autocad-mcp-1.3.1.mcpb        server MCP Node.js, chạy trên Node có sẵn trong Claude Desktop
+autocad-mcp-1.4.0.mcpb        server MCP Node.js, chạy trên Node có sẵn trong Claude Desktop
     |  mỗi lệnh một yêu cầu JSON, TCP 127.0.0.1:9877 (chỉ trong máy)
     v
 ACAD MCP Bridge               add-in .NET trong AutoCAD (bundle tự nạp), chạy lệnh trên luồng chính của AutoCAD
@@ -255,9 +270,9 @@ Bridge chạy bên trong AutoCAD (không điều khiển qua COM từ bên ngoà
 
 ## Cài đặt
 
-1. **Cài extension vào Claude Desktop**: tải `autocad-mcp-1.3.1.mcpb` và `AcadMcpBridge-1.3.1.bundle.zip` ở [bản phát hành mới nhất](https://github.com/2ez4gcx/autocad-mcp/releases/latest), rồi vào *Settings > Extensions*, kéo thả file `.mcpb` vào cửa sổ (hoặc *Advanced settings > Install Extension...*), bấm *Install*. Bản build chưa ký số nên Claude Desktop có thể cảnh báo. Các bản 1.2.1-1.3.0 mang tên *Construction AutoCAD MCP*: nếu extension đó đang cài, gỡ nó ở *Settings > Extensions* để tool không bị liệt kê hai lần.
-2. **Cài bridge vào AutoCAD**: trong một cuộc trò chuyện mới, nhờ Claude *"Cài ACAD MCP Bridge vào AutoCAD"* (tool `install_autocad_bridge`). Tool chép `AcadMcpBridge.bundle` vào `%APPDATA%\Autodesk\ApplicationPlugins`, AutoCAD tự nạp khi khởi động. Cài tay: giải nén `AcadMcpBridge-1.3.1.bundle.zip` vào thư mục đó.
-3. **Khởi động lại AutoCAD.** Add-in chưa được ký số: khi AutoCAD hỏi về `AcadMcpBridge-1.3.1-<hash>.dll`, chọn **Always Load**. Mỗi bản bridge mới là một file mới nên sau khi cập nhật AutoCAD sẽ hỏi lại một lần. (Muốn không bao giờ bị hỏi, có thể thêm thư mục bundle vào *Options > Files > Trusted Locations* nếu chính sách IT cho phép.) Gõ `MCPSTATUS` trong AutoCAD, phải thấy `ACAD MCP Bridge v1.3.1: RUNNING on 127.0.0.1:9877`. Sau đó nhờ Claude *"Ping AutoCAD"*.
+1. **Cài extension vào Claude Desktop**: tải `autocad-mcp-1.4.0.mcpb` và `AcadMcpBridge-1.4.0.bundle.zip` ở [bản phát hành mới nhất](https://github.com/2ez4gcx/autocad-mcp/releases/latest), rồi vào *Settings > Extensions*, kéo thả file `.mcpb` vào cửa sổ (hoặc *Advanced settings > Install Extension...*), bấm *Install*. Bản build chưa ký số nên Claude Desktop có thể cảnh báo. Các bản 1.2.1-1.3.0 mang tên *Construction AutoCAD MCP*: nếu extension đó đang cài, gỡ nó ở *Settings > Extensions* để tool không bị liệt kê hai lần.
+2. **Cài bridge vào AutoCAD**: trong một cuộc trò chuyện mới, nhờ Claude *"Cài ACAD MCP Bridge vào AutoCAD"* (tool `install_autocad_bridge`). Tool chép `AcadMcpBridge.bundle` vào `%APPDATA%\Autodesk\ApplicationPlugins`, AutoCAD tự nạp khi khởi động. Cài tay: giải nén `AcadMcpBridge-1.4.0.bundle.zip` vào thư mục đó.
+3. **Khởi động lại AutoCAD.** Add-in chưa được ký số: khi AutoCAD hỏi về `AcadMcpBridge-1.4.0-<hash>.dll`, chọn **Always Load**. Mỗi bản bridge mới là một file mới nên sau khi cập nhật AutoCAD sẽ hỏi lại một lần. (Muốn không bao giờ bị hỏi, có thể thêm thư mục bundle vào *Options > Files > Trusted Locations* nếu chính sách IT cho phép.) Gõ `MCPSTATUS` trong AutoCAD, phải thấy `ACAD MCP Bridge v1.4.0: RUNNING on 127.0.0.1:9877`. Sau đó nhờ Claude *"Ping AutoCAD"*.
 
 Tùy chọn ở *Settings > Extensions > AutoCAD MCP > Configure*: cổng bridge (mặc định 9877; nếu đổi thì gõ `MCPPORT` trong AutoCAD cho khớp) và thời gian chờ mỗi lệnh (mặc định 120 giây).
 

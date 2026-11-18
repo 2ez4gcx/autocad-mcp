@@ -85,7 +85,7 @@ export function buildModel(spec) {
     const type = r.type ?? 'gable';
     const defs = type === 'flat' ? [['thickness', 120], ['parapet', 600]] : [['pitch', 30], ['overhang', 500], ['thickness', 150]];
     for (const [k, v] of defs) if (r[k] === undefined) assumed.push({ item: `${name}.${k}`, value: v });
-    if (!['gable', 'flat'].includes(type)) throw new PlanError(`${name}.type must be gable or flat`);
+    if (!['gable', 'hip', 'flat'].includes(type)) throw new PlanError(`${name}.type must be gable, hip or flat`);
     const reg = r.region ? [pt(r.region[0], `${name}.region[0]`), pt(r.region[1], `${name}.region[1]`)] : [[bbox.x0, bbox.y0], [bbox.x1, bbox.y1]];
     return {
       type, ridge: r.ridge === 'x' ? 'x' : r.ridge === 'y' ? 'y' : (Math.abs(reg[1][0] - reg[0][0]) >= Math.abs(reg[1][1] - reg[0][1]) ? 'x' : 'y'),
@@ -235,7 +235,11 @@ function roofUnderside(M, p) {
     if (p[0] < x0 - ov - 1 || p[0] > x1 + ov + 1 || p[1] < y0 - ov - 1 || p[1] > y1 + ov + 1) continue;
     let h;
     if (R.type === 'flat') h = R.base;
-    else {
+    else if (R.type === 'hip') {
+      // four slopes of one pitch: the height follows the distance to the nearest eave
+      const d = Math.min(p[0] - x0, x1 - p[0], p[1] - y0, y1 - p[1]);
+      h = R.base + d * Math.tan(R.pitch * DEG) - R.thickness / Math.cos(R.pitch * DEG);
+    } else {
       const tan = Math.tan(R.pitch * DEG);
       const half = R.ridge === 'x' ? (y1 - y0) / 2 : (x1 - x0) / 2;
       const off = R.ridge === 'x' ? Math.abs(p[1] - (y0 + y1) / 2) : Math.abs(p[0] - (x0 + x1) / 2);
@@ -449,7 +453,20 @@ function roofElement(R, V) {
     const tan = Math.tan(R.pitch * DEG);
     const tv = t / Math.cos(R.pitch * DEG);
     const eaveY = R.base - ov * tan;
-    if (alongU) {
+    if (R.type === 'hip') {
+      // A hip roof from any side: the eave across the whole front, the hips rising to the ridge (a point when the roof
+      // is seen along its ridge or is square), the slope in front with its ribs.
+      const m = Math.min(u1 - u0, w1 - w0) / 2;
+      topY = R.base + m * tan;
+      sil = ccw([[u0 - ov, eaveY], [u1 + ov, eaveY], [u1 - m, topY], [u0 + m, topY]]);
+      segs.push({ a: [u0 - ov, eaveY], b: [u1 + ov, eaveY], layer: L.outline }, { a: [u0 - ov, eaveY], b: [u0 + m, topY], layer: L.outline }, { a: [u1 - m, topY], b: [u1 + ov, eaveY], layer: L.outline });
+      if (u1 - m > u0 + m + 1) segs.push({ a: [u0 + m, topY], b: [u1 - m, topY], layer: L.outline });
+      // the fascia, and the ribs of the front slope up to the hips
+      const yAt = (u) => Math.min(topY, eaveY + (Math.min(u - (u0 - ov), u1 + ov - u)) * tan);
+      const dx = tan > 1e-6 ? tv / tan : 0;
+      segs.push({ a: [u0 - ov + dx, eaveY + tv], b: [u1 + ov - dx, eaveY + tv], layer: L.line });
+      for (let u = u0 - ov + 300; u < u1 + ov - 150; u += 300) if (yAt(u) > eaveY + tv + 1) segs.push({ a: [u, eaveY + tv], b: [u, yAt(u)], layer: L.line });
+    } else if (alongU) {
       // Eaves side: the slope seen from the front, tile ribs every 300 mm.
       topY = R.base + ((w1 - w0) / 2) * tan;
       sil = rectPoly(u0 - ov, eaveY, u1 + ov, topY);
@@ -1022,6 +1039,20 @@ export function buildSection(spec, opts = {}) {
         fills.push({ type: 'hatch', boundary: par, pattern: 'ANSI31', scale: 0.6 * scale, layer: L.cutHatch });
       }
       roofTop = Math.max(roofTop, R.base + R.thickness + R.parapet);
+    } else if (R.type === 'hip') {
+      // A hip roof cut anywhere: it rises from both eaves at the pitch up to the height the cut reaches (its distance
+      // to the nearer of the two other eaves), flat between: the profile of the slopes the plane crosses.
+      const U0 = rf.u0 + R.overhang, U1 = rf.u1 - R.overhang;
+      const cap = Math.max(0, Math.min(wc - rf.w0, rf.w1 - wc, (U1 - U0) / 2));
+      const eaveY = R.base - R.overhang * tan, hy = R.base + cap * tan;
+      const prof = [[rf.u0, eaveY], [U0 + cap, hy], ...(U1 - cap > U0 + cap + 1 ? [[U1 - cap, hy]] : []), [rf.u1, eaveY]];
+      for (let i = 0; i + 1 < prof.length; i++) {
+        const pa = prof[i], pb = prof[i + 1];
+        const quad = ccw([pa, pb, [pb[0], pb[1] - tv], [pa[0], pa[1] - tv]]);
+        cutEls.push({ depth: wc, sil: quad, segs: segsOfPoly(quad, L.cut) });
+        fills.push({ type: 'hatch', boundary: quad, pattern: 'SOLID', layer: L.cutHatch });
+      }
+      roofTop = Math.max(roofTop, hy);
     } else if (rf.alongU) {
       // The plane runs parallel to the ridge: the roof is cut along one height.
       const wm = (rf.w0 + rf.w1) / 2;

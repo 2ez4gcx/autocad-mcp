@@ -251,6 +251,22 @@ export function words(...alts) {
 export const getDrawingLanguage = () => drawingLanguage;
 
 /**
+ * What a room is, read from the whole words of its name (Vietnamese or English), the same in every engine: finishes,
+ * doors, structure (loads, lowered slabs), quantities, electrical, plumbing. "SÂN KHẤU" (a stage) is no yard, "KHOA" no
+ * store, "VĂN PHÒNG" no dining room.
+ */
+export const ROOM = {
+  wet: words('WC', 'VỆ SINH', 'TẮM', 'TOILETS?', 'BATH', 'BATHROOMS?', 'WASHROOMS?', 'RESTROOMS?', 'SHOWER ROOM', 'SHOWER', 'POWDER ROOM', 'ENSUITE'),
+  kitchen: words('BẾP', 'KITCHENS?', 'KITCHENETTE', 'PANTRY'),
+  stairs: words('CẦU THANG', 'THANG BỘ', 'STAIRS?', 'STAIRCASE', 'STAIRWELL'),
+  terrace: words('SÂN THƯỢNG', 'TERRACE', 'ROOFTOP'),
+  balcony: words('BAN CÔNG', 'LÔ GIA', 'LOGIA', 'LOGGIA', 'SÂN PHƠI', 'BALCONY', 'BALCONIES'),
+  outdoor: words('SÂN(?! KHẤU)', 'HIÊN', 'BAN CÔNG', 'LÔ GIA', 'LOGIA', 'LOGGIA', 'VƯỜN', 'BALCONY', 'BALCONIES', 'TERRACE', 'ROOFTOP', 'PORCH', 'YARD', 'BACKYARD', 'COURTYARD', 'PATIO', 'GARDEN'),
+  hall: words('SẢNH', 'HÀNH LANG', 'HALL', 'HALLWAY', 'LOBBY', 'CORRIDOR', 'FOYER'),
+  store: words('KHO', 'STORES?', 'STOREROOM', 'STORAGE'),
+};
+
+/**
  * The short tag of a floor in marks (S2-1, D2.1, BC3-1): the number at the end of its name, T for a stair tower (TUM),
  * else fallback (the place of the floor), else the initials of its name without accents (TẦNG LỬNG -> TL, ROOF -> R).
  */

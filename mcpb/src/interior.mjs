@@ -7,7 +7,7 @@
 // JN built-in joinery, FN loose furniture, SN sanitary ware, EQ equipment, LT lighting.
 import { buildModel } from './elevation.mjs';
 import { buildPlan, num, PlanError, pt, uStairGeom } from './plan.mjs';
-import { dimStyleName, FIELD, ROLE, TEXT_STYLE, viewTitle, getDrawingLanguage } from './standards.mjs';
+import { dimStyleName, FIELD, ROLE, TEXT_STYLE, viewTitle, getDrawingLanguage, ROOM } from './standards.mjs';
 import { blockName, ceilingSym, LIGHT_BLOCKS, noteLeader, noteWidth, sym, tagSym } from './symbols.mjs';
 import { floorSurfaces } from './surfaces.mjs';
 
@@ -1040,10 +1040,7 @@ export function elevationKey(at, scale, out, labels = WALL_LABELS, room = '') {
 
 // ---------------------------------------------------------------- finishes
 
-const WET = /(WC|VỆ SINH|TẮM|TOILET|BATH|WASH)/i;
-const KITCHEN = /(BẾP|KITCHEN)/i;
-const OUTDOOR = /(SÂN|HIÊN|BAN CÔNG|LÔ GIA|LOGIA|BALCONY|TERRACE|PORCH|YARD)/i;
-const STAIRS = /(CẦU THANG|STAIR)/i;
+const WET = ROOM.wet, KITCHEN = ROOM.kitchen, OUTDOOR = ROOM.outdoor, STAIRS = ROOM.stairs;
 
 /** Default finishes by the kind of room (from its name). */
 /** The default finish descriptions in English: the defaults follow the language of the tool call. */
@@ -2857,7 +2854,7 @@ export function shiftEntity(e, d) {
  */
 export function shiftSpec(spec, d, keep = false) {
   const mv = (p) => (Array.isArray(p) ? [Number(p[0]) + d[0], Number(p[1]) + d[1]] : p);
-  const stair = (st) => ({ ...st, ...(st.start ? { start: mv(st.start) } : {}), ...(st.region ? { region: st.region.map(mv) } : {}) });
+  const stair = (st) => ({ ...st, ...(st.start ? { start: mv(st.start) } : {}), ...(st.center ? { center: mv(st.center) } : {}), ...(st.region ? { region: st.region.map(mv) } : {}) });
   return {
     ...spec,
     walls: (spec.walls || []).map((w) => ({ ...w, points: (w.points || []).map(mv) })),

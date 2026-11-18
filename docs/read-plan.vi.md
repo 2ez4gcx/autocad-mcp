@@ -54,7 +54,8 @@ Sau bổ sung, cùng mặt bằng văn phòng đó đọc thêm được 4 đo�
 
 - Luôn xem trước rồi mới nhận về. Bản vẽ càng gọn (đã chuẩn hóa layer, tường hai nét, cửa có cung) thì đọc càng đủ.
 - Không đọc được:
-  - tường vẽ một nét mảnh (không có bề rộng), cửa vẽ thành khe trống không có nét cánh, thang xoắn, thang chữ L;
+  - tường vẽ một nét mảnh (không có bề rộng), thang xoắn, thang chữ L;
+  - cửa vẽ thành khe trống không có nét cánh: khe rộng 600 đến 1000 mm được nhận là cửa đi và báo trong kết quả (cần soát lại; `gap_doors: false` để đọc thành ô trống), khe rộng hơn vẫn là ô trống;
   - thang chữ U chỉ đọc được thành hai vế (muốn vẽ thang U trọn vẹn thì khai `stairs` kiểu `u` với vùng thang);
   - đồ đạc, ghi chú (những thứ này giữ nguyên trên bản vẽ).
 - Thiếu gì thì sửa mô tả công trình (`save_path` ghi ra file JSON) rồi vẽ bằng `draw_plan`. Hoặc nhận về rồi sửa bằng `draw_plan update: true`.

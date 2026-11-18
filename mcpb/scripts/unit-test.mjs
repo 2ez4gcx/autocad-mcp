@@ -12,7 +12,7 @@ import { symbolDef } from '../src/symbols.mjs';
 import { doorSchedule } from '../src/doors.mjs';
 import { roofPlan } from '../src/roof.mjs';
 import { stairDetail } from '../src/stair.mjs';
-import { analyseBeam, calcCsv, calcSheet, chooseBars, CONCRETE, flexure, STEEL, stirrups, structuralCalc, supportMoments } from '../src/calc.mjs';
+import { eccentricColumn, analyseBeam, calcCsv, calcSheet, chooseBars, CONCRETE, flexure, STEEL, stirrups, structuralCalc, supportMoments } from '../src/calc.mjs';
 import { boqCsv, boqSheets } from '../src/boq.mjs';
 import { finishQuantities } from '../src/archboq.mjs';
 import { finishWorkbook, howFormula, kcWorkbook } from '../src/workbooks.mjs';
@@ -593,6 +593,167 @@ test('ceiling plan modes: finish without lights (step widths dimensioned), light
   assert.ok(generalNotes('floor').length >= 6 && generalNotes('lighting', 'en')[0].startsWith('Dimensions'));
   const nb = notesBlock(generalNotes('wall'), [0, 0], 50);
   assert.ok(nb[0].text === 'GHI CHÚ:' && nb[1].type === 'mtext' && nb[1].text.startsWith('1. ') && nb[1].text.includes('\n6. '));
+});
+
+test('quantities: skirting round columns, beam sides at beam junctions, the ceiling open over a straight flight', () => {
+  const R4 = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const spec = { walls: [{ points: [[-100, -100], [6100, -100], [6100, 4100], [-100, 4100]], closed: true, thickness: 200 }], heights: { top: 3300 } };
+  const rooms = { 'PHÒNG KHÁCH': R4(0, 0, 6000, 4000) }, fin = { 'PHÒNG KHÁCH': resolveFinish('PHÒNG KHÁCH') };
+  // a free column 300x300: its whole girth; a column standing 150 out of a wall: twice its projection
+  const a = floorSurfaces({ spec, rooms, finishes: fin, structure: { soffit: 3180, slab: 120, beams: [], columns: [{ name: 'C1', box: [2850, 1850, 3150, 2150] }, { name: 'C2', box: [-150, 900, 150, 1200] }] } });
+  const sk = a.faces.filter((f) => f.kind === 'skirting' && f.column);
+  assert.deepEqual(sk.map((f) => [f.column, f.measured]), [['C1', 1.2], ['C2', 0.3]]);
+  assert.ok(near(a.measures[0].skirt, 20 + 1.5, 1e-6), `skirting ${a.measures[0].skirt}`);
+  // beams 220x400 under a 120 slab, no ceiling: 2 sides x 0.28; a beam ending on another covers one side of it
+  // (0.22 x 0.28) and stops at its face; a crossing covers both sides of both
+  const bare = { 'PHÒNG KHÁCH': { ...fin['PHÒNG KHÁCH'], ceiling: null } };
+  const bm = (name, A, B) => ({ name, A, B, b: 220, h: 400 });
+  const sides = (beams) => Object.fromEntries(floorSurfaces({ spec, rooms, finishes: bare, structure: { soffit: 3180, slab: 120, columns: [], beams } }).faces.find((f) => f.kind === 'soffit').additions.map((x) => [x.beam, x.area]));
+  const D1 = bm('D1', [-100, 2000], [6100, 2000]);
+  assert.ok(near(sides([D1]).D1, 2 * 6 * 0.28, 1e-6));
+  const T = sides([D1, bm('D2', [3000, 2000], [3000, 4100])]);
+  assert.ok(near(T.D1, 3.36 - 0.0616, 1e-6) && near(T.D2, 2 * 2 * 0.28 - 0.0616, 1e-6), JSON.stringify(T));
+  const X = sides([D1, bm('D3', [3000, -100], [3000, 4100])]);
+  assert.ok(near(X.D1, 3.36 - 0.1232, 1e-6) && near(X.D3, 2 * 4 * 0.28 - 0.1232, 1e-6), JSON.stringify(X));
+  // a straight flight of 16 x 250 rising 3.3 m: the ceiling at +2.850 (the band) is open from 850/3300 of the run on
+  const c = floorSurfaces({ spec: { ...spec, stairs: [{ start: [1000, 500], direction: 0, width: 1000, treads: 16, going: 250 }] }, rooms, finishes: fin });
+  const cf = c.faces.find((f) => f.kind === 'ceiling');
+  assert.ok(near(cf.measured, 24 - (4000 - (4000 * 850) / 3300) / 1000, 1e-6), `ceiling ${cf.measured}`);
+});
+
+test('accuracy checks: image scale from several dimensions, dimension chains, bills side by side', async () => {
+  const { scaleCheck, otherBill, compareBills } = await import('../src/imagecheck.mjs');
+  // two dimensions that agree: 10 units a pixel both ways
+  const ok = scaleCheck([{ p1: [100, 100], p2: [900, 100], distance: 8000 }, { p1: [100, 100], p2: [100, 600], distance: 5000 }]);
+  assert.ok(near(ok.units_per_pixel, 10, 1e-9) && ok.report.stretch_percent === 0 && ok.warnings.length === 0);
+  // a scan 4% short in height: said, with the two scales
+  const bad = scaleCheck([{ p1: [100, 100], p2: [900, 100], distance: 8000 }, { p1: [100, 100], p2: [100, 580], distance: 5000 }]);
+  assert.ok(bad.report.x_units_per_pixel === 10 && near(bad.report.y_units_per_pixel, 10.4167, 1e-4) && /stretched: 4%/.test(bad.warnings[0]), JSON.stringify(bad));
+  assert.match(scaleCheck({ p1: [0, 0], p2: [1, 0], distance: 5 }).warnings[0], /one calibration dimension only/);
+  assert.match(scaleCheck(null, [{ parts: [3600, 4200], total: 7900, name: 'trục A-C' }]).warnings[0], /trục A-C: the parts add up to 7800, the total printed is 7900/);
+  assert.equal(scaleCheck(null, [{ parts: [3600, 4200], total: 7800 }]).warnings.length, 0);
+  // another bill: codes at the start of a cell, decimal commas, several rows of a code summed
+  const theirs = otherBill({ csv: 'Tag;Mô tả;ĐV;KL\n"FL-01 Gạch 600x600";x;m²;"24,09"\nSK-01;len;m;19,1\nWL-01;sơn;m²;61,3\n', rows: [{ code: 'fl-1', qty: 1 }] });
+  assert.deepEqual([...theirs.entries()], [['FL-01', 25.09], ['SK-01', 19.1], ['WL-01', 61.3]]);
+  const c = compareBills([{ code: 'FL-01', qty: 24.09, unit: 'm²' }, { code: 'SK-01', qty: 19.1, unit: 'm' }, { code: 'CL-01', qty: 24, unit: 'm²' }], theirs);
+  assert.deepEqual(c.rows.map((r) => [r.code, r.percent, r.ok]), [['FL-01', -3.99, false], ['SK-01', 0, true]]);
+  assert.deepEqual([c.only_here.map((r) => r.code), c.only_there.map((r) => r.code)], [['CL-01'], ['WL-01']]);
+});
+
+test('lighting: photometric files (IES, LDT), furniture shading, the first bounce of the reflected light', async () => {
+  const { parseIES, parseLDT, intensity, beamOf } = await import('../src/photometry.mjs');
+  const { lightingCalc } = await import('../src/lux.mjs');
+  const G = Array.from({ length: 19 }, (_, i) => i * 5);
+  const lamb = (lm) => G.map((g) => ((lm / Math.PI) * Math.cos((g * Math.PI) / 180)).toFixed(2));
+  // a diffuse 1000 lm light as an IES file: its flux comes back from the candela, I(0) = Φ/π, nothing above 90°
+  const ies = parseIES(`IESNA:LM-63-2002\n[LUMCAT] T1\nTILT=NONE\n1 1000 1 ${G.length} 1 1 2 0.1 0.1 0\n1 1 12\n${G.join(' ')}\n0\n${lamb(1000).join(' ')}\n`);
+  assert.ok(near(ies.flux, 1000, 2) && near(intensity(ies, 0), 318.31, 0.01) && intensity(ies, 120) === 0 && beamOf(ies) === 120 && ies.watts === 12 && ies.name === 'T1');
+  assert.throws(() => parseIES('nothing'), /not an IES file/);
+  assert.throws(() => parseIES('TILT=NONE\n1 1000 1 2 1 2 2 0 0 0\n1 1 10\n0 90\n0\n1 1\n'), /type B is not read/);
+  // the same light as EULUMDAT, rotationally symmetric (Isym 1), cd per 1000 lm of a 2000 lm lamp
+  const ldt = ['Maker', '1', '1', '1', '0', String(G.length), '5', 'r', 'LDT light', 'n', 'f', 'd', '100', '100', '50', '90', '90', '0', '0', '0', '0', '100', '100', '1', '0', '1',
+    '1', 'LED', '2000', '4000', '80', '18', ...Array(10).fill('1'), '0', ...G.map(String), ...lamb(1000)].join('\n');
+  const d2 = parseLDT(ldt);
+  assert.ok(near(d2.flux, 2000, 4) && near(intensity(d2, 0, 77), 636.62, 0.02) && d2.watts === 18 && d2.name === 'LDT light');
+  // under the light, 2 m below: E = I / h² = 79.6 lx from the file as from the beam model; lm scales the distribution
+  const sq = [[0, 0], [1000, 0], [1000, 1000], [0, 1000]];
+  const one = (ph) => lightingCalc({ rooms: { A: sq }, fixtures: [{ kind: 'downlight', code: 'X', room: 'A', at: [500, 500], z: 2750 }], photometry: ph, mf: 1, margin: 0, spacing: 1000, reflectances: { ceiling: 0, walls: 0, floor: 0 } });
+  const r = one({ X: { dist: ies } });
+  assert.ok(r.rooms[0].em === 80 && r.rooms[0].power_w === 12 && r.rooms[0].flux_lm === 999 && !r.assumed.some((a) => a.item === 'photometry.X'), JSON.stringify(r.rooms[0]));
+  assert.equal(one({ X: { dist: ies, lm: 2000 } }).rooms[0].em, 159);
+  // a wardrobe 2.4 m high between the light and the far end of a room: the points behind it are dark, the one it stands on is left out
+  const room = [[0, 0], [4000, 0], [4000, 1000], [0, 1000]];
+  const sh = (obstacles) => lightingCalc({ rooms: { A: room }, fixtures: [{ kind: 'ceiling_lamp', code: 'Y', room: 'A', at: [500, 500], z: 2750, lm: 1000 }], obstacles, mf: 1, margin: 0, spacing: 1000, reflectances: { ceiling: 0, walls: 0, floor: 0 } }).rooms[0];
+  assert.ok(sh([]).emin > 0 && sh([]).points === 4);
+  const dark = sh([{ room: 'A', poly: [[1500, 0], [2000, 0], [2000, 1000], [1500, 1000]], z0: 0, z1: 2400 }]);
+  assert.ok(dark.emin === 0 && dark.points === 3 && dark.shading.points_left_out === 1 && dark.emax === 80, JSON.stringify(dark));
+  // a low table (below the work plane) shades nothing
+  assert.equal(sh([{ room: 'A', poly: [[1500, 0], [2000, 0], [2000, 1000], [1500, 1000]], z0: 0, z1: 450 }]).emin, sh([]).emin);
+  // reflected light: a narrow beam lands on the floor (ρ 0.2), a wide one partly on the walls (ρ 0.5): less comes back from the narrow one
+  const R6 = [[0, 0], [6000, 0], [6000, 4000], [0, 4000]];
+  const ind = (beam) => lightingCalc({ rooms: { A: R6 }, fixtures: [{ kind: 'downlight', code: 'X', room: 'A', at: [3000, 2000], z: 3000, lm: 4800, beam }] }).rooms[0].indirect;
+  assert.ok(ind(30) < ind(120) && ind(120) < 33, `${ind(30)} ${ind(120)}`);
+});
+
+test('geometry: hip roofs, curved walls as chords, L and spiral stairs', async () => {
+  const { arcPoints, arcLength, buildWalls, expandStairs, spiralGeom } = await import('../src/plan.mjs');
+  const box = { scale: 100, walls: [{ id: 'A', points: [[0, 0], [9000, 0], [9000, 6000], [0, 6000]], closed: true, thickness: 200 }], heights: { top: 3300 }, rooms: [{ name: 'PHÒNG KHÁCH', at: [4500, 3000] }] };
+  // ---- a hip roof 9 x 6 m at 30°: from the long side a trapezoid whose ridge is 9 - 6 = 3 m, from the short side a
+  // triangle; both top out at base + 3 m x tan 30°
+  const hip = { ...box, roofs: [{ type: 'hip', pitch: 30, overhang: 500 }] };
+  const top = 3300 + 3000 * Math.tan(Math.PI / 6);
+  // the width of the roof outline at its highest line
+  const ridge = (side) => {
+    const pts = buildElevation(hip, { side, at: [0, 0], scale: 100 }).entities.filter((e) => e.type === 'line' || e.type === 'polyline').flatMap((e) => e.points ?? [e.from, e.to]);
+    const y = Math.max(...pts.map((q) => q[1])), xs = pts.filter((q) => q[1] > y - 1).map((q) => q[0]);
+    return Math.max(...xs) - Math.min(...xs);
+  };
+  assert.ok(near(ridge('bottom'), 3000, 2), `ridge seen from the long side: ${ridge('bottom')}`);
+  assert.ok(ridge('left') < 2, `a point from the short side: ${ridge('left')}`);
+  noNaN(buildSection(hip, { from: [-1000, 1500], to: [10000, 1500], at: [0, 0], scale: 100 }).entities);
+  assert.throws(() => buildElevation({ ...box, roofs: [{ type: 'dome' }] }, { side: 'bottom' }), /gable, hip or flat/);
+  // its area: the plan to the outer wall faces with the overhang (10.2 x 7.2 m) over cos 30°; four hips and the ridge
+  const rf = floorSurfaces({ spec: hip, rooms: {}, finishes: {} }).faces.find((f) => f.kind === 'roof_pitched');
+  assert.ok(near(rf.measured, (10.2 * 7.2) / Math.cos(Math.PI / 6), 1e-3) && near(rf.ridge_m, 3, 1e-6) && rf.hips_m > 4 * 3.5 * Math.SQRT2, JSON.stringify([rf.measured, rf.ridge_m, rf.hips_m]));
+  // ---- a quarter circle of radius 3 m: chords within 5 mm of the arc, their length within 0.1% of it
+  const pts = [[3000, 0], ...arcPoints([3000, 0], [0, 3000], Math.tan(Math.PI / 8))];
+  assert.ok(pts.length >= 5 && pts.every((p) => near(Math.hypot(p[0], p[1]), 3000, 1e-6)));
+  const chordSum = pts.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]), 0);
+  assert.ok(near(arcLength([3000, 0], [0, 3000], Math.tan(Math.PI / 8)), 1500 * Math.PI, 1e-6) && chordSum > 1500 * Math.PI * 0.999 && chordSum < 1500 * Math.PI);
+  // a wall with a half-round end: the segments of the description keep their numbers; a window in the curve stands
+  // in a chord of its own, long enough for it
+  const cv = { ...box, walls: [{ id: 'A', points: [[0, 0], [8000, 0], [8000, 5000], [0, 5000]], bulges: [0, 1, 0, 0], closed: true, thickness: 200 }],
+    openings: [{ wall: 'A', segment: 1, at: [10500, 2500], width: 1500, type: 'window' }, { wall: 'A', segment: 2, at: [4000, 5000], width: 1200, type: 'window' }], rooms: [{ name: 'P', at: [4000, 2500] }] };
+  const W = buildWalls(cv)[0];
+  assert.ok(W.curved && W.segs.filter((s) => s.from === 1).length > 8 && W.segs.filter((s) => s.from === 2).length === 1);
+  const p = buildPlan(cv);
+  noNaN(p.entities);
+  assert.equal(p.cuts.length, 2);
+  assert.ok(W.segs.some((s) => s.from === 1 && s.L > 1599 && Math.abs(s.d[0]) < 1e-6), 'the window chord is straight and stands at the crown');
+  noNaN(buildElevation({ ...cv, roofs: [{ type: 'flat' }] }, { side: 'right', at: [0, 0], scale: 100 }).entities);
+  assert.throws(() => buildPlan({ ...cv, openings: [{ wall: 'A', segment: 1, width: 900 }] }), /curved wall needs at/);
+  // ---- an L stair: 8 treads, a quarter landing, 7 treads to the left: 17 risers in all, shared 9 / 8
+  const L = expandStairs([{ type: 'l', start: [1000, 600], direction: 0, width: 1000, treads: [8, 7], going: 260 }]);
+  assert.deepEqual(L.map((s) => [s.start, s.direction, s.treads, s.risers, !!s.landing]), [[[1000, 600], 0, 8, 9, false], [[3080, 600], 0, 1, 0, true], [[3580, 1100], 90, 7, 8, false]]);
+  assert.ok(near(L[0].rise_share + L[2].rise_share, 1, 1e-12) && near(L[2].rise_from, 9 / 17, 1e-12));
+  assert.equal(expandStairs([{ type: 'l', start: [0, 0], treads: [3, 3], turn: 'right' }])[2].direction, 0);
+  const G = spiralGeom({ center: [7000, 4000], radius: 900, treads: 14, sweep: 300 });
+  assert.ok(near(G.area, ((300 * Math.PI) / 180 / 2) * (900 ** 2 - 100 ** 2), 1e-6) && G.risers === 15);
+  assert.throws(() => spiralGeom({ center: [0, 0], radius: 100, inner: 200 }), /inner must be less than radius/);
+  const st = { ...box, stairs: [{ type: 'l', start: [1000, 600], direction: 0, width: 1000, treads: [8, 7], going: 260 }, { type: 'spiral', center: [7000, 4000], radius: 900, treads: 14, sweep: 300 }] };
+  const plan = buildPlan(st);
+  noNaN(plan.entities);
+  assert.ok(plan.entities.filter((e) => e.type === 'circle').length === 2 && plan.entities.filter((e) => e.text === 'LÊN').length === 2);
+  // quantities: risers of 3300 / 17 on both flights, the landing as a tread of 1 x 1 m, the ring of the spiral; the room
+  // floor less the footprints, the ceiling open over them
+  const S = floorSurfaces({ spec: st, rooms: { 'PHÒNG KHÁCH': [[100, 100], [8900, 100], [8900, 5900], [100, 5900]] }, finishes: { 'PHÒNG KHÁCH': resolveFinish('PHÒNG KHÁCH') } });
+  const of = (k) => S.faces.filter((f) => f.kind === k);
+  assert.deepEqual(of('riser').map((f) => [f.n, Math.round(f.H * 1e4) / 1e4]), [[9, 0.1941], [8, 0.1941], [15, 0.22]]);
+  assert.ok(near(of('tread').reduce((s, f) => s + f.measured, 0), 8 * 0.26 + 1 + 7 * 0.26 + G.area / 1e6, 1e-6));
+  const fl = of('floor')[0];
+  assert.ok(near(fl.measured, 8.8 * 5.8 - 2.08 - 1 - 1.82 - Math.PI * 0.81, 1e-6), `floor ${fl.measured}`);
+  assert.equal(of('ceiling')[0].deductions.length, 4);
+});
+
+test('columns in eccentric compression: random eccentricity, second order, large and small eccentricity', () => {
+  const mat = { c: CONCRETE.B20, s: STEEL['CB300-V'] };
+  // axial only: the random eccentricity max(l0/600, h/30, 10) = 10 mm is taken
+  const a = eccentricColumn({ N: 300, M: 0, b: 220, h: 220, l0: 2310, AsFace: 402, a: 41, mat });
+  assert.ok(a.e0 === 10 && a.ok && a.eta > 1 && a.eta < 1.2);
+  // N 200 kN, M 10 kNm: e0 = 50; large eccentricity, x = N / (Rb b) = 79 (the steel terms cancel: Rs = Rsc)
+  const b = eccentricColumn({ N: 200, M: 10, b: 220, h: 220, l0: 2310, AsFace: 402, a: 41, mat });
+  assert.ok(near(b.e0, 50, 1e-9) && near(b.x, 200000 / (11.5 * 220), 0.01) && b.ok);
+  // x under 2a' = 82: the moment about the compression bars, [M] = Rs As (h0 - a')
+  assert.ok(near(b.Mu, (260 * 402 * (179 - 41)) / 1e6, 1e-6));
+  // a deeper compression zone: [M] = Rb b x (h0 - x/2) + Rsc As' (h0 - a')
+  const d = eccentricColumn({ N: 250, M: 10, b: 220, h: 220, l0: 2310, AsFace: 402, a: 41, mat });
+  assert.ok(near(d.x, 250000 / (11.5 * 220), 0.01) && near(d.Mu, (11.5 * 220 * d.x * (179 - d.x / 2) + 260 * 402 * (179 - 41)) / 1e6, 1e-6));
+  // more moment fails; a heavy load is in small eccentricity (x past ξR h0) and still balanced
+  assert.ok(!eccentricColumn({ N: 300, M: 40, b: 220, h: 220, l0: 2310, AsFace: 402, a: 41, mat }).ok);
+  const c = eccentricColumn({ N: 600, M: 5, b: 220, h: 220, l0: 2310, AsFace: 402, a: 41, mat });
+  assert.ok(c.x > 0.8 / (1 + 260 / 200000 / 0.0035) * 179 && c.x <= 220);
+  // a slender column near its critical load fails
+  assert.ok(!eccentricColumn({ N: 600, M: 5, b: 220, h: 220, l0: 9000, AsFace: 402, a: 41, mat }).ok);
 });
 
 test('joinery: display casework, elevation and section 1-1 at their own scales', async () => {
@@ -1299,7 +1460,9 @@ test('structural calculation: columns and pad footings sized for their loads, st
   const footed = R.columns.filter((c) => !c.on);
   // every column and footing passes with the sizes the calculation chose; the pads cover the area needed
   assert.ok(footed.every((c) => c.colOk && c.footOk && c.A >= c.Areq && c.foot.B % 100 === 0 && c.foot.B >= 1200), JSON.stringify(footed.map((c) => [c.N, c.cap, c.Areq, c.A])));
-  assert.ok(footed.every((c) => near(c.Areq, c.N / 1.15 / (100 - 20 * 1.5), 0.01) && near(c.phi, buckling(0.7 * 4050 / 220), 1e-3)));
+  assert.ok(footed.every((c) => near(c.Areq, c.N / 1.15 / (100 - 20 * 1.5), 0.01) && near(c.phi, buckling(0.7 * 4050 / Math.min(...c.size)), 1e-3)));
+  // a 9.8 m span on corner columns: the beams' unbalanced moment makes 220x220 fail in eccentric compression, the size goes up
+  assert.ok(footed.every((c) => c.ecc && c.ecc.ok && c.ecc.util <= 1 && c.ecc.M > 0) && footed.some((c) => c.first && Math.min(...c.size) > 220), JSON.stringify(footed.map((c) => [c.size, c.ecc])));
   assert.equal(R.footings.reduce((s, f) => s + f.count, 0), 4);
   // 100 kPa under a 9.8 m span: the pads take over half the plan -> strip footings or a raft, said in the warnings and on the sheet
   assert.ok(R.foundation.strip && R.foundation.ratio > 0.5 && R.warnings.some((w) => /strip footings or a raft/.test(w)));
@@ -2754,6 +2917,12 @@ test('read a plan drawn by others: walls from face pairs, openings by swing, gla
   assert.equal(r2.found.glazed_walls, 1);
   // a window that misses the plan reads nothing
   assert.equal(readPlan(g, { window: [[20000, 20000], [30000, 30000]] }).spec.walls.length, 0);
+  // the door gap with no swing drawn: still a door (said in the result), an opening with gapDoors off
+  const g3 = { ...g, arcs: [] };
+  const r3 = readPlan(g3);
+  assert.ok(r3.spec.openings.some((o) => o.type === 'door' && o.width === 900) && r3.unread.some((u) => /plain gaps/.test(u.what) && u.count === 1), JSON.stringify(r3.unread));
+  const r4 = readPlan(g3, { gapDoors: false });
+  assert.ok(r4.spec.openings.some((o) => o.type === 'opening' && o.width === 900), JSON.stringify(r4.spec.openings));
 });
 
 test('electrical set: boards, switches by the doors, sockets, air conditioners, circuits, breakers and cables', () => {

@@ -115,7 +115,56 @@ function intersect(p, u, q, v) {
   return add(p, mul(u, s));
 }
 
-/** Normalised walls with their segments: axis a->b, direction d, face offsets [o1, o2] along left(d). */
+/**
+ * The points of an arc from a to b by its bulge (tan of a quarter of its angle, positive = counter-clockwise, as in a
+ * polyline), a excluded and b included: chords whose sagitta stays under 5 mm (or no longer than chord), 4 at least.
+ */
+export function arcPoints(a, b, bulge, chord = null, openings = []) {
+  const c = dist(a, b), th = 4 * Math.atan(bulge);
+  if (Math.abs(bulge) < 1e-9 || c < 1) return [b];
+  const R = c / (2 * Math.sin(Math.abs(th) / 2));
+  const d = unit(sub(b, a)), n = left(d);
+  const ctr = add(mul(add(a, b), 0.5), mul(n, (c / 2) / Math.tan(th / 2)));
+  const step = (chord ? 2 * Math.asin(Math.min(1, chord / (2 * R))) : 2 * Math.acos(Math.max(-1, 1 - 5 / R))) / Math.abs(th);
+  const a0 = Math.atan2(a[1] - ctr[1], a[0] - ctr[0]);
+  const at = (t) => (t >= 1 - 1e-12 ? b : [ctr[0] + R * Math.cos(a0 + th * t), ctr[1] + R * Math.sin(a0 + th * t)]);
+  // an opening stands in one straight chord of its own (a door or a window is straight): from its jambs, 50 mm clear
+  const keep = openings.map((o) => {
+    let f = (Math.atan2(o.at[1] - ctr[1], o.at[0] - ctr[0]) - a0) / th;
+    f -= Math.floor(f);
+    const half = Math.asin(Math.min(1, (o.width / 2 + 50) / R)) / Math.abs(th);
+    return [Math.max(0, f - half), Math.min(1, f + half)];
+  }).sort((x, y) => x[0] - y[0]);
+  const ts = [0];
+  const fill = (to) => {
+    const from = ts[ts.length - 1];
+    if (to - from < 1e-9) return;
+    const k = Math.max(1, Math.ceil((to - from) / Math.max(step, 1e-4)));
+    for (let i = 1; i <= k; i++) ts.push(from + ((to - from) * i) / k);
+  };
+  for (const [t0, t1] of keep) {
+    if (t0 < ts[ts.length - 1] - 1e-9) continue; // overlaps the one before: the plan engine reports the overlap
+    fill(t0);
+    ts.push(t1);
+  }
+  fill(1);
+  // four chords at least on an arc with no opening
+  if (ts.length < 5 && !keep.length) return [1, 2, 3, 4].map((i) => at(i / 4));
+  return ts.slice(1).map(at);
+}
+
+/** The length of an arc from a to b by its bulge. */
+export const arcLength = (a, b, bulge) => {
+  const c = dist(a, b), th = 4 * Math.atan(bulge);
+  return Math.abs(bulge) < 1e-9 ? c : (c / (2 * Math.sin(Math.abs(th) / 2))) * Math.abs(th);
+};
+
+/**
+ * Normalised walls with their segments: axis a->b, direction d, face offsets [o1, o2] along left(d). A wall with bulges
+ * (one per segment, 0 = straight) is curved there: the arc becomes short chords (chord: their longest length, default
+ * by a 5 mm sagitta), so every engine measures and draws it as it does straight walls; from: the segment of the
+ * description each chord comes from.
+ */
 export function buildWalls(spec) {
   const walls = [];
   (spec.walls || []).forEach((w, wi) => {
@@ -129,17 +178,72 @@ export function buildWalls(spec) {
     const material = w.material ?? spec.wall_material ?? 'brick';
     if (!(material in MATERIALS)) throw new PlanError(`${name}.material must be one of ${Object.keys(MATERIALS).join(', ')}`);
     if (w.closed && pts.length >= 3 && dist(pts[0], pts[pts.length - 1]) > EPS) pts.push(pts[0]);
+    const bulges = Array.isArray(w.bulges) ? w.bulges.map((b, i) => num(b ?? 0, `${name}.bulges[${i}]`)) : null;
+    const chord = w.chord !== undefined ? num(w.chord, `${name}.chord`, { positive: true }) : null;
     const segs = [];
     for (let i = 0; i + 1 < pts.length; i++) {
-      const a = pts[i];
-      const b = pts[i + 1];
-      const L = dist(a, b);
-      if (L < 1) throw new PlanError(`${name}: segment ${i} is shorter than 1 mm`);
-      segs.push({ wall: wi, index: i, a, b, d: unit(sub(b, a)), L, o1: offs[0], o2: offs[1], t });
+      const bg = bulges?.[i] ?? 0;
+      if (Math.abs(bg) > 4) throw new PlanError(`${name}.bulges[${i}] ${bg}: an arc of more than 300 degrees; draw it as two arcs`);
+      let a = pts[i];
+      const ops = bg ? (spec.openings || []).filter((o) => (o.wall === wi || o.wall === (w.id ?? `W${wi + 1}`)) && (o.segment ?? 0) === i && Array.isArray(o.at) && o.width > 0) : [];
+      for (const b of arcPoints(a, pts[i + 1], bg, chord, ops)) {
+        const L = dist(a, b);
+        if (L < 1) throw new PlanError(`${name}: segment ${i} is shorter than 1 mm`);
+        segs.push({ wall: wi, index: segs.length, from: i, a, b, d: unit(sub(b, a)), L, o1: offs[0], o2: offs[1], t, ...(bg ? { curved: true } : {}) });
+        a = b;
+      }
     }
-    walls.push({ id: w.id ?? `W${wi + 1}`, index: wi, segs, t, material, layer: w.layer });
+    walls.push({ id: w.id ?? `W${wi + 1}`, index: wi, segs, t, material, layer: w.layer, ...(bulges?.some((b) => b) ? { curved: true } : {}) });
   });
   return walls;
+}
+
+/**
+ * The stairs of a floor as the engines measure and draw them. An L stair {type: "l", start, direction, width, treads:
+ * [n1, n2] (or their sum), going, turn: left | right} becomes its first flight, its quarter landing (a square of the
+ * width) and its second flight turned 90 degrees, each a straight flight with its share of the storey height
+ * (rise_share, rise_from: the risers are one more than the treads in each flight). Other stairs pass through.
+ */
+export function expandStairs(stairs) {
+  const out = [];
+  (stairs || []).forEach((st, i) => {
+    if (st?.type !== 'l') {
+      out.push(st);
+      return;
+    }
+    const name = `stairs[${i}]`;
+    const start = pt(st.start, `${name}.start`), dir = num(st.direction ?? 90, `${name}.direction`);
+    const a = (dir * Math.PI) / 180, u = [Math.cos(a), Math.sin(a)], n = left(u);
+    const w = num(st.width ?? 1000, `${name}.width`, { positive: true }), g = num(st.going ?? 270, `${name}.going`, { positive: true });
+    const tr = Array.isArray(st.treads) ? st.treads : [Math.ceil((st.treads ?? 16) / 2), Math.floor((st.treads ?? 16) / 2)];
+    const n1 = Math.round(num(tr[0], `${name}.treads[0]`, { positive: true })), n2 = Math.round(num(tr[1], `${name}.treads[1]`, { positive: true }));
+    if (st.turn !== undefined && !['left', 'right'].includes(st.turn)) throw new PlanError(`${name}.turn must be left or right`);
+    const turn = st.turn === 'right' ? -1 : 1, T = n1 + n2 + 2;
+    const base = { width: w, going: g, ...(st.height !== undefined ? { height: st.height } : {}), of: i };
+    const C = add(start, mul(u, n1 * g + w / 2)), u2 = mul(n, turn);
+    out.push({ ...base, start: P(start), direction: dir, treads: n1, risers: n1 + 1, rise_share: (n1 + 1) / T, rise_from: 0, ...(st.label !== undefined ? { label: st.label } : {}) });
+    out.push({ ...base, start: P(add(start, mul(u, n1 * g))), direction: dir, treads: 1, going: w, risers: 0, rise_share: 0, rise_from: (n1 + 1) / T, landing: true, label: '' });
+    out.push({ ...base, start: P(add(C, mul(u2, w / 2))), direction: dir + 90 * turn, treads: n2, risers: n2 + 1, rise_share: (n2 + 1) / T, rise_from: (n1 + 1) / T, label: '' });
+  });
+  return out;
+}
+
+/**
+ * A spiral stair {type: "spiral", center, radius (outer, default 900), inner (the post, default 100), treads (14),
+ * sweep (degrees turned from the foot to the head, default 300), start_angle (of the first riser, default 0),
+ * clockwise}: its sizes checked, angles in radians.
+ */
+export function spiralGeom(st, name = 'stairs[]') {
+  const c = pt(st.center, `${name}.center`);
+  const R = num(st.radius ?? 900, `${name}.radius`, { positive: true }), r = num(st.inner ?? 100, `${name}.inner`, { min: 0 });
+  if (r >= R) throw new PlanError(`${name}.inner must be less than radius`);
+  const k = Math.round(num(st.treads ?? 14, `${name}.treads`, { positive: true }));
+  const sweepDeg = num(st.sweep ?? 300, `${name}.sweep`, { positive: true });
+  if (sweepDeg > 720) throw new PlanError(`${name}.sweep over 720 degrees`);
+  const sgn = st.clockwise ? -1 : 1, a0 = (num(st.start_angle ?? 0, `${name}.start_angle`) * Math.PI) / 180, sweep = (sweepDeg * Math.PI) / 180;
+  const ang = (i) => a0 + (sgn * sweep * i) / k;
+  const at = (rad, t) => [c[0] + rad * Math.cos(t), c[1] + rad * Math.sin(t)];
+  return { c, R, r, k, sweep, sweepDeg, sgn, a0, ang, at, risers: k + 1, area: (sweep / 2) * (R * R - r * r), box: [c[0] - R, c[1] - R, c[0] + R, c[1] + R] };
 }
 
 export function segRect(s, from = 0, to = s.L, extra = 0) {
@@ -196,8 +300,18 @@ export function findSegment(walls, o, name) {
   else w = walls.find((x) => x.id === o.wall);
   if (!w) throw new PlanError(`${name}.wall '${o.wall}' not found (use a wall id or its index)`);
   const si = o.segment ?? 0;
-  const s = w.segs[si];
-  if (!s) throw new PlanError(`${name}.segment ${si} does not exist (wall ${w.id} has ${w.segs.length} segments)`);
+  // the segment of the description; on a curved one, the chord nearest to the point of the opening
+  let cands = w.curved ? w.segs.filter((x) => x.from === si) : [w.segs[si]].filter(Boolean);
+  if (!cands.length) throw new PlanError(`${name}.segment ${si} does not exist (wall ${w.id} has ${w.curved ? Math.max(...w.segs.map((x) => x.from)) + 1 : w.segs.length} segments)`);
+  let s = cands[0];
+  if (cands.length > 1) {
+    if (!Array.isArray(o.at)) throw new PlanError(`${name}: an opening on a curved wall needs at (a point on the wall)`);
+    const dSeg = (x) => {
+      const u = Math.max(0, Math.min(x.L, dot(sub(o.at, x.a), x.d)));
+      return dist(o.at, add(x.a, mul(x.d, u)));
+    };
+    s = cands.reduce((m, x) => (dSeg(x) < dSeg(m) ? x : m));
+  }
   return { w, s };
 }
 
@@ -372,7 +486,8 @@ export function planAssumptions(spec) {
   if (spec.grid_columns && spec.grid_columns.size === undefined) add('grid_columns.size', '400x400');
   for (const [i, st] of (spec.stairs || []).entries()) {
     if (st.type === 'u') continue;
-    for (const [k, v] of [['width', 1200], ['treads', 10], ['going', 270]]) if (st[k] === undefined) add(`stairs[${i}].${k}`, v);
+    const defs = st.type === 'spiral' ? [['radius', 900], ['inner', 100], ['treads', 14], ['sweep', 300]] : st.type === 'l' ? [['width', 1000], ['treads', '8 + 8'], ['going', 270], ['turn', 'left']] : [['width', 1200], ['treads', 10], ['going', 270]];
+    for (const [k, v] of defs) if (st[k] === undefined) add(`stairs[${i}].${k}`, v);
   }
   return out;
 }
@@ -722,9 +837,26 @@ export function buildPlan(spec) {
   });
 
   // ---- stairs (straight flights): outline, treads, walking line with arrow, UP label
-  (spec.stairs || []).forEach((st, i) => {
+  expandStairs(spec.stairs).forEach((st, i) => {
     if (st.type === 'u') return;
-    const name = `stairs[${i}]`;
+    const name = `stairs[${st.of ?? i}]`;
+    if (st.type === 'spiral') {
+      // a spiral stair: the outer circle, the post, a riser line per tread, the walking line with its arrow
+      const G = spiralGeom(st, name), seg = (t0, t1, rad) => {
+        const m = Math.max(2, Math.ceil(Math.abs(t1 - t0) / (Math.PI / 24)));
+        return Array.from({ length: m + 1 }, (_, j) => P(G.at(rad, t0 + ((t1 - t0) * j) / m)));
+      };
+      entities.push({ type: 'circle', center: P(G.c), radius: G.R, layer: L.stair });
+      if (G.r > 0) entities.push({ type: 'circle', center: P(G.c), radius: G.r, layer: L.stair });
+      for (let t = 0; t <= G.k; t++) entities.push({ type: 'line', from: P(G.at(G.r, G.ang(t))), to: P(G.at(G.R, G.ang(t))), layer: L.stair });
+      const rm = (G.R + G.r) / 2 + (G.R - G.r) / 6, walk = seg(G.ang(0.5), G.ang(G.k - 0.5), rm);
+      entities.push({ type: 'polyline', points: walk, layer: L.stair });
+      const tip = walk[walk.length - 1], bk = walk[walk.length - 2], d = unit(sub(tip, bk)), nn = left(d), ah = Math.min(250, 3 * scale);
+      entities.push({ type: 'polyline', points: [P(add(sub(tip, mul(d, ah)), mul(nn, ah / 2))), tip, P(sub(sub(tip, mul(d, ah)), mul(nn, ah / 2)))], layer: L.stair });
+      const lblS = stairLabels ? st.label ?? LABELS[lang].up : null;
+      if (lblS) entities.push({ type: 'text', text: lblS, at: P(G.at(G.R + 2 * scale, G.ang(-1.2))), height: 2.5 * scale, layer: L.text, style: TEXT_STYLE });
+      return;
+    }
     const start = pt(st.start, `${name}.start`);
     const a = ((st.direction ?? 90) * Math.PI) / 180;
     const u = [Math.cos(a), Math.sin(a)];
@@ -738,9 +870,12 @@ export function buildPlan(spec) {
     entities.push({ type: 'polyline', points: [corner(0, 0), corner(run, 0), corner(run, w), corner(0, w)], closed: true, layer: L.stair });
     for (let t = 1; t < k; t++) entities.push({ type: 'line', from: corner(t * g, 0), to: corner(t * g, w), layer: L.stair });
     const tip = corner(run - g / 2, w / 2);
-    entities.push({ type: 'polyline', points: [corner(g / 2, w / 2), tip], layer: L.stair });
     const ah = Math.min(g * 0.8, 3 * scale);
-    entities.push({ type: 'polyline', points: [corner(run - g / 2 - ah, w / 2 - ah / 2), tip, corner(run - g / 2 - ah, w / 2 + ah / 2)], layer: L.stair });
+    // (the quarter landing of an L stair: its outline only)
+    if (!st.landing) {
+      entities.push({ type: 'polyline', points: [corner(g / 2, w / 2), tip], layer: L.stair });
+      entities.push({ type: 'polyline', points: [corner(run - g / 2 - ah, w / 2 - ah / 2), tip, corner(run - g / 2 - ah, w / 2 + ah / 2)], layer: L.stair });
+    }
     const lbl = stairLabels ? st.label ?? LABELS[lang].up : null;
     if (lbl) {
       entities.push({

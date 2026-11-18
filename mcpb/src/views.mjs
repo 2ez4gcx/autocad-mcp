@@ -20,7 +20,7 @@ export const PLAN_TOOLS = new Set(['verify_quantities']);
 // walls of an interior elevation...): two calls that agree on them draw the same view
 const IDENTITY = ['floor', 'mark', 'sides', 'room', 'walls', 'kind', 'label', 'name', 'item', 'mode', 'focus', 'system', 'set', 'stair'];
 // what a call says about this one run, not about the view
-const NOT_KEPT = new Set(['plan', 'update', 'dry_run', 'at', 'csv_path', 'xlsx_path']);
+const NOT_KEPT = new Set(['plan', 'update', 'dry_run', 'at', 'csv_path', 'xlsx_path', 'compare_with']);
 // the building of draw_plan is kept once, as the plan of the drawing: its view keeps how it was drawn
 const BUILDING = new Set(['walls', 'openings', 'columns', 'grid_columns', 'grids', 'rooms', 'stairs', 'levels', 'sections', 'north', 'balconies', 'floors', 'entities', 'heights', 'roofs',
   'wall_thickness', 'wall_material']);

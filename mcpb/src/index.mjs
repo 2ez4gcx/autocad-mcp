@@ -21,7 +21,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod';
 import { buildBuilding, buildElevation, buildingAssumed, buildSection, floorsOf, HEIGHT_DEFAULTS } from './elevation.mjs';
 import { buildPlan, planAssumptions, PlanError } from './plan.mjs';
-import { capsWidth, coverSheet, dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, setDrawingLanguage, titleBlock, viewStyles, viewTitle } from './standards.mjs';
+import { capsWidth, coverSheet, dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, setDrawingLanguage, titleBlock, viewStyles, viewTitle, ROOM } from './standards.mjs';
 import { beamDetail, beamSchedule, footingDetail, framingPlan, rcSection, rebarSchedule, structureNotes } from './structure.mjs';
 import { symbolDef } from './symbols.mjs';
 import { doorSchedule } from './doors.mjs';
@@ -49,6 +49,8 @@ import {
 } from './interior.mjs';
 import { LIGHT_BLOCKS } from './symbols.mjs';
 import { LUX_TASKS, lightingCalc, luxTable } from './lux.mjs';
+import { compareBills, otherBill, scaleCheck } from './imagecheck.mjs';
+import { parsePhotometry } from './photometry.mjs';
 import { calcSheetOf, defaultFixtures, legend as mepLegend, maskTexts, signOff, tablesCsv, wallBoxes } from './mep.mjs';
 import {
   DEVICES, electricalBasis, electricalDesign, electricalNotes, electricalPlan, electricalQuantities, electricalTables, riserDiagram, singleLineDiagram,
@@ -318,7 +320,7 @@ const server = new McpServer(
       '2. Start with drawing_info (and list_layers). On a connection error call ping; if the bridge is missing call install_autocad_bridge.',
       '2b. Language: the drawings are Vietnamese by default (decimal comma, TCVN titles and codes). For a set in English call setup_layers with language "en" once (the session then draws in English) or pass language "en" to each tool: titles, notes, legends, tables, codes (DB-1/MDB boards, AC/WH circuits, CW/HW/SP/WP pipes, B2./GB. beams, F1 footings) and decimal points follow. Names the user gives (rooms, floors, sheet titles) are written as given: name the rooms in the language of the set (English names such as BEDROOM, KITCHEN, BATHROOM are recognised as well as Vietnamese ones).',
       '3. Drawing from an image or a 3D model: read every printed dimension first (view_image with grid/crop zooms in), pick the plot scale, ' +
-        'setup_layers + setup_styles, attach_image as a faded underlay calibrated on a known dimension, draw_plan for walls/openings/columns/' +
+        'setup_layers + setup_styles, attach_image as a faded underlay calibrated on two or more known dimensions (one horizontal, one vertical: scale_check says whether the image can be trusted; dimension_chains checks the arithmetic of what was read), draw_plan for walls/openings/columns/' +
         'grids/stairs/rooms/dimensions, draw_entities for the rest (furniture, fixtures, hatches, notes, elevations), then screenshot and compare ' +
         'with the source, fix, check_drawing, create_layout + export_pdf. Elevations and sections: draw_elevation / draw_section from ' +
         'the same plan (heights, roofs). Structural details: draw_structure_detail + rebar_schedule (sizes and bars from the engineer). ' +
@@ -1235,6 +1237,7 @@ server.registerTool('read_plan', {
     thickness: opt(jsonish(z.array(z.number()).length(2))).describe('[min, max] wall thickness in mm (default [80, 450])'),
     wall_layers: opt(jsonish(z.array(Str))).describe('Layers to take as wall layers whatever their name'),
     preview: z.boolean().default(false), adopt: z.boolean().default(false),
+    gap_doors: z.boolean().default(true).describe('A plain gap 600 to 1000 wide in a wall with no leaf, arc or block drawn is read as a door (listed in the result); false reads it as an opening'),
     save_path: opt(Str).describe('Write the plan description (JSON) to this file'),
     scale: z.number().positive().default(100), language: opt(Lang),
   },
@@ -1243,7 +1246,7 @@ server.registerTool('read_plan', {
   const tool = 'read_plan';
   const lang = args.language ?? language;
   const g = await call('plan_geometry', args.window ? { window: args.window } : {});
-  const opts = { thickness: args.thickness ?? [80, 450], wallLayers: args.wall_layers ?? null };
+  const opts = { thickness: args.thickness ?? [80, 450], wallLayers: args.wall_layers ?? null, gapDoors: args.gap_doors };
   let window = args.window ?? null, candidates;
   if (!window) {
     candidates = engine(tool, () => planAreas(g, opts));
@@ -1644,7 +1647,11 @@ server.registerTool('draw_plan', {
     'Draw a complete floor plan in one Undo step from a plan description in mm (read from an image, a sketch or a 3D model):\n' +
     '- walls: [{id?, points:[[x,y],...] (wall AXIS), thickness (200), justify: center|left|right (side of the axis, looking ' +
     'along it), closed?, material: brick|concrete|block|light|stone|solid|none}] -> clean L/T/X junctions (wall pieces are ' +
-    'unioned), cut outline on A-WALL 0.5, material hatch on A-WALL-PATT\n' +
+    'unioned), cut outline on A-WALL 0.5, material hatch on A-WALL-PATT. Curved walls: bulges [one per segment, 0 = straight, ' +
+    'as in a polyline: tan of a quarter of the arc angle, + = counter-clockwise; 0.4142 = a quarter circle, 1 = a half ' +
+    'circle]: the arc is built of short chords (5 mm off the true curve at most; chord sets their length), so elevations, ' +
+    'rooms and quantities follow it; an opening on a curved segment gives segment and at, and stands in a straight chord ' +
+    'of its own\n' +
     '- openings: [{wall (id or index), segment (0 = first axis segment), offset (from the segment start to the opening edge) ' +
     'or at (centre point), width, type: door|double_door|sliding|window|opening, toward:[x,y] (point the door swings to, e.g. ' +
     'inside the room) or side: left|right, hinge: start|end, tag? ("D1"), tag_at? (tag position when the automatic one ' +
@@ -1657,7 +1664,11 @@ server.registerTool('draw_plan', {
     'unlabelled_spaces lists closed spaces without a room.\n' +
     '- stairs: [{start (middle of the first tread edge), direction (deg, 90 = up the page), width, treads, going, label?}] or ' +
     'U stairs [{type: "u", region: [[x0,y0],[x1,y1]] (stairwell), direction: up|down|left|right (flight 1 going up), turn: ' +
-    'left|right (side of flight 2), gap: 100, risers?}] -> two flights, half landing, treads, LÊN/XUỐNG walking lines, cut line\n' +
+    'left|right (side of flight 2), gap: 100, risers?}] -> two flights, half landing, treads, LÊN/XUỐNG walking lines, cut line; ' +
+    'L stairs [{type: "l", start, direction, width: 1000, treads: [8, 8] (first and second flight), going, turn: left|right}] ' +
+    '-> two flights at right angles with a quarter landing; spiral stairs [{type: "spiral", center, radius: 900, inner: 100 ' +
+    '(the post), treads: 14, sweep: 300 (degrees turned), start_angle, clockwise}]. U stairs are also drawn in sections and ' +
+    'the stair detail; straight, L and spiral stairs in the plan and the quantities only\n' +
     '- balconies: [{region (slab outside the walls), railing: 1100}] -> slab edge and railing\n' +
     '- floors (a building of several storeys): [{name, height (3600 ground floor, 3300 above), level?, walls (default: the ' +
     'floor below), columns, openings, rooms, stairs, balconies, levels, parapet: {walls: [ids of the floor below], height: ' +
@@ -1986,10 +1997,17 @@ server.registerTool('attach_image', {
     '(not plotted), sent to the back. Scale: calibrate {p1:[px,py], p2:[px,py], distance} = two pixels of a known dimension ' +
     'and its real length in drawing units (best), or width (drawing units of the whole image width), or units_per_pixel. ' +
     'Position: anchor {pixel:[px,py], at:[x,y]} puts a pixel (e.g. grid A-1) on a drawing point, else the bottom-left corner ' +
-    'at "at". Returns pixel_to_drawing (x = x0 + x1*px + x2*py, y likewise), used by draw_entities image_handle.',
+    'at "at". Returns pixel_to_drawing (x = x0 + x1*px + x2*py, y likewise), used by draw_entities image_handle.\n' +
+    'Accuracy: give calibrate as a list of several printed dimensions, some horizontal and some vertical: the scale is ' +
+    'fitted to all of them and scale_check reports how far each is off and whether the image is stretched (a photo taken ' +
+    'at an angle, a scan that is not square): over 1% the coordinates read from the image are not to be trusted, type the ' +
+    'printed dimensions instead. dimension_chains checks the arithmetic of the dimensions read from the image before ' +
+    'drawing: [{parts: [3600, 4200], total: 7800}].',
   inputSchema: {
     path: Str,
-    calibrate: opt(Obj), width: opt(z.number().positive()), units_per_pixel: opt(z.number().positive()),
+    calibrate: opt(jsonish(z.union([z.record(z.string(), z.any()), z.array(z.record(z.string(), z.any()))]))).describe('{p1, p2, distance} or a list of them'),
+    dimension_chains: opt(Specs).describe('[{parts: [...], total, name?}] printed dimension chains: the parts must add up to the total'),
+    width: opt(z.number().positive()), units_per_pixel: opt(z.number().positive()),
     anchor: opt(Obj), at: opt(Point), rotation: z.number().default(0),
     fade: z.number().int().min(0).max(90).default(40),
     layer: z.string().default(ROLE.image),
@@ -1997,7 +2015,16 @@ server.registerTool('attach_image', {
     reload: z.boolean().default(true).describe('The same file attached again (a render written again): read it again'),
   },
   annotations: EDIT,
-}, async (args) => text(await call('attach_image', withStyles({ ...args, path: path.resolve(args.path) }))));
+}, async ({ dimension_chains, ...args }) => {
+  const chk = engine('attach_image', () => scaleCheck(args.calibrate, dimension_chains));
+  const send = { ...args, path: path.resolve(args.path) };
+  if (chk.units_per_pixel) {
+    delete send.calibrate;
+    send.units_per_pixel = chk.units_per_pixel;
+  }
+  const r = await call('attach_image', withStyles(send));
+  return text({ ...r, ...(chk.report ? { scale_check: chk.report } : {}), ...(chk.chains ? { dimension_chains: chk.chains } : {}), ...(chk.warnings.length ? { warnings: [...(r.warnings || []), ...chk.warnings] } : {}) });
+});
 
 /** A LISP string literal (paths with forward slashes). */
 const lispStr = (s) => `"${String(s).replace(/\\/g, '/').replace(/"/g, '\\"')}"`;
@@ -2405,7 +2432,7 @@ const HEIGHTS_DOC =
   'heights {ground: -450 (outside ground, mm from the finished floor ±0.000), top: 3600 (top of walls / eaves), door_head: ' +
   '2400, window_sill: 900, window_head: 2400, slab: 100, foundation: {depth: 1500, width: 900, height: 350, lean: 100}, ' +
   'walls_to_roof: end|all (walls across the ridge rise to the roof: gable ends only, or every one = tường thu hồi)}; ' +
-  'per opening: sill, head; per wall: height. roofs [{type: gable|flat, ridge: x|y (direction of the ridge in plan), ' +
+  'per opening: sill, head; per wall: height. roofs [{type: gable|hip|flat (hip: four slopes of one pitch, mái hông), ridge: x|y (direction of the ridge in plan), ' +
   'pitch (deg), overhang, thickness, base (eaves level, default heights.top), parapet (flat), region [[x0,y0],[x1,y1]] ' +
   '(default: the whole building)}] - several parts for e.g. a porch gable in front of the main roof.';
 
@@ -3915,11 +3942,19 @@ server.registerTool('lighting_calc', {
     'corridor and entrance 100/0.4, store 100/0.4...; rooms of a dwelling get reference values, not a pass or a fail), the ' +
     'power and the lighting power density (W/m²), and what to change where it fails. vertical: planes such as display walls ' +
     '[{name, from, to, z0, z1, em}] (illuminance on the face looking into the room). csv_path saves the table; table: true ' +
-    'draws it. Walls between rooms block light: only the lights of a room light it.',
+    'draws it. Walls between rooms block light: only the lights of a room light it.\n' +
+    'Accuracy: give the photometric file of each light, photometry {"LT-01": {file: "C:/.../downlight.ies"}} (IES LM-63 ' +
+    'type C or EULUMDAT .ldt, from the maker): its measured distribution, flux and power replace the beam model (lm scales ' +
+    'it; per_metre: true for a file of 1 m of a linear light). The furniture of draw_furniture_plan taller than the work ' +
+    'plane shades it (wardrobes, shelves, wall cabinets; shading: false to leave it out), with obstacles [{room, poly, z0, ' +
+    'z1}] for partitions. The reflected light takes the first bounce where the light lands (floor, walls). Without ' +
+    'photometric files the result is an estimate (the assumed list names the photometry taken by default).',
   inputSchema: {
     rooms: opt(Obj).describe(`{room name: {task, em, u0, plane}}: task one of ${Object.keys(LUX_TASKS).join(', ')}; em/u0 a requirement of its own; plane the height of the reference plane (mm)`),
     lights: opt(Specs).describe('Lights as in draw_ceiling_plan (plan coordinates), with lm, beam, w, z, tilt, hang; default: those of the last draw_ceiling_plan of the floor'),
-    photometry: opt(Obj).describe('{code or kind: {lm (lm_m for linear and strip), beam (degrees, 120 = diffuse), w (w_m), hang (pendant)}}'),
+    photometry: opt(Obj).describe('{code or kind: {file (.ies / .ldt of the light), lm (lm_m for linear and strip), beam (degrees, 120 = diffuse), w (w_m), hang (pendant), per_metre}}'),
+    shading: z.boolean().default(true).describe('Furniture taller than the work plane shades it'),
+    obstacles: opt(Specs).describe('[{room, poly: [[x,y]...] (convex, plan coordinates), z0: 0, z1}] partitions and other things that stop light'),
     maintenance_factor: z.number().positive().max(1).default(0.8),
     work_plane: z.number().min(0).default(750), margin: z.number().min(0).default(500),
     grid: opt(z.number().positive()).describe('Grid spacing (mm); default by EN 12464-1 from the size of the room'),
@@ -3956,8 +3991,33 @@ server.registerTool('lighting_calc', {
   }
   const unknown = Object.keys(args.rooms || {}).filter((n) => !rooms[n]);
   const heights = Object.fromEntries(Object.keys(rooms).map((n) => [n, finishes[n]?.ceiling?.level ?? height ?? 3000]));
+  // the photometric files of the lights (IES, LDT), read once
+  const photometry = {};
+  for (const [k, v] of Object.entries(args.photometry || {})) {
+    photometry[k] = { ...v };
+    if (v?.file) {
+      const file = path.resolve(String(v.file));
+      let txt;
+      try {
+        txt = await fs.readFile(file, 'latin1');
+      } catch (e) {
+        throw new Error(`${tool}: photometry.${k}.file: cannot read ${file} (${e.code ?? e.message})`);
+      }
+      photometry[k].dist = engine(tool, () => parsePhotometry(txt, file));
+    }
+  }
+  // the furniture of the floor as boxes that stop light
+  const obstacles = [...(args.obstacles || [])];
+  if (args.shading) {
+    for (const it of st.items) {
+      if (!it.room || !rooms[it.room] || !(it.h > 0)) continue;
+      const z0 = it.opts?.z0 ?? it.def?.z0 ?? 0;
+      const c = (x, y) => [it.o[0] + it.ex[0] * x + it.ey[0] * y, it.o[1] + it.ex[1] * x + it.ey[1] * y];
+      obstacles.push({ room: it.room, poly: [c(0, 0), c(it.w, 0), c(it.w, it.d), c(0, it.d)], z0, z1: z0 + it.h });
+    }
+  }
   const r = engine(tool, () => lightingCalc({
-    rooms, heights, fixtures, given: args.rooms || {}, photometry: args.photometry || {}, mf: args.maintenance_factor, plane: args.work_plane,
+    rooms, heights, fixtures, given: args.rooms || {}, photometry, obstacles, mf: args.maintenance_factor, plane: args.work_plane,
     margin: args.margin, spacing: args.grid ?? null, reflectances: args.reflectances || {}, vertical: args.vertical || [], lang,
   }));
   const rows = luxTable(r, lang);
@@ -3994,12 +4054,16 @@ server.registerTool('material_schedule', {
     'skirting in m (door widths deducted), walls in m² face by face (the height of the wall behind each face, openings ' +
     'deducted by the rule set of rules, their reveals added), the drop face of a ceiling, stairs on their treads and risers, kitchen ' +
     'backsplash, furniture/joinery/sanitary/equipment by count (draw_furniture_plan) and lights (draw_ceiling_plan); one row per ' +
-    'code with its rooms. Draws a table (default right of the drawing) and csv_path saves it for Excel. ' + INTERIOR_DEFAULTS,
+    'code with its rooms. Draws a table (default right of the drawing) and csv_path saves it for Excel. compare_with checks ' +
+    'the schedule against another bill of the same building by code: {rows: [{code, qty}]} (e.g. the interior_takeoff of ' +
+    'SketchUp MCP, tags FL-01...) or {csv_path, qty_column} (a surveyor\'s sheet), tolerance in percent (default 2): per ' +
+    'code both quantities, the difference, and the codes only one of the two has. ' + INTERIOR_DEFAULTS,
   inputSchema: {
     rooms: FinishRooms, draw: z.boolean().default(true), at: opt(Point), scale: z.number().positive().default(50),
     csv_path: opt(Str), csv_format: z.enum(['comma', 'semicolon']).default('comma'), plan: opt(Obj), language: opt(Lang),
     floor: FloorArg.describe('One floor of a building; default: every floor (rooms listed as "<floor>: <room>")'),
     rules: RulesArg,
+    compare_with: opt(Obj).describe('{rows: [{code, qty}] | csv_path, qty_column (header text or index), tolerance: 2 (%)}: another bill of the same building to check this one against'),
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
@@ -4031,6 +4095,22 @@ server.registerTool('material_schedule', {
   }
   if (!ms) throw new Error('material_schedule: no room outlines found: draw the plan with draw_plan first.');
   const out = { rows: ms.rows, assumed: assumedOrNone(assumed) };
+  if (args.compare_with) {
+    const cw = args.compare_with;
+    let csv = null;
+    if (cw.csv_path) {
+      try {
+        csv = await fs.readFile(path.resolve(String(cw.csv_path)), 'utf8');
+      } catch (e) {
+        throw new Error(`material_schedule: compare_with.csv_path: cannot read ${cw.csv_path} (${e.code ?? e.message})`);
+      }
+    }
+    out.comparison = engine('material_schedule', () => {
+      const theirs = otherBill({ rows: cw.rows ?? null, csv, qty_column: cw.qty_column ?? null });
+      if (!theirs.size) throw new PlanError('compare_with: no row with a code (FL-01, WL-02...) and a quantity was found');
+      return compareBills(ms.rows, theirs, cw.tolerance ?? 2);
+    });
+  }
   if (args.draw) {
     const sc = args.scale;
     const { at: pos, info } = await freeSpot(args.at, sc);
@@ -4245,7 +4325,7 @@ function roomNames(spec, polys, busy, offset, sc, planEnts = []) {
 }
 
 const MepOptions = opt(Obj);
-const STAIR_ROOM = (name) => /(CẦU THANG|STAIR)/i.test(name);
+const STAIR_ROOM = (name) => ROOM.stairs.test(name);
 const ItemsArg = opt(Specs).describe('Furniture of this floor (as draw_furniture_plan, not drawn): sets the bedside, desk, kitchen and bathroom positions');
 const floorIndex = (D, key) => Math.max(0, D.floors.findIndex((F) => F.name === key));
 const langOf = (args) => args.language ?? language;

@@ -28,9 +28,10 @@ Khác với đề xuất ở mục 4: phép cắt và hợp làm trên lưới �
 
 **Chưa làm hoặc còn giới hạn**
 
-- Giai đoạn 5 (hình học phức tạp): mô hình đo được những gì `draw_plan` mô tả được. Tường cong, mái nhiều mặt (mái hông), thang chữ L và thang xoắn chưa vẽ được nên chưa đo.
+- Giai đoạn 5 (hình học phức tạp): mô hình đo được những gì `draw_plan` mô tả được. Tường cong (dựng bằng dây cung, sai số chiều dài dưới 0,3%), mái hông bốn mái cùng độ dốc, thang chữ L và thang xoắn đã vẽ và đo được (bản sau 1.3.1). Chưa có: mái nhiều khối giao nhau, mái hông khác độ dốc; bê tông thang thẳng, thang chữ L, thang xoắn và lỗ sàn tầng trên của chúng trong bảng kết cấu.
 - Giai đoạn 6 (điện, nước): bảng khối lượng đã tính đoạn đứng (dây xuống công tắc, ổ cắm; ống đứng; ống xuống vòi và xi phông) bằng công thức, chưa phải tuyến 3D đếm phụ kiện theo nút.
-- Len chân tường chưa quấn quanh cột lộ. Mặt bên dầm chưa rút ngắn ở chỗ dầm khác cắt qua. Trần thạch cao chưa khoét ở chỗ thang thẳng đi qua. Thang chữ U đặt trong phòng không phải phòng thang chưa trừ sàn phòng đó.
+- Đã làm (bản sau 1.3.1): len chân tường quấn quanh cột lộ; mặt bên dầm trừ phần dầm khác giao vào (một mặt ở chỗ nối chữ T, hai mặt ở chỗ giao chữ thập); trần thạch cao khoét ở chỗ thang thẳng đi qua (từ chỗ bậc thang cách trần dưới 2 m đến đầu vế).
+- Thang chữ U đặt trong phòng không phải phòng thang đã trừ sàn phòng đó (bản sau 1.3.1).
 - Thang thẳng chưa có bậc xây trong bảng kết cấu. Hố đào có mái dốc chồng nhau tính gần đúng (dung sai 0,2%). Tường xiên: vùng bê tông nền lấy theo lưới 50 mm.
 - Không có trong mô hình (ghi ở mục "chưa tính" của bảng): râu thép và trụ liên kết tường, chống vách hố đào, hạ mực nước, ván khuôn bê tông lót.
 - Vế thang trong phép đo của AutoCAD là bản phẳng cùng thể tích (không phải bản nghiêng); thể tích vẫn khớp.

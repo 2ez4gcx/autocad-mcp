@@ -57,12 +57,12 @@ function union(iv, tol = 1) {
  * (mm), wallLayers (names forced as wall layers). Returns {spec: {walls, openings, columns, grids, rooms}, found,
  * unread, used: handles of the entities read, window, candidates (other plan areas when no window was given)}.
  */
-export function readPlan(g, { window = null, thickness = [80, 450], wallLayers = null, minWall = 400, faceSet = 'auto' } = {}) {
+export function readPlan(g, { window = null, thickness = [80, 450], wallLayers = null, minWall = 400, faceSet = 'auto', gapDoors = true } = {}) {
   // the faces on wall layers, or on any layer that is not annotation: the one that finds more walls (a drawing may
   // have a wall layer that holds only some of its walls)
   if (faceSet === 'auto') {
-    const A = readPlan(g, { window, thickness, wallLayers, minWall, faceSet: 'wall' });
-    const B = readPlan(g, { window, thickness, wallLayers, minWall, faceSet: 'any' });
+    const A = readPlan(g, { window, thickness, wallLayers, minWall, faceSet: 'wall', gapDoors });
+    const B = readPlan(g, { window, thickness, wallLayers, minWall, faceSet: 'any', gapDoors });
     return A.found.wall_length_m >= 0.6 * B.found.wall_length_m && A.found.walls ? A : B;
   }
   const k = unitScale(g.units);
@@ -137,6 +137,7 @@ export function readPlan(g, { window = null, thickness = [80, 450], wallLayers =
   // openings: two runs of one wall with a gap between 500 and 4000 mm
   const used = new Set();
   const openings = [];
+  let plainDoors = 0;
   const runsByLine = new Map();
   runs.forEach((r, i) => {
     const key = `${Math.round(r.ang * 2)}|${Math.round(r.axis / 20)}|${r.t}`;
@@ -209,6 +210,11 @@ export function readPlan(g, { window = null, thickness = [80, 450], wallLayers =
         type = 'window';
         for (const f of glazing) used.add(f.h);
       } else if (gap > 2500) continue; // two walls, not an opening
+      else if (gapDoors && gap >= 600 && gap <= 1000) {
+        // a plain gap of a door's width with nothing drawn in it: taken as a door (said in the result)
+        type = 'door';
+        plainDoors++;
+      }
       for (const x of blk) used.add(x.h);
       // the tag: a text "D1" near the opening, or the value of a tag block's attribute
       const tagTexts = [...texts, ...inserts.filter((x) => x.attrs).flatMap((x) => Object.values(x.attrs).map((v) => ({ at: x.at, text: String(v).trim(), h: x.h })))];
@@ -343,6 +349,7 @@ export function readPlan(g, { window = null, thickness = [80, 450], wallLayers =
   const loose = wallLike.filter((s) => !used.has(s.h)).length;
   if (loose) unread.push({ what: 'lines on wall layers not paired as wall faces (curved walls, walls of another thickness, details)', count: loose });
   const doorsLeft = inserts.filter((x) => x.role === 'door' && !used.has(x.h)).length;
+  if (plainDoors) unread.push({ what: 'doors taken from plain gaps 600 to 1000 wide with no leaf or arc drawn: check them (type opening where there is no door; gap_doors: false reads them all as openings)', count: plainDoors });
   if (doorsLeft) unread.push({ what: 'door blocks not on a recognised opening', count: doorsLeft });
   const windowsLeft = inserts.filter((x) => x.role === 'window' && !used.has(x.h)).length;
   if (windowsLeft) unread.push({ what: 'window blocks not on a recognised opening', count: windowsLeft });
