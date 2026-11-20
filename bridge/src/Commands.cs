@@ -24,6 +24,10 @@ namespace AcadMcp
         {
             Reg("ping", Mode.Session, Ping);
             Reg("drawing_info", Mode.Read, DrawingInfo);
+            Reg("drawing_props", Mode.Write, DrawingProps);
+            Reg("regen", Mode.CommandContext, Regen);
+            Reg("fit_attributes", Mode.Write, FitAttributes);
+            Table["fit_attributes"].ModeFor = p => p.Bool("apply", true) ? Mode.Write : Mode.Read;
             Reg("list_layers", Mode.Read, ListLayers);
             Reg("list_blocks", Mode.Read, ListBlocks);
             Reg("query_entities", Mode.Read, QueryEntities);
@@ -140,6 +144,130 @@ namespace AcadMcp
             }
         }
 
+        /// <summary>The drawing properties (DWGPROPS): title, subject, author, keywords, comments and the custom ones.</summary>
+        static Dictionary<string, object> PropsOut(Database db)
+        {
+            var si = db.SummaryInfo;
+            var custom = new Dictionary<string, object>();
+            var en = si.CustomProperties;
+            while (en.MoveNext()) custom[Convert.ToString(en.Key)] = Convert.ToString(en.Value);
+            return new Dictionary<string, object>
+            {
+                { "title", si.Title }, { "subject", si.Subject }, { "author", si.Author }, { "keywords", si.Keywords },
+                { "comments", si.Comments }, { "custom", custom },
+            };
+        }
+
+        /// <summary>
+        /// Writes the drawing properties (DWGPROPS): custom {NAME: value (null removes it)} and title/subject/author/
+        /// keywords/comments. The texts and attributes that show them (%&lt;\AcVar CustomDP.NAME&gt;%) follow at the
+        /// next regen (the regen command).
+        /// </summary>
+        static object DrawingProps(Ctx ctx, P p)
+        {
+            Database db = ctx.Db;
+            var b = new DatabaseSummaryInfoBuilder(db.SummaryInfo);
+            var custom = p.Obj("custom");
+            int changed = 0;
+            if (custom != null)
+            {
+                foreach (var kv in custom.D)
+                {
+                    string k = kv.Key.Trim();
+                    if (k == "") continue;
+                    if (kv.Value == null) { if (b.CustomPropertyTable.Contains(k)) { b.CustomPropertyTable.Remove(k); changed++; } }
+                    else { b.CustomPropertyTable[k] = Convert.ToString(kv.Value, System.Globalization.CultureInfo.InvariantCulture); changed++; }
+                }
+            }
+            if (p.Has("title")) { b.Title = p.Str("title"); changed++; }
+            if (p.Has("subject")) { b.Subject = p.Str("subject"); changed++; }
+            if (p.Has("author")) { b.Author = p.Str("author"); changed++; }
+            if (p.Has("keywords")) { b.Keywords = p.Str("keywords"); changed++; }
+            if (p.Has("comments")) { b.Comments = p.Str("comments"); changed++; }
+            if (changed > 0) db.SummaryInfo = b.ToDatabaseSummaryInfo();
+            // the fields show the new values after a regen made by a later command (regen): AutoCAD takes the
+            // properties in at the end of this one
+            var r = PropsOut(db);
+            r["changed"] = changed;
+            return r;
+        }
+
+        /// <summary>REGENALL: the fields show the drawing properties changed by an earlier command (not the same one).</summary>
+        static object Regen(Ctx ctx, P p)
+        {
+            ctx.Ed.Command("_.REGENALL");
+            return new Dictionary<string, object> { { "regen", true } };
+        }
+
+        /// <summary>
+        /// The values of title blocks inside their cells: blocks {BLOCK NAME: {TAG: cell width in block units}}. Each
+        /// attribute of those blocks in the layouts is measured; apply (default true) narrows the ones that are too wide
+        /// again from the size of their definition (a value changed later, a field that now shows a longer text).
+        /// Returns {checked, fitted, over: [{layout, block, tag, text, width, max}]} (over: still too wide, or found
+        /// too wide when apply is false).
+        /// </summary>
+        static object FitAttributes(Ctx ctx, P p)
+        {
+            Database db = ctx.Db;
+            P blocks = p.Obj("blocks") ?? throw new McpError("fit_attributes: blocks {NAME: {TAG: width}} are required");
+            bool apply = p.Bool("apply", true);
+            int nChecked = 0, fitted = 0;
+            var over = new List<object>();
+            using (Transaction tr = db.TransactionManager.StartTransaction())
+            {
+                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                foreach (ObjectId sid in bt)
+                {
+                    var space = (BlockTableRecord)tr.GetObject(sid, OpenMode.ForRead);
+                    if (!space.IsLayout) continue;
+                    string layout = ((Layout)tr.GetObject(space.LayoutId, OpenMode.ForRead)).LayoutName;
+                    foreach (ObjectId id in space)
+                    {
+                        var br = tr.GetObject(id, OpenMode.ForRead) as BlockReference;
+                        if (br == null) continue;
+                        var def = (BlockTableRecord)tr.GetObject(br.BlockTableRecord, OpenMode.ForRead);
+                        string bkey = blocks.D.Keys.FirstOrDefault(k => k.Equals(def.Name, StringComparison.OrdinalIgnoreCase));
+                        if (bkey == null) continue;
+                        P widths = blocks.Obj(bkey);
+                        var defs = new Dictionary<string, AttributeDefinition>(StringComparer.OrdinalIgnoreCase);
+                        foreach (ObjectId did in def)
+                            if (tr.GetObject(did, OpenMode.ForRead) is AttributeDefinition ad) defs[ad.Tag] = ad;
+                        double scale = Math.Abs(br.ScaleFactors.X);
+                        foreach (ObjectId aid in br.AttributeCollection)
+                        {
+                            var ar = (AttributeReference)tr.GetObject(aid, OpenMode.ForRead);
+                            string key = widths.D.Keys.FirstOrDefault(k => k.Equals(ar.Tag, StringComparison.OrdinalIgnoreCase));
+                            if (key == null || string.IsNullOrWhiteSpace(ar.TextString)) continue;
+                            double max = widths.Num(key, 0) * scale;
+                            if (max <= 0) continue;
+                            nChecked++;
+                            if (apply && defs.TryGetValue(ar.Tag, out var ad0))
+                            {
+                                bool aligned = ad0.Justify != AttachmentPoint.BaseLeft;
+                                // from the size of the definition: a value that became shorter gets its full width back
+                                double wf = ar.WidthFactor, h = ar.Height;
+                                ar.UpgradeOpen();
+                                ar.WidthFactor = ad0.WidthFactor;
+                                ar.Height = ad0.Height * scale;
+                                if (aligned) ar.AdjustAlignment(db);
+                                Drawer.FitWidth(ar, max, db, aligned);
+                                if (Math.Abs(ar.WidthFactor - wf) > 1e-6 || Math.Abs(ar.Height - h) > 1e-6) fitted++;
+                            }
+                            double w = Drawer.TextWidth(ar);
+                            if (w > max + 0.05)
+                                over.Add(new Dictionary<string, object>
+                                {
+                                    { "layout", layout }, { "block", def.Name }, { "tag", ar.Tag }, { "text", ar.TextString },
+                                    { "width", Math.Round(w / scale, 1) }, { "max", Math.Round(max / scale, 1) },
+                                });
+                        }
+                    }
+                }
+                tr.Commit();
+            }
+            return new Dictionary<string, object> { { "checked", nChecked }, { "fitted", fitted }, { "over", over } };
+        }
+
         static object DrawingInfo(Ctx ctx, P p)
         {
             Database db = ctx.Db;
@@ -198,6 +326,7 @@ namespace AcadMcp
                 var ds = (DimStyleTable)tr.GetObject(db.DimStyleTableId, OpenMode.ForRead);
                 r["dim_styles"] = ds.Cast<ObjectId>().Select(i => (object)((DimStyleTableRecord)tr.GetObject(i, OpenMode.ForRead)).Name).ToList();
                 r["drawings_open"] = AcApp.DocumentManager.Count;
+                r["properties"] = PropsOut(db);
             }
             return r;
         }
@@ -824,7 +953,19 @@ namespace AcadMcp
                         {
                             var ar = (AttributeReference)tr.GetObject(aid, OpenMode.ForWrite);
                             string key = attrs.D.Keys.FirstOrDefault(k => k.Equals(ar.Tag, StringComparison.OrdinalIgnoreCase));
-                            if (key != null) ar.TextString = attrs.Str(key) ?? "";
+                            if (key == null) continue;
+                            string v = attrs.Str(key) ?? "";
+                            // a field replaces the one there; a plain value removes it (else the field would write
+                            // its value over the text again at the next regen)
+                            if (ar.HasFields) ar.RemoveField();
+                            if (Drawer.IsFieldCode(v))
+                            {
+                                var f = new Field(Drawer.ResolveField(db, v));
+                                ar.SetField(f);
+                                tr.AddNewlyCreatedDBObject(f, true);
+                                f.Evaluate();
+                            }
+                            else ar.TextString = v;
                         }
                     }
                     n++;

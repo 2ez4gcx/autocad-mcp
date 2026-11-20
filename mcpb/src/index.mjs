@@ -21,7 +21,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import * as z from 'zod';
 import { buildBuilding, buildElevation, buildingAssumed, buildSection, floorsOf, HEIGHT_DEFAULTS } from './elevation.mjs';
 import { buildPlan, planAssumptions, PlanError } from './plan.mjs';
-import { capsWidth, coverSheet, dimStyleName, drawingList, FIELD, fitScale, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, setDrawingLanguage, titleBlock, viewStyles, viewTitle, ROOM } from './standards.mjs';
+import { capsWidth, coverSheet, dimStyleName, drawingList, FIELD, fitScale, PROJECT_PROPS, projectValues, titleBlockFits, layerSpecs, layerStyles, LAYERS, PAPERS, ROLE, styleParams, TEXT_STYLE, setDrawingLanguage, titleBlock, viewStyles, viewTitle, ROOM } from './standards.mjs';
 import { beamDetail, beamSchedule, footingDetail, framingPlan, rcSection, rebarSchedule, structureNotes } from './structure.mjs';
 import { symbolDef } from './symbols.mjs';
 import { doorSchedule } from './doors.mjs';
@@ -51,6 +51,7 @@ import { LIGHT_BLOCKS } from './symbols.mjs';
 import { LUX_TASKS, lightingCalc, luxTable } from './lux.mjs';
 import { compareBills, otherBill, scaleCheck } from './imagecheck.mjs';
 import { parsePhotometry } from './photometry.mjs';
+import { presentationCheck } from './presentation.mjs';
 import { calcSheetOf, defaultFixtures, legend as mepLegend, maskTexts, signOff, tablesCsv, wallBoxes } from './mep.mjs';
 import {
   DEVICES, electricalBasis, electricalDesign, electricalNotes, electricalPlan, electricalQuantities, electricalTables, riserDiagram, singleLineDiagram,
@@ -310,7 +311,7 @@ const server = new McpServer(
   {
     instructions: [
       'Controls the drawing open in AutoCAD through the "ACAD MCP Bridge" add-in (127.0.0.1). Working rules:',
-      '0. Ask before you assume: before drawing, list for the user what the request does not say or what cannot be read (dimensions, ' +
+      '0. Ask before you assume (the tools enforce it: a drawing tool called without confirmed: true returns the values it would assume instead of drawing): before drawing, list for the user what the request does not say or what cannot be read (dimensions, ' +
         'heights, roof, materials and finishes, furniture, structural sizes and bars...) with the value you would assume for each, and ' +
         'draw only after they confirm or change them. draw_plan, draw_elevation, draw_section, draw_structure_detail and the interior ' +
         'tools (draw_furniture_plan, draw_floor_finish_plan, draw_ceiling_plan, draw_interior_elevation, draw_joinery_detail) take ' +
@@ -573,14 +574,40 @@ function viewResult(res, ctx, known) {
 
 const registerTool = server.registerTool.bind(server);
 const toolHandlers = new Map();
+// Assumptions are confirmed before anything is drawn: a drawing tool with a dry run, called without confirmed: true,
+// first runs its dry run; when that assumes values the request did not give, it returns them instead of drawing, for
+// the user to confirm or change. AUTOCAD_MCP_CONFIRM=0 turns this off (scripted runs that give every value on purpose).
+const CONFIRM = process.env.AUTOCAD_MCP_CONFIRM !== '0';
+const ConfirmArg = z.boolean().default(false).describe(
+  'true once the user has seen and confirmed the assumed values (the list a call without it returns); without it a call ' +
+  'that would assume values draws nothing and returns them');
+const gateNote = (lang) => (lang === 'en'
+  ? 'Nothing was drawn. These values are not in the request and would be assumed. Show them to the user as a list (item: value, with the note), ask them to confirm or change each, then call again with the changed values and confirmed: true.'
+  : 'Chưa vẽ gì. Các giá trị dưới đây không có trong yêu cầu và sẽ được giả định. Liệt kê cho người dùng (mục: giá trị, kèm ghi chú), hỏi xác nhận hoặc sửa từng mục, rồi gọi lại với các giá trị đã sửa và confirmed: true.');
 server.registerTool = (name, def, handler) => {
   const view = VIEW_TOOLS.has(name);
-  const d = view ? { ...def, inputSchema: { ...def.inputSchema, update: UpdateArg, revision: RevisionArg } } : def;
-  const run = (args, extra) => {
+  const gated = CONFIRM && def.inputSchema && 'dry_run' in def.inputSchema;
+  const d = view || gated ? { ...def, inputSchema: { ...def.inputSchema, ...(view ? { update: UpdateArg, revision: RevisionArg } : {}), ...(gated ? { confirmed: ConfirmArg } : {}) } } : def;
+  const run = async (args, extra) => {
     // every tool draws in the language of its call (its language argument), else in the language of the session: the
     // view titles of the engines that are not handed a language follow it
     setDrawingLanguage(args?.language ?? language);
-    return view || PLAN_TOOLS.has(name) ? viewCall(name, args ?? {}, () => handler(args, extra)) : handler(args, extra);
+    const go = (a) => (view || PLAN_TOOLS.has(name) ? viewCall(name, a ?? {}, () => handler(a, extra)) : handler(a, extra));
+    // a view drawn again in place (update) keeps what was confirmed when it was first drawn
+    if (gated && !args?.dry_run && !args?.confirmed && !args?.update) {
+      const dry = await go({ ...(args ?? {}), dry_run: true });
+      let body = null;
+      try {
+        body = JSON.parse(dry?.content?.find((c) => c.type === 'text')?.text ?? 'null');
+      } catch {
+        body = null;
+      }
+      if (!dry?.isError && Array.isArray(body?.assumed) && body.assumed.length) {
+        return text({ ...body, confirm_first: true, next: gateNote(args?.language ?? language) });
+      }
+    }
+    const { confirmed, ...rest } = args ?? {};
+    return go(gated ? rest : args);
   };
   toolHandlers.set(name, run);
   return registerTool(name, d, run);
@@ -987,15 +1014,30 @@ server.registerTool('update_title_blocks', {
     'lần sửa, ngày, phiên bản trên khung tên): revision {text, date} goes in the first empty revision row (REV1..REV4 and ' +
     'REV1_DATE.. of the title strip of create_layout; with four rows full the oldest goes up and out), values {TAG: value} ' +
     'into the attributes of that tag (e.g. PHIEN_BAN, NGAY, GIAI_DOAN, TEN_BAN_VE). layouts: names (default all). A title ' +
-    'block of another office works with values by its own tags (list_texts shows them).',
+    'block of another office works with values by its own tags (list_texts shows them); a value may be a field code ' +
+    '(%<\\AcVar CustomDP.NAME>%). project {project, location, item, client, client_address, company, company_address, ' +
+    'contractor, contract, phase, chief, lead, drawn_by, checked_by}: the project data changed once in the drawing properties ' +
+    '(DWGPROPS) and on every sheet and cover that show it by fields (a title block that had it as plain text gets the field).',
   inputSchema: {
-    layouts: opt(jsonish(z.array(Str))), values: opt(Obj),
+    layouts: opt(jsonish(z.array(Str))), values: opt(Obj), project: opt(Obj),
     revision: opt(z.object({ no: opt(z.union([z.number(), Str])), text: Str, date: opt(Str) })),
   },
   annotations: EDIT,
-}, async ({ layouts, values, revision }) => {
-  if (!values && !revision) throw new Error('update_title_blocks: give revision {text, date} or values {TAG: value}');
+}, async ({ layouts, values: values0, revision, project }) => {
+  if (!values0 && !revision && !project) throw new Error('update_title_blocks: give revision {text, date}, values {TAG: value} or project {project, client...}');
   const info = await call('drawing_info', {});
+  let values = values0;
+  let props = null;
+  if (project) {
+    const bad = Object.keys(project).filter((k) => !(k in PROJECT_PROPS));
+    if (bad.length) throw new Error(`update_title_blocks: project has no ${bad.join(', ')} (it takes ${Object.keys(PROJECT_PROPS).join(', ')})`);
+    if (!info.properties) throw new Error('update_title_blocks: project needs the AutoCAD bridge of this version (install_autocad_bridge, then restart AutoCAD); values {TAG: value} works meanwhile');
+    const custom = Object.fromEntries(Object.entries(project).map(([k, v]) => [PROJECT_PROPS[k], v === null ? null : String(v)]));
+    props = await call('drawing_props', { custom });
+    // the title blocks show them by fields from now on (plain texts of before included); a value removed, plain empty
+    values = { ...(values0 || {}) };
+    for (const [k, v] of Object.entries(project)) values[PROJECT_PROPS[k]] = v === null || !String(v).trim() ? '' : FIELD.prop(PROJECT_PROPS[k]);
+  }
   const all = (info.layouts || []).map((l) => (typeof l === 'string' ? l : l.name)).filter((n) => n && n.toLowerCase() !== 'model');
   const names = layouts?.length ? layouts : all;
   const missing = names.filter((n) => !all.some((a) => a.toLowerCase() === n.toLowerCase()));
@@ -1034,7 +1076,10 @@ server.registerTool('update_title_blocks', {
     await call('set_properties', { handles: [tb.handle], attributes: set });
     out.push({ layout: lay, block: tb.name, set });
   }
-  return text({ sheets: out.filter((o) => o.set).length, layouts: out });
+  // the covers and texts that show the project data by fields follow at the regen; the values stay inside their cells
+  if (props) await call('regen', {});
+  const fitted = await fitTitleBlocks(call);
+  return text({ sheets: out.filter((o) => o.set).length, layouts: out, ...(props ? { properties: props.custom } : {}), ...(fitted?.over?.length ? { overflow: fitted.over } : {}) });
 });
 
 // ---------------------------------------------------------------- reviewing and tidying drawings made by others
@@ -1502,11 +1547,43 @@ server.registerTool('check_drawing', {
     'Vietnamese/non-ASCII text in SHX styles (shows "?"), missing fonts, unresolved xrefs and images, objects on Defpoints (never ' +
     'plot), dimensions whose value was typed over, objects far from the rest (blow up zoom extents), tiny/empty objects, objects on ' +
     'layer 0, color/linetype/lineweight not ByLayer, objects on hidden layers, unitless drawing; plus layers outside the standard. ' +
-    'Each issue has handles (first 20) to fix with set_properties/delete_entities.',
-  inputSchema: { space: opt(Str).describe('all (default), model, paper or a layout name') },
+    'Each issue has handles (first 20) to fix with set_properties/delete_entities. ' +
+    'presentation: is the set complete enough to build from (a drawing these tools made, from the plan it keeps and its ' +
+    'views): grid lines, dimension chains on every side with openings, interior dimensions, room names, opening tags, ' +
+    'level marks, north arrow, sections drawn and their cut lines on the plan, elevations, door schedule, sheets and ' +
+    'drawing list; each item says how to fix it.',
+  inputSchema: { space: opt(Str).describe('all (default), model, paper or a layout name'), language: opt(Lang) },
   annotations: READ,
-}, async ({ space }) => {
+}, async ({ space, language: lang }) => {
   const r = await call('check_drawing', { space });
+  // the content of the set: from the plan the drawing keeps and its views
+  try {
+    const vr = await call('view_list', { keys: ['plan_hash', 'plan'] });
+    const known = parseViews(vr);
+    let kept = null;
+    try {
+      kept = vr.values?.plan ? JSON.parse(vr.values.plan) : null;
+    } catch {
+      kept = null;
+    }
+    const info = await call('drawing_info', {});
+    const views = known.views.filter((v) => v.entities > 0).map((v) => ({ tool: v.tool, args: v.args }));
+    if (kept || views.length) r.presentation = presentationCheck({ plan: kept, views, layouts: info.layouts ?? [], lang: lang ?? language });
+  } catch {
+    // a bridge that keeps no views: the technical checks only
+  }
+  // the values of the title blocks inside their cells
+  const tb = await fitTitleBlocks(call, false);
+  if (tb?.over?.length) {
+    const en = (lang ?? language) === 'en';
+    r.presentation ??= { checked: en ? 'sheets only' : 'chỉ các tờ', items: [], warnings: 0 };
+    for (const o of tb.over) {
+      r.presentation.items.push({ code: 'titleOverflow', severity: 'warn', layout: o.layout,
+        message: en ? `title block ${o.tag} "${o.text}" is ${o.width} mm wide in a ${o.max} mm cell` : `khung tên ${o.tag} "${o.text}" rộng ${o.width} mm, ô chỉ ${o.max} mm`,
+        fix: 'update_title_blocks (fits the values again) or a shorter value' });
+      r.presentation.warnings++;
+    }
+  }
   const layers = (await call('list_layers')).layers || [];
   const std = new Set(LAYERS.map((l) => l.name));
   const loose = layers.filter((l) => l.count > 0 && !std.has(l.name) && !/^[A-Z]-[A-Z]{4}/.test(l.name) && l.name !== '0' && !/^defpoints$/i.test(l.name) && !l.xref);
@@ -1645,7 +1722,8 @@ server.registerTool('draw_entities', {
 server.registerTool('draw_plan', {
   description:
     'Draw a complete floor plan in one Undo step from a plan description in mm (read from an image, a sketch or a 3D model):\n' +
-    '- walls: [{id?, points:[[x,y],...] (wall AXIS), thickness (200), justify: center|left|right (side of the axis, looking ' +
+    '- walls: [{id?, points:[[x,y],...] (wall AXIS), thickness (default 200 outer walls, 100 partitions between rooms: give ' +
+    'the real thickness of each wall read from the drawing), justify: center|left|right (side of the axis, looking ' +
     'along it), closed?, material: brick|concrete|block|light|stone|solid|none}] -> clean L/T/X junctions (wall pieces are ' +
     'unioned), cut outline on A-WALL 0.5, material hatch on A-WALL-PATT. Curved walls: bulges [one per segment, 0 = straight, ' +
     'as in a polyline: tan of a quarter of the arc angle, + = counter-clockwise; 0.4142 = a quarter circle, 1 = a half ' +
@@ -1693,7 +1771,9 @@ server.registerTool('draw_plan', {
     interior_dimensions: z.boolean().default(false).describe('Interior dimensions (not the stairwells): the clear width and length of each room, wall face to wall face, on a line clear of the names, doors, tags, level marks and stairs; rooms with no clear line are listed in notes'),
     entities: opt(Specs),
     scale: z.number().positive().default(100),
-    wall_thickness: opt(z.number().positive()), wall_material: opt(Str), hatch_walls: z.boolean().default(true),
+    wall_thickness: opt(z.number().positive()).describe('Thickness of the walls that give none (default: 200 for outer walls, the partitions take partition_thickness); given alone it applies to every wall'),
+    partition_thickness: opt(z.number().positive()).describe('Thickness of the partitions between rooms that give none (default 100). A wall is a partition when it has rooms on both sides (none of its sides sees out of the building)'),
+    wall_material: opt(Str), hatch_walls: z.boolean().default(true),
     room_options: opt(Obj).describe('{decimals: 2, decimal_separator: "," (vi) or ".", boundary: true, text_height: 2.5 (paper mm)}'),
     layers: opt(Obj),
     language: opt(Lang),
@@ -2093,6 +2173,33 @@ server.registerTool('import_drawing', {
 }, async (args) => text(await call('import_drawing', { ...args, path: path.resolve(args.path) })));
 
 // ---------------------------------------------------------------- sheets and files
+/**
+ * The values of the title blocks inside their cells: apply narrows the ones too wide again (after a change); without,
+ * a check. {checked, fitted, over} or null with a bridge that cannot.
+ */
+async function fitTitleBlocks(send, apply = true) {
+  try {
+    return await send('fit_attributes', { blocks: titleBlockFits(), apply });
+  } catch {
+    return null;
+  }
+}
+
+/** The project data of a title block or cover as fields of the drawing properties (written first when they changed). */
+async function projectData(given, info0) {
+  const { values, write } = projectValues(given, info0?.properties?.custom ?? null);
+  if (Object.keys(write).length) {
+    await sendNow('drawing_props', { custom: write });
+    // the sheets and covers drawn before show the new values (a regen after the change, as AutoCAD takes it in), each
+    // inside its cell
+    if (Object.values(info0.properties.custom).some((v) => String(v ?? '').trim())) {
+      await sendNow('regen', {});
+      await fitTitleBlocks(sendNow);
+    }
+  }
+  return values;
+}
+
 /** create_layout with several viewports: each window at its scale, packed in rows (bottoms aligned) in the drawing area. */
 async function layoutViews({ name, paper, orientation, views, title_block, lang, replace, activate, info0 }) {
   const lng = lang ?? language;
@@ -2136,7 +2243,7 @@ async function layoutViews({ name, paper, orientation, views, title_block, lang,
   const d = new Date();
   const date = lng === 'en' ? d.toISOString().slice(0, 10) : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
   const asShown = lng === 'en' ? 'AS SHOWN' : 'NHƯ HÌNH';
-  const info = { scale: scales.length === 1 ? FIELD.viewportScale : asShown, number: FIELD.layoutName, date, ...(title_block || {}) };
+  const info = { scale: scales.length === 1 ? FIELD.viewportScale : asShown, number: FIELD.layoutName, date, ...(await projectData(title_block, info0)) };
   const sheet = titleBlock({ paper, orientation, info, language: lng, style: title_block?.style });
   const req = withStyles({
     name, paper, orientation, replace, activate,
@@ -2181,7 +2288,10 @@ server.registerTool('create_layout', {
     title_block: opt(Obj).describe(
       '{style: strip (vertical strip on the right, default on landscape A3-A0) | bottom, company, company_address, project, location, item, ' +
       'client, client_address, title, number (default: a field of the layout name), revision, contract, phase, sheet, date, chief, lead, ' +
-      'drawn_by, checked_by, scale (default: a field of the viewport scale), note (the general note along the bottom)}',
+      'drawn_by, checked_by, scale (default: a field of the viewport scale), note (the general note along the bottom), fields: ' +
+      'false (plain texts)}. The project data (project, location, item, client, client_address, company, company_address, ' +
+      'contract, phase, chief, lead, drawn_by, checked_by) is kept once in the drawing properties (DWGPROPS, Custom) and shown ' +
+      'by fields: a sheet that does not give it shows what the drawing has; a value given changes it on every sheet.',
     ),
     language: opt(Lang),
     replace: z.boolean().default(false),
@@ -2237,7 +2347,7 @@ server.registerTool('create_layout', {
   // scale and number as fields (the viewport's scale, the layout name) unless given; the date of issue as text
   const d = new Date();
   const date = (lang ?? language) === 'en' ? d.toISOString().slice(0, 10) : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-  const info = { scale: FIELD.viewportScale, number: FIELD.layoutName, date, ...(title_block || {}) };
+  const info = { scale: FIELD.viewportScale, number: FIELD.layoutName, date, ...(await projectData(title_block, info0)) };
   const sheet = titleBlock({ paper, orientation, info, language: lang ?? language, style: title_block?.style });
   const factor = 1 / (s * unitsPerMm);
   const vw = Math.min(aw, ww * factor);
@@ -2381,7 +2491,7 @@ const assumedOrNone = (a) => (a?.length ? a : undefined);
 /** The building of a plan description as a key: the plot scale a tool was called with is not part of the building. */
 // what a plan says about how it is drawn, not about the building: two descriptions that differ only there (or in the
 // order of their fields) are the same building, so a calculation made for one serves the other
-const DRAWN_ONLY = new Set(['scale', 'dimensions', 'interior_dimensions', 'entities', 'room_options', 'layers', 'language', 'hatch_walls', 'sections', 'north', 'levels', 'dry_run', 'update']);
+const DRAWN_ONLY = new Set(['scale', 'dimensions', 'interior_dimensions', 'entities', 'room_options', 'layers', 'language', 'hatch_walls', 'sections', 'north', 'levels', 'dry_run', 'update', 'confirmed']);
 const specKey = (spec) => {
   const strip = (o) => Object.fromEntries(Object.entries(o).filter(([k, v]) => !DRAWN_ONLY.has(k) && v !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([k, v]) => [k, k === 'floors' && Array.isArray(v) ? v.map((f) => (f && typeof f === 'object' && !Array.isArray(f) ? strip(f) : f)) : v]));
@@ -3373,6 +3483,7 @@ server.registerTool('draw_cover_sheet', {
   inputSchema: {
     set: Str, project: opt(Str), item: opt(Str), client: opt(Str), company: opt(Str), contractor: opt(Str), location: opt(Str),
     phase: opt(Str), date: opt(Str), scale: z.number().positive().default(50), at: opt(Point), language: opt(Lang),
+    fields: z.boolean().default(true).describe('The project data as fields of the drawing properties, the same as the title blocks (false: plain texts)'),
   },
   annotations: EDIT,
 }, (args) => exclusive(async () => {
@@ -3381,7 +3492,9 @@ server.registerTool('draw_cover_sheet', {
   const d = new Date();
   const date = args.date ?? (lang === 'en' ? d.toISOString().slice(0, 10) : `${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`);
   const { at, info } = await freeSpot(args.at, sc);
-  const r = coverSheet({ set: args.set, info: { ...args, date }, at: [at[0], at[1] + 200 * sc], scale: sc, lang });
+  // the project data as fields of the drawing properties, as on the title blocks
+  const data = await projectData(Object.fromEntries(Object.entries(args).filter(([k]) => k in PROJECT_PROPS || k === 'fields')), await sendNow('drawing_info', {}));
+  const r = coverSheet({ set: args.set, info: { ...args, ...data, date }, at: [at[0], at[1] + 200 * sc], scale: sc, lang });
   const res = await drawView(r.entities, sc, info, args.language);
   return text({ count: res.count, bounds: res.bounds });
 }));

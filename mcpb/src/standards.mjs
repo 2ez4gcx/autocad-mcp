@@ -164,12 +164,15 @@ export function titleBlock({ paper = 'A3', orientation = 'landscape', info = {},
   const e = [];
   const attributes = [];
   const values = {};
+  const fit = {};
   const rect = (x0, y0, x1, y1, lw) => e.push({ type: 'rectangle', from: [x0, y0], to: [x1, y1], layer: '0', ...(lw ? { lineweight: lw } : {}) });
   const line = (x0, y0, x1, y1) => e.push({ type: 'line', from: [x0, y0], to: [x1, y1], layer: '0' });
   const label = (x, y, s) => e.push({ type: 'text', at: [x, y], text: s, height: 1.8, layer: '0', style: TEXT_STYLE });
-  const value = (x, y, tag, prompt, s, h = 2.5, align = 'left') => {
+  // every value has the width of its cell (fit): a longer one is narrowed by the bridge to stay inside
+  const value = (x, y, tag, prompt, s, h = 2.5, align = 'left', width) => {
     attributes.push({ tag, prompt, at: [x, y], height: h, align, style: TEXT_STYLE });
     values[tag] = s === undefined || s === null ? '' : String(s);
+    if (width) fit[tag] = width;
   };
 
   rect(0, 0, W, H, 0.09); // trim edge
@@ -190,29 +193,29 @@ export function titleBlock({ paper = 'A3', orientation = 'landscape', info = {},
   line(c0[1], ys[0], c0[1], ys[1]);
   line(c0[2], ys[0], c0[2], ys[1]);
   label(c0[0] + 2, ys[1] - 3.5, T.number);
-  value(c0[0] + 2, ys[0] + 2.5, 'SO_BAN_VE', T.number, info.number, 4);
+  value(c0[0] + 2, ys[0] + 2.5, 'SO_BAN_VE', T.number, info.number, 4, 'left', c0[1] - c0[0] - 4);
   label(c0[1] + 2, ys[1] - 3.5, T.revision);
-  value(c0[1] + 2, ys[0] + 2.5, 'LAN_SUA', T.revision, info.revision, 3.5);
+  value(c0[1] + 2, ys[0] + 2.5, 'LAN_SUA', T.revision, info.revision, 3.5, 'left', c0[2] - c0[1] - 4);
   label(c0[2] + 2, ys[1] - 3.5, T.sheet);
-  value(c0[2] + 2, ys[0] + 2.5, 'TO', T.sheet, info.sheet, 3.5);
+  value(c0[2] + 2, ys[0] + 2.5, 'TO', T.sheet, info.sheet, 3.5, 'left', c0[3] - c0[2] - 4);
   // Row 1: scale | date | drawn | checked
   const q = tbW / 4;
   for (let k = 1; k < 4; k++) line(x0 + k * q, ys[1], x0 + k * q, ys[2]);
   [[T.scale, 'TY_LE', info.scale], [T.date, 'NGAY', info.date], [T.drawn, 'THIET_KE', info.drawn_by], [T.checked, 'KIEM_TRA', info.checked_by]].forEach(([l, tag, v], k) => {
     label(x0 + k * q + 2, ys[2] - 3.2, l);
-    value(x0 + k * q + 2, ys[1] + 1.8, tag, l, v, 2.5);
+    value(x0 + k * q + 2, ys[1] + 1.8, tag, l, v, 2.5, 'left', q - 4);
   });
   // Row 2: drawing title (large)
   label(x0 + 2, ys[3] - 3.5, T.title);
-  value(x0 + 2, ys[2] + 3, 'TEN_BAN_VE', T.title, info.title, 5);
+  value(x0 + 2, ys[2] + 3, 'TEN_BAN_VE', T.title, info.title, 5, 'left', tbW - 4);
   // Row 3: project | client (always both cells, so one block serves every sheet)
   line(x0 + tbW * 0.6, ys[3], x0 + tbW * 0.6, ys[4]);
   label(x0 + 2, ys[4] - 3.5, T.project);
-  value(x0 + 2, ys[3] + 2, 'CONG_TRINH', T.project, info.project, 3.5);
+  value(x0 + 2, ys[3] + 2, 'CONG_TRINH', T.project, info.project, 3.5, 'left', tbW * 0.6 - 4);
   label(x0 + tbW * 0.6 + 2, ys[4] - 3.5, T.client);
-  value(x0 + tbW * 0.6 + 2, ys[3] + 2, 'CHU_DAU_TU', T.client, info.client, 2.5);
+  value(x0 + tbW * 0.6 + 2, ys[3] + 2, 'CHU_DAU_TU', T.client, info.client, 2.5, 'left', tbW * 0.4 - 4);
   // Row 4: company
-  value((x0 + x1) / 2, ys[4] + 3, 'CONG_TY', 'Công ty', info.company, 4, 'center');
+  value((x0 + x1) / 2, ys[4] + 3, 'CONG_TY', 'Công ty', info.company, 4, 'center', tbW - 4);
   // Free drawing area: inside the frame, above the title block on the right-hand part.
   const area = [[left + 5, top + 5], [W - m - 5, H - m - 5]];
   const areaFull = [[left + 5, m + 5], [x0 - 5, H - m - 5]];
@@ -221,7 +224,7 @@ export function titleBlock({ paper = 'A3', orientation = 'landscape', info = {},
   const areas = sz(areaFull) > sz(area) ? [areaFull, area] : [area, areaFull];
   const name = `MCP_KHUNG_TEN_${String(paper).toUpperCase()}_${orientation === 'portrait' ? 'DUNG' : 'NGANG'}${language === 'en' ? '_EN' : ''}`;
   const insert = {
-    type: 'block', name, at: [0, 0], layer, attributes: values,
+    type: 'block', name, at: [0, 0], layer, attributes: values, fit,
     def: { name, description: `Khung tên ${String(paper).toUpperCase()} ${orientation}`, entities: e, attributes },
   };
   return { entities: [insert], area: areas[0], areas, size: [W, H] };
@@ -350,7 +353,60 @@ export const FIELD = {
   areaM2: (handles, lang = 'vi', dec = 2) => `%<\\AcExpr (${handles.map((h) => `%<\\AcObjProp Object({h:${h}}).Area>%`).join('+')})*0.000001 \\f "${numFormat(dec, lang)}">%`,
   /** A table formula (cell names A1...: column letter, row from 1 counting the title row). */
   formula: (expr, lang = 'vi', dec = 2) => `%<\\AcExpr (${expr}) \\f "${numFormat(dec, lang)}">%`,
+  /** A custom drawing property (DWGPROPS, Custom tab): the project data of the title blocks and the cover. */
+  prop: (name) => `%<\\AcVar CustomDP.${name}>%`,
 };
+
+/** The cell widths of the values of every title block these tools make, by block name: {NAME: {TAG: width}}. */
+export function titleBlockFits() {
+  const out = {};
+  for (const paper of Object.keys(PAPERS)) {
+    for (const orientation of ['landscape', 'portrait']) {
+      for (const language of ['vi', 'en']) {
+        for (const style of ['strip', 'bottom']) {
+          const ins = titleBlock({ paper, orientation, language, style }).entities[0];
+          if (ins.fit && Object.keys(ins.fit).length) out[ins.name] = ins.fit;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** Whether a value is already a field code. */
+export const isFieldCode = (v) => typeof v === 'string' && v.includes('%<\\');
+
+/**
+ * The project data a drawing keeps once, in its custom properties (named as the title block attributes that show it):
+ * the title blocks and the cover show them through fields, so a change made once (update_title_blocks project, or
+ * DWGPROPS in AutoCAD) reaches every sheet.
+ */
+export const PROJECT_PROPS = {
+  project: 'CONG_TRINH', location: 'DIA_DIEM', item: 'HANG_MUC', client: 'CHU_DAU_TU', client_address: 'DIA_CHI_CDT',
+  company: 'CONG_TY', company_address: 'DIA_CHI_TV', contractor: 'TONG_THAU', contract: 'SO_HD', phase: 'GIAI_DOAN',
+  chief: 'CHU_NHIEM', lead: 'CHU_TRI', drawn_by: 'THIET_KE', checked_by: 'KIEM_TRA',
+};
+
+/**
+ * The values to write in a title block or a cover: the project data given go to the drawing properties (changes, the
+ * ones the drawing already has unchanged), and every project item the drawing has becomes the field of its property;
+ * the others stay as given. have: the custom properties of the drawing (null: a bridge that keeps none, plain values).
+ * Returns {values, write: {PROP: value} to store first}.
+ */
+export function projectValues(given, have) {
+  const values = { ...(given || {}) };
+  delete values.fields;
+  if (!have || given?.fields === false) return { values, write: {} };
+  const write = {};
+  for (const [k, prop] of Object.entries(PROJECT_PROPS)) {
+    const v = values[k];
+    if (v === undefined || v === null || isFieldCode(v)) continue;
+    if (String(have[prop] ?? '') !== String(v)) write[prop] = String(v);
+  }
+  const after = { ...have, ...write };
+  for (const [k, prop] of Object.entries(PROJECT_PROPS)) if (String(after[prop] ?? '').trim()) values[k] = FIELD.prop(prop);
+  return { values, write };
+}
 
 const STRIP_TEXT = {
   vi: {
@@ -367,6 +423,13 @@ const STRIP_TEXT = {
     general: 'NOTE:', generalText: 'THE CONTRACTOR CHECKS ALL DIMENSIONS ON SITE AND REPORTS ANY CONFLICT TO THE DESIGNER.',
   },
 };
+
+/**
+ * The width of a line of Arial of height h (the height of its capitals), a little generous, measured on a plot: capitals and digits, small letters, spaces and marks
+ * each their own (the labels of the title strip mix both).
+ */
+export const textWidth = (s, h) => [...String(s).normalize('NFC')].reduce((w, ch) => w + (ch === ' ' ? 0.39 : /[0-9]/.test(ch) ? 0.78
+  : /[.,:;\-–()/]/.test(ch) ? 0.4 : ch !== ch.toUpperCase() ? 0.75 : 0.93), 0) * h;
 
 /** Two lines of at most n characters (whole words) for a long drawing name. */
 function twoLines(s, n) {
@@ -390,7 +453,12 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
   const x1 = W - m, x0 = x1 - sw, xm = (x0 + x1) / 2;
   const line = (a, b, c, d, lw) => e.push({ type: 'line', from: [a, b], to: [c, d], layer: '0', ...(lw ? { lineweight: lw } : {}) });
   const rect = (a, b, c, d, lw) => e.push({ type: 'rectangle', from: [a, b], to: [c, d], layer: '0', ...(lw ? { lineweight: lw } : {}) });
-  const label = (x, y, s, h = 1.6, align = 'left') => e.push({ type: 'text', at: [x, y], text: s, height: h, layer: '0', style: TEXT_STYLE, align });
+  // a label is narrowed to the width of its cell (width factor), as the values are by the bridge
+  const label = (x, y, s, h = 1.6, align = 'left', width = sw - 3) => {
+    const w = textWidth(s, h);
+    const wf = w > width ? Math.max(0.5, Math.floor((width / w) * 100) / 100) : 1;
+    e.push({ type: 'text', at: [x, y], text: s, height: wf < 0.5 + 1e-9 && w * 0.5 > width ? Math.round(h * (width / (w * 0.5)) * 100) / 100 : h, layer: '0', style: TEXT_STYLE, align, ...(wf < 1 ? { width_factor: wf } : {}) });
+  };
   // every value has the width of its cell: a longer one is narrowed by the bridge (fit) to stay inside
   const value = (x, y, tag, prompt, s, h = 2.2, align = 'left', width = sw - 3) => {
     attributes.push({ tag, prompt, at: [x, y], height: h, align, style: TEXT_STYLE });
@@ -417,9 +485,9 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
     line(c1, b, c1, t);
     line(c2, b, c2, t);
     line(x0, t - 7, x1, t - 7);
-    label(x0 + 5.5, t - 4.2, T.rev[0], 1.4, 'center');
-    label((c1 + c2) / 2, t - 4.2, T.rev[1], 1.4, 'center');
-    label(x1 - 6.5, t - 4.2, T.rev[2], 1.4, 'center');
+    label(x0 + 5.5, t - 4.2, T.rev[0], 1.4, 'center', c1 - x0 - 1.5);
+    label((c1 + c2) / 2, t - 4.2, T.rev[1], 1.4, 'center', c2 - c1 - 1.5);
+    label(x1 - 6.5, t - 4.2, T.rev[2], 1.4, 'center', x1 - c2 - 1.5);
     // the revisions given (info.revisions [{no, text, date}]) in the rows, the latest four
     const revs = Array.isArray(info.revisions) ? info.revisions.slice(-4) : [];
     for (let i = 1; i <= 4; i++) {
@@ -439,7 +507,8 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
   const block = (k, lbl, tag, prompt, v, h, tag2, prompt2, v2) => {
     const [b, t] = at[k];
     label(x0 + 1.5, t - 3, lbl);
-    value(xm, (b + t) / 2 + (tag2 ? 0.5 : -1.5), tag, prompt, v, h, 'center');
+    // one line under the label (the item row is low): clear of the label, accents included
+    value(xm, tag2 ? (b + t) / 2 + 0.5 : b + 1.6, tag, prompt, v, h, 'center');
     if (tag2) value(xm, b + 2.5, tag2, prompt2, v2, 1.6, 'center');
   };
   block('client', T.client, 'CHU_DAU_TU', 'Chủ đầu tư', info.client, 2.4, 'DIA_CHI_CDT', 'Địa chỉ chủ đầu tư', info.client_address);
@@ -453,7 +522,7 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
     [[T.chief, 'CHU_NHIEM', info.chief], [T.lead, 'CHU_TRI', info.lead], [T.drawn, 'THIET_KE', info.drawn_by], [T.checked, 'KIEM_TRA', info.checked_by]].forEach(([l, tag, v], i) => {
       const yt = t - 8 * i;
       if (i) line(x0, yt, x1, yt);
-      label(x0 + 1.5, yt - 2.6, l, 1.3);
+      label(x0 + 1.5, yt - 2.6, l, 1.3, 'left', sw * 0.6 - 3);
       value(x0 + 1.5, yt - 6.6, tag, l, v, 2, 'left', sw * 0.6 - 3);
     });
   }
@@ -467,9 +536,9 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
   const pair = (k, la, tagA, va, lb, tagB, vb, hb = 2.2) => {
     const [b, t] = at[k], xs = x0 + sw * 0.55;
     line(xs, b, xs, t);
-    label(x0 + 1.2, t - 2.4, la, 1.3);
+    label(x0 + 1.2, t - 2.4, la, 1.3, 'left', xs - x0 - 2.4);
     value(x0 + 1.2, b + 1.2, tagA, la, va, 2, 'left', xs - x0 - 2.4);
-    label(xs + 1.2, t - 2.4, lb, 1.3);
+    label(xs + 1.2, t - 2.4, lb, 1.3, 'left', x1 - xs - 2.4);
     value((xs + x1) / 2, b + 1.2, tagB, lb, vb, hb, 'center', x1 - xs - 2.4);
   };
   pair('contract', T.contract, 'SO_HD', info.contract, T.version, 'PHIEN_BAN', info.revision);

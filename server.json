@@ -3,7 +3,7 @@
   "name": "io.github.2ez4gcx/autocad-mcp",
   "title": "AutoCAD MCP",
   "description": "AI drafting for construction in AutoCAD: KT/KC/NT, MEP, TCVN calc, quantities, sheets, PDF.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "websiteUrl": "https://github.com/2ez4gcx/autocad-mcp",
   "repository": {
     "url": "https://github.com/2ez4gcx/autocad-mcp",
@@ -12,7 +12,7 @@
   },
   "icons": [
     {
-      "src": "https://raw.githubusercontent.com/2ez4gcx/autocad-mcp/v1.4.0/mcpb/icon.png",
+      "src": "https://raw.githubusercontent.com/2ez4gcx/autocad-mcp/v1.5.0/mcpb/icon.png",
       "mimeType": "image/png",
       "sizes": [
         "512x512"
@@ -22,9 +22,9 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/2ez4gcx/autocad-mcp/releases/download/v1.4.0/autocad-mcp-1.4.0.mcpb",
-      "version": "1.4.0",
-      "fileSha256": "63656cf271e21ad1a86a6520d69933099b18500c61d9630b725d8db0a2b72975",
+      "identifier": "https://github.com/2ez4gcx/autocad-mcp/releases/download/v1.5.0/autocad-mcp-1.5.0.mcpb",
+      "version": "1.5.0",
+      "fileSha256": "46e05ac099d034f6b11b14166422cbefda8420c7aa5a4b79f4ae532fa89035d1",
       "transport": {
         "type": "stdio"
       },

@@ -93,9 +93,10 @@ namespace AcadMcp
         public ObjectId ApplyField(DBObject o, string code)
         {
             var f = new Field(ResolveField(_db, code));
-            f.Evaluate();
             o.SetField(f);
             _tr.AddNewlyCreatedDBObject(f, true);
+            // evaluated once in the drawing: a drawing property or another object is found only from there
+            f.Evaluate();
             return f.ObjectId;
         }
 
@@ -360,7 +361,9 @@ namespace AcadMcp
             if (txt.Contains("\n")) return MTextE(s);
             var t = new DBText();
             t.SetDatabaseDefaults(_db);
-            t.TextString = txt;
+            // a field (a drawing property, an object's property) is made once the text is in the drawing
+            bool field = IsFieldCode(txt);
+            t.TextString = field ? " " : txt;
             if (s.Has("style")) t.TextStyleId = U.TextStyle(_db, _tr, s.Str("style"));
             t.Height = TextHeight(s);
             t.Rotation = U.Rad(s.Num("rotation", 0));
@@ -374,6 +377,7 @@ namespace AcadMcp
                 t.AlignmentPoint = at;
             }
             Add(t, s, false);
+            if (field) ApplyField(t, txt);
             if (ap != AttachmentPoint.BaseLeft) t.AdjustAlignment(_db);
             return One("text", t);
         }
@@ -765,10 +769,24 @@ namespace AcadMcp
             if (key == null) return;
             double max = fit.Num(key, 0) * scale;
             if (max <= 0) return;
-            double width;
-            try { var ext = ar.GeometricExtents; width = ext.MaxPoint.X - ext.MinPoint.X; }
-            catch (Autodesk.AutoCAD.Runtime.Exception) { return; }
-            if (width <= max) return;
+            FitWidth(ar, max, _db, ad.Justify != AttachmentPoint.BaseLeft);
+        }
+
+        /// <summary>The width of a text on the drawing (its extents), or -1 when it has none.</summary>
+        public static double TextWidth(Entity e)
+        {
+            try { var ext = e.GeometricExtents; return ext.MaxPoint.X - ext.MinPoint.X; }
+            catch (Autodesk.AutoCAD.Runtime.Exception) { return -1; }
+        }
+
+        /// <summary>
+        /// An attribute wider than max is narrowed (width factor, down to 0.45), then made smaller. Returns true when it
+        /// was changed.
+        /// </summary>
+        public static bool FitWidth(AttributeReference ar, double max, Database db, bool aligned)
+        {
+            double width = TextWidth(ar);
+            if (width <= max || width <= 0) return false;
             double f = ar.WidthFactor * max / width;
             if (f >= 0.45) ar.WidthFactor = f;
             else
@@ -776,7 +794,8 @@ namespace AcadMcp
                 ar.WidthFactor = 0.45;
                 ar.Height *= f / 0.45;
             }
-            if (ad.Justify != AttachmentPoint.BaseLeft) ar.AdjustAlignment(_db);
+            if (aligned) ar.AdjustAlignment(db);
+            return true;
         }
 
         Dictionary<string, object> Insert(P s)

@@ -349,7 +349,7 @@ test('assumptions: every default the engines apply is reported, nothing that was
   const items = (a) => a.map((x) => x.item);
   const plan = planAssumptions({ walls: [{ id: 'W1', points: [[0, 0], [4000, 0]] }, { points: [[0, 0], [0, 3000]], thickness: 100, material: 'concrete' }], openings: [{ wall: 0, at: [2000, 0], tag: 'D1' }] });
   assert.deepEqual(plan, [
-    { item: 'walls.thickness', value: 200, note: 'W1' }, { item: 'walls.material', value: 'brick', note: 'W1' },
+    { item: 'walls.thickness (outer walls)', value: 200, note: 'W1; wall_thickness / partition_thickness or a thickness per wall to change' }, { item: 'walls.material', value: 'brick', note: 'W1' },
     { item: 'openings.width', value: 900, note: 'D1' },
   ]);
   // BOX gives ground, top, the window sill/head and the roof pitch/overhang: floor, slab and the roof thickness are assumed
@@ -733,6 +733,93 @@ test('geometry: hip roofs, curved walls as chords, L and spiral stairs', async (
   const fl = of('floor')[0];
   assert.ok(near(fl.measured, 8.8 * 5.8 - 2.08 - 1 - 1.82 - Math.PI * 0.81, 1e-6), `floor ${fl.measured}`);
   assert.equal(of('ceiling')[0].deductions.length, 4);
+});
+
+test('walls: outer walls and partitions by their place, their default thickness; the completeness of a set', async () => {
+  const { wallRoles, buildWalls, planAssumptions } = await import('../src/plan.mjs');
+  const { presentationCheck } = await import('../src/presentation.mjs');
+  // an L-shaped house, three partitions (one with a door gap between its two pieces), a free-standing wall outside
+  const spec = { walls: [{ id: 'O', points: [[0, 0], [10000, 0], [10000, 6000], [6000, 6000], [6000, 10000], [0, 10000]], closed: true },
+    { id: 'P1', points: [[5000, 0], [5000, 6000]] }, { id: 'P2', points: [[0, 6000], [6000, 6000]] }, { id: 'P3', points: [[2500, 6000], [2500, 10000]] }, { id: 'F', points: [[12000, 0], [12000, 3000]] }] };
+  assert.deepEqual(wallRoles(spec), ['outer', 'partition', 'partition', 'partition', 'outer']);
+  assert.deepEqual(buildWalls(spec).map((w) => w.t), [200, 100, 100, 100, 200]);
+  // wall_thickness alone keeps its meaning (every wall); with partition_thickness both
+  assert.deepEqual(buildWalls({ ...spec, wall_thickness: 220 }).map((w) => w.t), [220, 220, 220, 220, 220]);
+  assert.deepEqual(buildWalls({ ...spec, wall_thickness: 220, partition_thickness: 110 }).map((w) => w.t), [220, 110, 110, 110, 220]);
+  // a thickness given is kept; the assumptions name both kinds
+  assert.equal(buildWalls({ ...spec, walls: spec.walls.map((w, i) => (i === 1 ? { ...w, thickness: 200 } : w)) })[1].t, 200);
+  const as = planAssumptions(spec).filter((a) => /thickness/.test(a.item));
+  assert.deepEqual(as.map((a) => [a.item, a.value, a.note.split(';')[0]]), [['walls.thickness (outer walls)', 200, 'O, F'], ['walls.thickness (partitions between rooms)', 100, 'P1, P2, P3']]);
+  // the walls of the sample town house: the outline outer, the rooms' walls partitions, as the plan gives them
+  for (const f of floorsOf(TOWN)) {
+    const roles = wallRoles(f.spec);
+    (f.spec.walls || []).forEach((w, i) => w.thickness && assert.equal(roles[i] === 'outer' ? 200 : 100, w.thickness, `${f.name} ${w.id}`));
+  }
+  // a lightwell inside the house, a balcony closed by a low wall drawn as a wall: the walls around them are outer walls
+  const lw = { walls: [{ id: 'O', points: [[0, 0], [8000, 0], [8000, 12000], [0, 12000]], closed: true }, { id: 'L', points: [[3000, 5000], [5000, 5000], [5000, 7000], [3000, 7000]], closed: true },
+    { id: 'B', points: [[0, 10000], [8000, 10000]] }, { id: 'P', points: [[0, 3000], [3000, 3000]] }],
+  rooms: [{ name: 'GIẾNG TRỜI', at: [4000, 6000] }, { name: 'BAN CÔNG', at: [4000, 11000] }, { name: 'PHÒNG KHÁCH', at: [1500, 1500] }, { name: 'BẾP', at: [1500, 6000] }] };
+  assert.deepEqual(wallRoles(lw), ['outer', 'outer', 'outer', 'partition']);
+
+  // completeness: a bare plan is short of grids, tags, levels, a section, elevations; the openings of the top side need a chain
+  const bare = { walls: [{ points: [[0, 0], [6000, 0], [6000, 4000], [0, 4000]], closed: true }, { points: [[3000, 0], [3000, 4000]] }],
+    openings: [{ wall: 0, segment: 0, at: [1500, 0], width: 900, type: 'door' }, { wall: 0, segment: 2, at: [1500, 4000], width: 1200, type: 'window' }], rooms: [{ name: 'A', at: [1500, 2000] }, { name: 'B', at: [4500, 2000] }] };
+  const codes = presentationCheck({ plan: bare, views: [{ tool: 'draw_plan' }], layouts: [] }).items.map((i) => i.code);
+  assert.deepEqual(codes, ['grids', 'dimsSide', 'interior', 'tags', 'levels', 'north', 'noSection', 'elevations', 'sheets']);
+  // the same plan made complete, drawn with its section, two elevations, the door schedule, on sheets with a list
+  const full = { ...bare, grids: { x: [0, 3000, 6000], y: [0, 4000] }, dimensions: ['bottom', 'left', 'top', 'right'], interior_dimensions: true,
+    openings: bare.openings.map((o, i) => ({ ...o, tag: i ? 'S1' : 'D1' })), levels: [{ at: [1500, 1000], value: '±0.000' }], north: { at: [8000, 3000] }, sections: [{ from: [4500, -1000], to: [4500, 5000], label: 'A' }] };
+  const views = [{ tool: 'draw_plan' }, { tool: 'draw_section', args: { mark: 'A' } }, { tool: 'draw_elevation', args: { sides: ['bottom', 'right'] } }, { tool: 'draw_door_schedule' }, { tool: 'draw_drawing_list' }];
+  const ok = presentationCheck({ plan: full, views, layouts: ['KT-01', 'KT-02', 'KT-03'], lang: 'en' });
+  assert.deepEqual(ok.items, [], JSON.stringify(ok.items));
+  // a section drawn whose cut line is not on the plan
+  assert.deepEqual(presentationCheck({ plan: { ...full, sections: [] }, views, layouts: ['KT-01'] }).items.map((i) => i.code), ['sectionMark']);
+  // a section drawn by its label; a structure set that keeps the plan without drawing it: only its sheets are asked
+  assert.deepEqual(presentationCheck({ plan: full, views: views.map((v) => (v.tool === 'draw_section' ? { ...v, args: { label: 'A' } } : v)), layouts: ['KT-01'] }).items, []);
+  assert.deepEqual(presentationCheck({ plan: bare, views: [{ tool: 'draw_structure_plan' }], layouts: [] }).items.map((i) => i.code), ['sheets']);
+});
+
+test('title blocks: the project data kept once in the drawing properties and shown by fields', async () => {
+  const { projectValues, FIELD, titleBlock } = await import('../src/standards.mjs');
+  // a first sheet: the data given is written, then shown by fields; the others as given
+  const a = projectValues({ project: 'NHÀ PHỐ', client: 'ÔNG A', title: 'MẶT BẰNG', revision: '01' }, {});
+  assert.deepEqual(a.write, { CONG_TRINH: 'NHÀ PHỐ', CHU_DAU_TU: 'ÔNG A' });
+  assert.equal(a.values.project, '%<\\AcVar CustomDP.CONG_TRINH>%');
+  assert.equal(a.values.client, FIELD.prop('CHU_DAU_TU'));
+  assert.equal(a.values.title, 'MẶT BẰNG');
+  assert.equal(a.values.revision, '01');
+  // a later sheet that gives none shows what the drawing has, without writing; one value changed is written alone
+  const have = { CONG_TRINH: 'NHÀ PHỐ', CHU_DAU_TU: 'ÔNG A' };
+  const b = projectValues({ title: 'MẶT CẮT' }, have);
+  assert.deepEqual(b.write, {});
+  assert.equal(b.values.project, FIELD.prop('CONG_TRINH'));
+  assert.equal(b.values.location, undefined);
+  assert.deepEqual(projectValues({ project: 'NHÀ PHỐ', client: 'BÀ B' }, have).write, { CHU_DAU_TU: 'BÀ B' });
+  // an empty value empties the property and leaves the cell empty, not a field of nothing
+  const c = projectValues({ client: '' }, have);
+  assert.deepEqual(c.write, { CHU_DAU_TU: '' });
+  assert.equal(c.values.client, '');
+  // fields: false, or a bridge that keeps no properties: plain values
+  assert.deepEqual(projectValues({ project: 'X', fields: false }, have), { values: { project: 'X' }, write: {} });
+  assert.deepEqual(projectValues({ project: 'X' }, null), { values: { project: 'X' }, write: {} });
+  // the attribute tags of both title blocks are the names of the properties
+  const { PROJECT_PROPS } = await import('../src/standards.mjs');
+  const tags = (style) => titleBlock({ paper: 'A3', info: {}, style }).entities[0].def.attributes.map((x) => x.tag);
+  const all = new Set([...tags('strip'), ...tags('bottom')]);
+  for (const [k, prop] of Object.entries(PROJECT_PROPS)) if (!['contractor'].includes(k)) assert.ok(all.has(prop), `${k} -> ${prop}`);
+  // the labels of the strip stay in their cells on the narrow A4 strip (45 mm): measured as plotted, narrowed to fit
+  const { textWidth, titleBlockFits } = await import('../src/standards.mjs');
+  assert.ok(Math.abs(textWidth('KÝ HIỆU BẢN VẼ - Drawing No', 1.3) - 25.2) < 1.5);
+  const a4 = titleBlock({ paper: 'A4', orientation: 'portrait' }).entities[0].def.entities.filter((x) => x.type === 'text');
+  const lab = (s) => a4.find((x) => x.text === s);
+  for (const [s, cell] of [['KÝ HIỆU BẢN VẼ - Drawing No', 45 * 0.45 - 2.4], ['CHỦ NHIỆM TK - Chief of Project', 45 * 0.6 - 3], ['NỘI DUNG ĐIỀU CHỈNH', 45 - 24 - 1.5]]) {
+    const t = lab(s);
+    assert.ok(t.width_factor < 1 && textWidth(s, t.height) * t.width_factor <= cell + 1e-6, `${s} ${t.width_factor}`);
+  }
+  // every value of both title blocks has the width of its cell, for the bridge to fit and check
+  const fits = titleBlockFits();
+  assert.equal(fits.MCP_KHUNG_TEN_A3_NGANG.CONG_TRINH, 104);
+  assert.ok(fits.MCP_KHUNG_TEN_DOC_A4_DUNG_R.SO_BAN_VE > 0 && Object.keys(fits).length === 40);
 });
 
 test('columns in eccentric compression: random eccentricity, second order, large and small eccentricity', () => {
@@ -3143,7 +3230,16 @@ async function smoke() {
     const dry = await rpc('tools/call', { name: 'draw_plan', arguments: { walls: [{ points: [[0, 0], [4000, 0]] }], dry_run: true } });
     const dr = JSON.parse(dry.result.content[0].text);
     assert.equal(dr.drawn, false);
-    assert.deepEqual(dr.assumed.map((a) => a.item), ['walls.thickness', 'walls.material']);
+    assert.deepEqual(dr.assumed.map((a) => a.item), ['walls.thickness (outer walls)', 'walls.material']);
+    // a drawing call that would assume values draws nothing: it returns them for the user to confirm first
+    const gate = await rpc('tools/call', { name: 'draw_plan', arguments: { walls: [{ points: [[0, 0], [4000, 0]] }] } });
+    const gr = JSON.parse(gate.result.content[0].text);
+    assert.ok(gr.confirm_first && gr.drawn === false && gr.assumed.length === 2 && /confirmed: true/.test(gr.next), gate.result.content[0].text);
+    // confirmed: true goes on to draw (here: no AutoCAD to draw in); every value given: nothing to confirm
+    const go = await rpc('tools/call', { name: 'draw_plan', arguments: { walls: [{ points: [[0, 0], [4000, 0]] }], confirmed: true } });
+    assert.match(go.result.content[0].text, /Cannot connect to AutoCAD/);
+    const full = await rpc('tools/call', { name: 'draw_plan', arguments: { walls: [{ points: [[0, 0], [4000, 0]], thickness: 200, material: 'brick' }] } });
+    assert.match(full.result.content[0].text, /Cannot connect to AutoCAD/);
     const dryEl = await rpc('tools/call', { name: 'draw_elevation', arguments: { dry_run: true } });
     assert.ok(JSON.parse(dryEl.result.content[0].text).assumed.some((a) => a.item === 'roofs'));
     const dryB = await rpc('tools/call', { name: 'draw_plan', arguments: { ...TOWN, dry_run: true } });

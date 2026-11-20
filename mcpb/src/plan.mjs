@@ -5,7 +5,7 @@
 //   cuts   : one rectangle per opening, columns: column footprints
 //   rooms  : name + a point inside; the bridge measures the face the walls enclose (the area is never typed)
 //   entities: doors, windows, grids, columns, stairs, symbols and dimension chains (draw_entities specs)
-import { ROLE, TEXT_STYLE, dimStyleName } from './standards.mjs';
+import { ROLE, ROOM, TEXT_STYLE, dimStyleName } from './standards.mjs';
 import { blockName, sym, tagSym } from './symbols.mjs';
 
 const EPS = 1e-6;
@@ -160,6 +160,55 @@ export const arcLength = (a, b, bulge) => {
 };
 
 /**
+ * Which walls stand on the outside of the building and which are partitions between rooms, from the axes alone: a
+ * segment is outer when, 300 mm off it on one side, a point sees out of the building in two of the four directions (a
+ * ray that crosses no wall axis) or stands in an open space (a lightwell, yard, balcony or terrace room it sees
+ * without crossing a wall); a wall is outer when one of its segments is. Returns ['outer' | 'partition'] by wall.
+ */
+export function wallRoles(spec) {
+  const axes = (spec.walls || []).map((w) => {
+    if (!Array.isArray(w.points) || w.points.length < 2) return [];
+    const pts = w.points.map((p) => [Number(p[0]), Number(p[1])]);
+    if (w.closed && pts.length >= 3 && dist(pts[0], pts[pts.length - 1]) > EPS) pts.push(pts[0]);
+    const segs = [];
+    for (let i = 0; i + 1 < pts.length; i++) {
+      let a = pts[i];
+      for (const b of arcPoints(a, pts[i + 1], Number(w.bulges?.[i] ?? 0) || 0)) {
+        if (dist(a, b) >= 1) segs.push([a, b]);
+        a = b;
+      }
+    }
+    return segs;
+  });
+  const all = axes.flat();
+  // does a ray from q in direction d (up to tMax times d) cross a wall axis?
+  const hits = (q, d, tMax = Infinity) => all.some(([a, b]) => {
+    const e = sub(b, a), den = d[0] * e[1] - d[1] * e[0];
+    if (Math.abs(den) < 1e-12) return false;
+    const w = sub(a, q);
+    const t = (w[0] * e[1] - w[1] * e[0]) / den, s = (w[0] * d[1] - w[1] * d[0]) / den;
+    return t > 1e-6 && t < tMax && s >= -1e-9 && s <= 1 + 1e-9;
+  });
+  // the open spaces among the rooms: a wall facing one is an outer wall (a lightwell is open to the sky)
+  const open = (spec.rooms || []).filter((r) => Array.isArray(r?.at) && (ROOM.outdoor.test(String(r.name ?? '')) || OPEN_TO_SKY.test(String(r.name ?? ''))))
+    .map((r) => [Number(r.at[0]), Number(r.at[1])]);
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const sees = (q) => DIRS.filter((d) => !hits(q, d)).length >= 2 || open.some((p) => !hits(q, sub(p, q), 1));
+  return axes.map((segs) => (segs.some(([a, b]) => {
+    const d = unit(sub(b, a)), n = left(d), m = mul(add(a, b), 0.5);
+    return sees(add(m, mul(n, 300))) || sees(add(m, mul(n, -300)));
+  }) ? 'outer' : 'partition'));
+}
+
+const OPEN_TO_SKY = /GIẾNG TRỜI|GIENG TROI|LIGHT ?WELL/i;
+
+/** The thickness a wall takes when it gives none: wall_thickness for all when given, else 200 outer and 100 partitions. */
+export function defaultThickness(spec, roles) {
+  if (spec.wall_thickness !== undefined && spec.partition_thickness === undefined) return () => spec.wall_thickness;
+  return (i) => (roles[i] === 'partition' ? spec.partition_thickness ?? 100 : spec.wall_thickness ?? 200);
+}
+
+/**
  * Normalised walls with their segments: axis a->b, direction d, face offsets [o1, o2] along left(d). A wall with bulges
  * (one per segment, 0 = straight) is curved there: the arc becomes short chords (chord: their longest length, default
  * by a 5 mm sagitta), so every engine measures and draws it as it does straight walls; from: the segment of the
@@ -167,11 +216,14 @@ export const arcLength = (a, b, bulge) => {
  */
 export function buildWalls(spec) {
   const walls = [];
+  const needRoles = (spec.walls || []).some((w) => w.thickness === undefined);
+  const roles = needRoles ? wallRoles(spec) : [];
+  const tDefault = defaultThickness(spec, roles);
   (spec.walls || []).forEach((w, wi) => {
     const name = `walls[${wi}]`;
     if (!Array.isArray(w.points) || w.points.length < 2) throw new PlanError(`${name}.points needs at least 2 points`);
     const pts = w.points.map((p, i) => pt(p, `${name}.points[${i}]`));
-    const t = num(w.thickness ?? spec.wall_thickness ?? 200, `${name}.thickness`, { positive: true });
+    const t = num(w.thickness ?? tDefault(wi), `${name}.thickness`, { positive: true });
     const just = w.justify ?? 'center';
     const offs = { center: [-t / 2, t / 2], left: [0, t], right: [-t, 0] }[just];
     if (!offs) throw new PlanError(`${name}.justify must be center, left or right`);
@@ -475,8 +527,18 @@ export function planAssumptions(spec) {
   const out = [];
   const add = (item, value, note) => out.push(note ? { item, value, note } : { item, value });
   const ids = (list, test, name) => (list || []).map((x, i) => (test(x) ? x.id ?? x.tag ?? `${name}[${i}]` : null)).filter(Boolean);
-  const noT = spec.wall_thickness === undefined ? ids(spec.walls, (w) => w.thickness === undefined, 'walls') : [];
-  if (noT.length) add('walls.thickness', 200, noT.join(', '));
+  // walls with no thickness: outer walls 200, partitions between rooms 100 (wall_thickness / partition_thickness)
+  if (spec.wall_thickness === undefined || spec.partition_thickness === undefined) {
+    const roles = wallRoles(spec), td = defaultThickness(spec, roles);
+    for (const role of ['outer', 'partition']) {
+      const list = ids(spec.walls, (w) => w.thickness === undefined && roles[(spec.walls || []).indexOf(w)] === role, 'walls');
+      if (!list.length) continue;
+      const i = (spec.walls || []).findIndex((w) => w.thickness === undefined && roles[(spec.walls || []).indexOf(w)] === role);
+      if (role === 'outer' ? spec.wall_thickness === undefined : spec.partition_thickness === undefined && spec.wall_thickness === undefined) {
+        add(role === 'outer' ? 'walls.thickness (outer walls)' : 'walls.thickness (partitions between rooms)', td(i), `${list.join(', ')}; wall_thickness / partition_thickness or a thickness per wall to change`);
+      }
+    }
+  }
   const noM = spec.wall_material === undefined ? ids(spec.walls, (w) => w.material === undefined, 'walls') : [];
   if (noM.length) add('walls.material', 'brick', noM.join(', '));
   const noW = ids(spec.openings, (o) => o.width === undefined, 'openings');
