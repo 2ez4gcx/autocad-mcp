@@ -577,7 +577,18 @@ const toolHandlers = new Map();
 // Assumptions are confirmed before anything is drawn: a drawing tool with a dry run, called without confirmed: true,
 // first runs its dry run; when that assumes values the request did not give, it returns them instead of drawing, for
 // the user to confirm or change. AUTOCAD_MCP_CONFIRM=0 turns this off (scripted runs that give every value on purpose).
-const CONFIRM = process.env.AUTOCAD_MCP_CONFIRM !== '0';
+const CONFIRM = !/^(0|false|no|off)$/i.test(String(process.env.AUTOCAD_MCP_CONFIRM ?? '').trim());
+// tools with a dry run that draw nothing from assumptions
+const NOT_GATED = new Set(['purge_drawing', 'install_autocad_bridge']);
+// whether an update call redraws a view that is in the drawing (its assumptions were confirmed when it was drawn)
+async function replacesView(tool, args) {
+  try {
+    const known = parseViews(await call('view_list', { keys: ['plan_hash'] }));
+    return !!viewToReplace(known.views, tool, viewId(tool, args), args.update);
+  } catch {
+    return false;
+  }
+}
 const ConfirmArg = z.boolean().default(false).describe(
   'true once the user has seen and confirmed the assumed values (the list a call without it returns); without it a call ' +
   'that would assume values draws nothing and returns them');
@@ -586,15 +597,16 @@ const gateNote = (lang) => (lang === 'en'
   : 'Chưa vẽ gì. Các giá trị dưới đây không có trong yêu cầu và sẽ được giả định. Liệt kê cho người dùng (mục: giá trị, kèm ghi chú), hỏi xác nhận hoặc sửa từng mục, rồi gọi lại với các giá trị đã sửa và confirmed: true.');
 server.registerTool = (name, def, handler) => {
   const view = VIEW_TOOLS.has(name);
-  const gated = CONFIRM && def.inputSchema && 'dry_run' in def.inputSchema;
+  const gated = CONFIRM && def.inputSchema && 'dry_run' in def.inputSchema && !NOT_GATED.has(name);
   const d = view || gated ? { ...def, inputSchema: { ...def.inputSchema, ...(view ? { update: UpdateArg, revision: RevisionArg } : {}), ...(gated ? { confirmed: ConfirmArg } : {}) } } : def;
   const run = async (args, extra) => {
     // every tool draws in the language of its call (its language argument), else in the language of the session: the
     // view titles of the engines that are not handed a language follow it
     setDrawingLanguage(args?.language ?? language);
     const go = (a) => (view || PLAN_TOOLS.has(name) ? viewCall(name, a ?? {}, () => handler(a, extra)) : handler(a, extra));
-    // a view drawn again in place (update) keeps what was confirmed when it was first drawn
-    if (gated && !args?.dry_run && !args?.confirmed && !args?.update) {
+    // a view drawn again in place (update) keeps what was confirmed when it was first drawn; an update with no view
+    // to replace draws a new one and asks like any first drawing
+    if (gated && !args?.dry_run && !args?.confirmed && !(args?.update && view && (await replacesView(name, args)))) {
       const dry = await go({ ...(args ?? {}), dry_run: true });
       let body = null;
       try {
@@ -603,7 +615,9 @@ server.registerTool = (name, def, handler) => {
         body = null;
       }
       if (!dry?.isError && Array.isArray(body?.assumed) && body.assumed.length) {
-        return text({ ...body, confirm_first: true, next: gateNote(args?.language ?? language) });
+        // the structural preview leaves out the live loads of the rooms: its sizes are not the ones drawn
+        const pre = name === 'structural_calc' ? { preview_note: 'Member sizes here are a preview without the room live loads; the confirmed run sizes them with the loads.' } : {};
+        return text({ ...body, ...pre, confirm_first: true, next: gateNote(args?.language ?? language) });
       }
     }
     const { confirmed, ...rest } = args ?? {};
@@ -641,8 +655,11 @@ const FILTER = {
 
 // Standard layer properties travel with every drawing request, so a missing standard layer is created correctly.
 let language = 'vi';
-// Last plan description given to draw_plan: draw_elevation and draw_section derive from it.
+// Last plan description drawn by draw_plan: draw_elevation and draw_section derive from it.
 let lastPlan = null;
+// the last plan only checked (a dry run, or a call that stopped to have its assumptions confirmed): the dry runs of the
+// other tools read it, nothing is drawn from it
+let previewPlan = null;
 // where draw_plan put each floor of a building (the plans side by side)
 let lastFloors = null;
 const withStyles = (a) => ({ ...a, layer_styles: { ...layerStyles(a.language ?? language), ...(a.layer_styles || {}) } });
@@ -1017,7 +1034,8 @@ server.registerTool('update_title_blocks', {
     'block of another office works with values by its own tags (list_texts shows them); a value may be a field code ' +
     '(%<\\AcVar CustomDP.NAME>%). project {project, location, item, client, client_address, company, company_address, ' +
     'contractor, contract, phase, chief, lead, drawn_by, checked_by}: the project data changed once in the drawing properties ' +
-    '(DWGPROPS) and on every sheet and cover that show it by fields (a title block that had it as plain text gets the field).',
+    '(DWGPROPS) and on every sheet and cover that show it by fields (a title block that had it as plain text gets the field). ' +
+    'Takes a few Undo steps: the properties, the attributes of each sheet, a regen and the fit of the values to their cells.',
   inputSchema: {
     layouts: opt(jsonish(z.array(Str))), values: opt(Obj), project: opt(Obj),
     revision: opt(z.object({ no: opt(z.union([z.number(), Str])), text: Str, date: opt(Str) })),
@@ -1791,9 +1809,8 @@ server.registerTool('draw_plan', {
     if (e instanceof PlanError) throw new Error(`draw_plan: ${e.message}`);
     throw e;
   }
-  lastPlan = keptPlan(args);
-  lastFloors = null;
   if (dry_run) {
+    previewPlan = keptPlan(args);
     const hw = heightWarnings(args.heights);
     return dryRun(plan.assumed, {
       walls: plan.walls.length, openings: (args.openings || []).length, rooms: plan.rooms.length, entities: plan.entities.length,
@@ -1810,6 +1827,10 @@ server.registerTool('draw_plan', {
     styles,
   });
   const r = await call('draw_plan', req);
+  // the plan of the session once it is drawn
+  lastPlan = keptPlan(args);
+  lastFloors = null;
+  previewPlan = null;
   if (plan.notes.length) r.notes = plan.notes;
   if (plan.assumed.length) r.assumed = plan.assumed;
   const hw = heightWarnings(args.heights);
@@ -1833,7 +1854,6 @@ async function drawBuilding(args, dryRunOnly) {
   ];
   const notes = plans.flatMap((p, i) => p.notes.map((n) => `${floors[i].name}: ${n}`));
   const summary = floors.map((f, i) => ({ name: f.name, level: f.level, height: f.height, walls: plans[i].walls.length, rooms: plans[i].rooms.length }));
-  lastPlan = keptPlan(args);
   const widths = plans.map((p) => {
     const b = entityBounds(p.entities);
     return b ? b.max[0] - b.min[0] : 20000;
@@ -1844,10 +1864,13 @@ async function drawBuilding(args, dryRunOnly) {
   const was = vctx?.old?.extra?.floors?.offsets?.[1]?.[0];
   const pitch = was && was >= Math.max(...widths) + 12 * scale ? was : Math.max(...widths) + 30 * scale;
   const offsets = floors.map((f, i) => [i * pitch, 0]);
-  lastFloors = { offsets, names: floors.map((f) => f.name) };
-  if (vctx) vctx.extra.floors = lastFloors;
+  const spots = { offsets, names: floors.map((f) => f.name) };
+  if (vctx) vctx.extra.floors = spots;
   const hw = [...heightWarnings(args.heights), ...(args.floors || []).flatMap((f, i) => heightWarnings(f?.heights, `floors[${i}].heights`))];
-  if (dryRunOnly) return dryRun(assumed, { floors: summary, notes: notes.length ? notes : undefined, warnings: hw.length ? hw : undefined });
+  if (dryRunOnly) {
+    previewPlan = keptPlan(args);
+    return dryRun(assumed, { floors: summary, notes: notes.length ? notes : undefined, warnings: hw.length ? hw : undefined });
+  }
   const shifted = floors.map((f, i) => engine('draw_plan', () => buildPlan({ ...shiftSpec(f.spec, offsets[i], true), language: lang })));
   const entities = [];
   // titles on one line under the lowest plan
@@ -1869,6 +1892,10 @@ async function drawBuilding(args, dryRunOnly) {
     styles,
   });
   const r = await call('draw_plan', req);
+  // the plan of the session once it is drawn
+  lastPlan = keptPlan(args);
+  lastFloors = spots;
+  previewPlan = null;
   // the rooms come back in the order sent: floor by floor
   let k = 0;
   const out = floors.map((f, i) => {
@@ -2185,9 +2212,17 @@ async function fitTitleBlocks(send, apply = true) {
   }
 }
 
+/** What a call changed in the project data of the sheets drawn before, for its result. */
+const changedNote = () => (projectChanged ? { project_data_changed: projectChanged, project_data_note: 'These values changed on every sheet and cover of this drawing (they are fields of the drawing properties).' } : {});
+
 /** The project data of a title block or cover as fields of the drawing properties (written first when they changed). */
+// the project data a call changed on the sheets already drawn: {PROP: {from, to}} (reported, so the user knows)
+let projectChanged = null;
 async function projectData(given, info0) {
   const { values, write } = projectValues(given, info0?.properties?.custom ?? null);
+  const before = info0?.properties?.custom ?? {};
+  const changed = Object.fromEntries(Object.entries(write).filter(([k]) => String(before[k] ?? '').trim()).map(([k, v]) => [k, { from: before[k], to: v }]));
+  projectChanged = Object.keys(changed).length ? changed : null;
   if (Object.keys(write).length) {
     await sendNow('drawing_props', { custom: write });
     // the sheets and covers drawn before show the new values (a regen after the change, as AutoCAD takes it in), each
@@ -2261,7 +2296,7 @@ async function layoutViews({ name, paper, orientation, views, title_block, lang,
   sheetsMade.set(info0.name, [...list.filter((x) => x.layout !== name), {
     layout: name, number: title_block?.number ?? name, title: title_block?.title ?? '', scale: scaleText, paper: `${paper} ${lng === 'en' ? orientation : orientation === 'portrait' ? 'đứng' : 'ngang'}`,
   }]);
-  return { ...r, scale: scaleText, views: vs.map((v) => ({ scale: `1:${v.scale}`, at: v.at.map((c) => Math.round(c)) })), paper, orientation, ...(warnings.length ? { warnings } : {}) };
+  return { ...r, scale: scaleText, views: vs.map((v) => ({ scale: `1:${v.scale}`, at: v.at.map((c) => Math.round(c)) })), paper, orientation, ...(warnings.length ? { warnings } : {}), ...changedNote() };
 }
 
 server.registerTool('create_layout', {
@@ -2286,12 +2321,13 @@ server.registerTool('create_layout', {
     view: opt(Str).describe('An id of list_views: the window is the extents of that view plus margin'),
     margin: opt(z.number().min(0)).describe('Paper mm around a view window (default 5)'),
     title_block: opt(Obj).describe(
-      '{style: strip (vertical strip on the right, default on landscape A3-A0) | bottom, company, company_address, project, location, item, ' +
+      '{style: strip (vertical strip on the right, the default on every paper) | bottom (the 180 mm block in the bottom-right corner), company, company_address, project, location, item, ' +
       'client, client_address, title, number (default: a field of the layout name), revision, contract, phase, sheet, date, chief, lead, ' +
       'drawn_by, checked_by, scale (default: a field of the viewport scale), note (the general note along the bottom), fields: ' +
       'false (plain texts)}. The project data (project, location, item, client, client_address, company, company_address, ' +
       'contract, phase, chief, lead, drawn_by, checked_by) is kept once in the drawing properties (DWGPROPS, Custom) and shown ' +
-      'by fields: a sheet that does not give it shows what the drawing has; a value given changes it on every sheet.',
+      'by fields: a sheet that does not give it shows what the drawing has; a value given changes it on every sheet ' +
+      '(the result lists project_data_changed; give per-sheet signatories through update_title_blocks values instead).',
     ),
     language: opt(Lang),
     replace: z.boolean().default(false),
@@ -2300,6 +2336,10 @@ server.registerTool('create_layout', {
   annotations: EDIT,
 }, ({ name, paper, orientation, window, scale, views, title_block, language: lang, replace, activate, view, margin }) => exclusive(async () => {
   const info0 = await sendNow('drawing_info', {});
+  // a layout that is there already is refused before anything changes (the project data of the other sheets)
+  if (!replace && (info0.layouts || []).some((l) => String(typeof l === 'string' ? l : l?.name).toLowerCase() === String(name).toLowerCase())) {
+    throw new Error(`Layout '${name}' exists (pass replace=true to rebuild it)`);
+  }
   // windows from views: the extents of the view (all it drew) plus a margin on paper
   let known = null;
   const viewWindow = async (id, sc, m, where) => {
@@ -2367,7 +2407,7 @@ server.registerTool('create_layout', {
   sheetsMade.set(info0.name, [...list.filter((x) => x.layout !== name), {
     layout: name, number: title_block?.number ?? name, title: title_block?.title ?? '', scale: `1:${s}`, paper: `${paper} ${(lang ?? language) === 'en' ? orientation : orientation === 'portrait' ? 'đứng' : 'ngang'}`,
   }]);
-  return text({ ...r, scale: `1:${s}`, paper, orientation, ...(warnings.length ? { warnings } : {}) });
+  return text({ ...r, scale: `1:${s}`, paper, orientation, ...(warnings.length ? { warnings } : {}), ...changedNote() });
 }));
 
 /** Whether a file exists and another program holds it open (a PDF viewer keeps the PDF it shows locked). */
@@ -2460,7 +2500,7 @@ const floorSpots = () => lastFloors ?? viewStore.getStore()?.floorsBase ?? null;
 
 function planFor(args, tool) {
   const ctx = viewStore.getStore();
-  const base = args.plan ?? ctx?.planBase ?? lastPlan;
+  const base = args.plan ?? ctx?.planBase ?? (args.dry_run ? previewPlan ?? lastPlan : lastPlan);
   if (!base) throw new Error(`${tool}: no plan description yet: call draw_plan first in this session, or pass plan (the same object as draw_plan).`);
   if (ctx && ctx.tool !== 'draw_plan') {
     // the plan the view is drawn from: kept in the drawing when it is not the one already there
@@ -3496,7 +3536,7 @@ server.registerTool('draw_cover_sheet', {
   const data = await projectData(Object.fromEntries(Object.entries(args).filter(([k]) => k in PROJECT_PROPS || k === 'fields')), await sendNow('drawing_info', {}));
   const r = coverSheet({ set: args.set, info: { ...args, ...data, date }, at: [at[0], at[1] + 200 * sc], scale: sc, lang });
   const res = await drawView(r.entities, sc, info, args.language);
-  return text({ count: res.count, bounds: res.bounds });
+  return text({ count: res.count, bounds: res.bounds, ...changedNote() });
 }));
 
 server.registerTool('draw_drawing_list', {

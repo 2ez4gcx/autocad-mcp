@@ -4,8 +4,8 @@
 //   - view space: the viewer looks along v; u = horizontal position (to the viewer's right), w = depth (away from viewer)
 //   - visibility: the nearest wall/column face wins along u; roofs, columns and facade pieces hide what is behind them
 //     (line segments are clipped against the convex silhouettes of every nearer element)
-import { buildWalls, findSegment, gridList, num, openingSpan, PlanError, pt, rectAround, segRect, uStairGeom } from './plan.mjs';
-import { dimStyleName, ROLE, TEXT_STYLE, viewTitle } from './standards.mjs';
+import { buildWalls, defaultThickness, findSegment, gridList, num, openingSpan, PlanError, pt, rectAround, segRect, uStairGeom, wallRoles } from './plan.mjs';
+import { dimStyleName, getDrawingLanguage, ROLE, TEXT_STYLE, viewTitle } from './standards.mjs';
 import { sym, tagSym } from './symbols.mjs';
 
 const add = (a, b) => [a[0] + b[0], a[1] + b[1]];
@@ -125,7 +125,14 @@ export function floorsOf(spec) {
     const height = num(f.height ?? (i === 0 ? FLOOR_DEFAULTS.first : FLOOR_DEFAULTS.upper), `${name}.height`, { positive: true });
     if (i > 0 && f.level !== undefined) level = num(f.level, `${name}.level`);
     const inherit = (k) => (f[k] === undefined || f[k] === 'below' ? (prev ? prev.spec[k] : undefined) : f[k]);
-    const walls = [...(inherit('walls') || [])];
+    // walls taken from the floor below keep the thickness they have there (a wall is outer or a partition by the
+    // rooms of the floor that defines it, not by those of each floor above)
+    const fromBelow = prev && (f.walls === undefined || f.walls === 'below');
+    let walls = [...(inherit('walls') || [])];
+    if (fromBelow && walls.some((w) => w?.thickness == null)) {
+      const td = defaultThickness(prev.spec, wallRoles(prev.spec));
+      walls = walls.map((w, k) => (w?.thickness == null ? { ...w, thickness: td(k) } : w));
+    }
     if (f.parapet) {
       if (!prev) throw new PlanError(`${name}.parapet: the ground floor has no floor below`);
       const ids = f.parapet.walls;
@@ -694,8 +701,9 @@ export function buildElevation(spec, opts = {}) {
     style: dimStyleName(scale), layer: L.dims, total: uniq.length > 2,
   });
   const marks = gridMarks(M0, V, X, Y(H.ground) - 10 * scale, scale, ents);
-  const label = marks.length >= 2 ? ` TRỤC ${marks[0].label}-${marks[marks.length - 1].label}` : '';
-  titleBlock(opts.title ?? `MẶT ĐỨNG${label}`, (X(uLo) + X(uHi)) / 2, Y(H.ground) - 10 * scale - 9 * 4.5 * scale - 8 * scale, scale, ents);
+  const en = (opts.language ?? getDrawingLanguage()) === 'en';
+  const label = marks.length >= 2 ? `${en ? '' : ' TRỤC'} ${marks[0].label}-${marks[marks.length - 1].label}` : '';
+  titleBlock(opts.title ?? `${en ? 'ELEVATION' : 'MẶT ĐỨNG'}${label}`, (X(uLo) + X(uHi)) / 2, Y(H.ground) - 10 * scale - 9 * 4.5 * scale - 8 * scale, scale, ents);
   return { entities: ents, extent: { min: [X(uLo) - 12 * scale - 10 * scale, Y(H.ground) - 90 * scale], max: [xr + 20 * scale, Y(ridge) + 5 * scale] }, levels: uniq, assumed: buildingAssumed(spec, B) };
 }
 
@@ -1242,7 +1250,7 @@ export function buildSection(spec, opts = {}) {
   const yGrid = Y(-F.depth - F.lean) - 8 * scale;
   gridMarks(M0, V, X, yGrid, scale, ents, (u) => u >= edges.lo - 1 && u <= edges.hi + 1);
   const label = opts.label ?? 'A';
-  titleBlock(opts.title ?? `MẶT CẮT ${label}-${label}`, (X(uLo) + X(uHi)) / 2, yGrid - 9 * 4.5 * scale - 8 * scale, scale, ents);
+  titleBlock(opts.title ?? `${(opts.language ?? getDrawingLanguage()) === 'en' ? 'SECTION' : 'MẶT CẮT'} ${label}-${label}`, (X(uLo) + X(uHi)) / 2, yGrid - 9 * 4.5 * scale - 8 * scale, scale, ents);
   return {
     entities: ents, rooms: roomsOut, levels: uniq, cut_walls: perFloor.reduce((s2, p) => s2 + p.cutWalls.length, 0),
     assumed: [

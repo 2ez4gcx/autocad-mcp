@@ -5,7 +5,7 @@
 //   cuts   : one rectangle per opening, columns: column footprints
 //   rooms  : name + a point inside; the bridge measures the face the walls enclose (the area is never typed)
 //   entities: doors, windows, grids, columns, stairs, symbols and dimension chains (draw_entities specs)
-import { ROLE, ROOM, TEXT_STYLE, dimStyleName } from './standards.mjs';
+import { ROLE, ROOM, TEXT_STYLE, dimStyleName, getDrawingLanguage, words } from './standards.mjs';
 import { blockName, sym, tagSym } from './symbols.mjs';
 
 const EPS = 1e-6;
@@ -159,15 +159,35 @@ export const arcLength = (a, b, bulge) => {
   return Math.abs(bulge) < 1e-9 ? c : (c / (2 * Math.sin(Math.abs(th) / 2))) * Math.abs(th);
 };
 
+const okPoint = (p) => Array.isArray(p) && p.length >= 2 && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1]));
+// the open spaces among the rooms: a wall facing one is an outer wall (a lightwell is open to the sky)
+const OPEN_TO_SKY = words('GIẾNG TRỜI', 'GIENG TROI', 'LIGHT ?WELLS?');
+const isOpenRoom = (name) => ROOM.outdoor.test(name) || OPEN_TO_SKY.test(name);
+const roleCache = new Map();
+
 /**
- * Which walls stand on the outside of the building and which are partitions between rooms, from the axes alone: a
- * segment is outer when, 300 mm off it on one side, a point sees out of the building in two of the four directions (a
- * ray that crosses no wall axis) or stands in an open space (a lightwell, yard, balcony or terrace room it sees
- * without crossing a wall); a wall is outer when one of its segments is. Returns ['outer' | 'partition'] by wall.
+ * Which walls stand on the outside of the building and which are partitions between rooms. The wall axes cut the plan
+ * into regions (a raster flood fill): a region is inside when it holds the name of an indoor room, outside when it
+ * reaches the edge of the plan, holds only open spaces (yard, balcony, terrace, lightwell) or is an unnamed region next
+ * to an outside one (the ring between a house and its fence, a roof terrace round a stair tower, a courtyard). A
+ * segment is outer when a point beside it lies outside; a wall is outer when one of its segments is. A plan without
+ * room names, or a room whose region leaks out (a gap left for a door), falls back to rays: a point 300 mm off the
+ * wall that sees out in two of the four directions. Returns ['outer' | 'partition'] by wall.
  */
 export function wallRoles(spec) {
+  const rooms = (spec.rooms || []).filter((r) => okPoint(r?.at)).map((r) => ({ name: String(r.name ?? '').normalize('NFC'), at: [Number(r.at[0]), Number(r.at[1])] }));
+  const key = JSON.stringify([spec.walls ?? [], rooms]);
+  if (roleCache.has(key)) return roleCache.get(key);
+  const out = computeRoles(spec, rooms);
+  if (roleCache.size > 64) roleCache.delete(roleCache.keys().next().value);
+  roleCache.set(key, out);
+  return out;
+}
+
+function computeRoles(spec, rooms) {
   const axes = (spec.walls || []).map((w) => {
-    if (!Array.isArray(w.points) || w.points.length < 2) return [];
+    // a wall the description has wrong is left to buildWalls to report
+    if (!Array.isArray(w?.points) || w.points.length < 2 || !w.points.every(okPoint)) return [];
     const pts = w.points.map((p) => [Number(p[0]), Number(p[1])]);
     if (w.closed && pts.length >= 3 && dist(pts[0], pts[pts.length - 1]) > EPS) pts.push(pts[0]);
     const segs = [];
@@ -181,7 +201,8 @@ export function wallRoles(spec) {
     return segs;
   });
   const all = axes.flat();
-  // does a ray from q in direction d (up to tMax times d) cross a wall axis?
+  if (!all.length) return axes.map(() => 'outer');
+  // ---- rays: does a ray from q in direction d (up to tMax times d) cross a wall axis?
   const hits = (q, d, tMax = Infinity) => all.some(([a, b]) => {
     const e = sub(b, a), den = d[0] * e[1] - d[1] * e[0];
     if (Math.abs(den) < 1e-12) return false;
@@ -189,18 +210,93 @@ export function wallRoles(spec) {
     const t = (w[0] * e[1] - w[1] * e[0]) / den, s = (w[0] * d[1] - w[1] * d[0]) / den;
     return t > 1e-6 && t < tMax && s >= -1e-9 && s <= 1 + 1e-9;
   });
-  // the open spaces among the rooms: a wall facing one is an outer wall (a lightwell is open to the sky)
-  const open = (spec.rooms || []).filter((r) => Array.isArray(r?.at) && (ROOM.outdoor.test(String(r.name ?? '')) || OPEN_TO_SKY.test(String(r.name ?? ''))))
-    .map((r) => [Number(r.at[0]), Number(r.at[1])]);
+  const openAt = rooms.filter((r) => isOpenRoom(r.name)).map((r) => r.at);
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  const sees = (q) => DIRS.filter((d) => !hits(q, d)).length >= 2 || open.some((p) => !hits(q, sub(p, q), 1));
-  return axes.map((segs) => (segs.some(([a, b]) => {
-    const d = unit(sub(b, a)), n = left(d), m = mul(add(a, b), 0.5);
-    return sees(add(m, mul(n, 300))) || sees(add(m, mul(n, -300)));
-  }) ? 'outer' : 'partition'));
+  const raySees = (q) => DIRS.filter((d) => !hits(q, d)).length >= 2 || openAt.some((p) => !hits(q, sub(p, q), 1));
+  const sides = (a, b, off) => {
+    const d = unit(sub(b, a)), n = left(d);
+    return [0.25, 0.5, 0.75].map((f) => {
+      const m = add(a, mul(sub(b, a), f));
+      return [add(m, mul(n, off)), add(m, mul(n, -off))];
+    });
+  };
+  if (!rooms.length) return axes.map((segs) => (segs.some(([a, b]) => sides(a, b, 300).some(([p, q]) => raySees(p) || raySees(q))) ? 'outer' : 'partition'));
+  // ---- regions: the axes drawn on a raster, the cells between them flood-filled
+  const xs = all.flatMap(([a, b]) => [a[0], b[0]]), ys = all.flatMap(([a, b]) => [a[1], b[1]]);
+  const M = 1500, x0 = Math.min(...xs) - M, y0 = Math.min(...ys) - M;
+  const cell = Math.max(25, (Math.max(Math.max(...xs) - x0, Math.max(...ys) - y0) + M) / 800);
+  const nx = Math.ceil((Math.max(...xs) + M - x0) / cell) + 1, ny = Math.ceil((Math.max(...ys) + M - y0) / cell) + 1;
+  const grid = new Int32Array(nx * ny); // 0 free, -1 wall, >0 region
+  const ix = (x) => Math.floor((x - x0) / cell), iy = (y) => Math.floor((y - y0) / cell);
+  for (const [a, b] of all) {
+    // a little past each end: axes that should meet but stop a hair short do not leave a gap
+    const L = dist(a, b), d = unit(sub(b, a)), ext = Math.max(cell, 30);
+    const n = Math.ceil((L + 2 * ext) / (cell / 3));
+    for (let k = 0; k <= n; k++) {
+      const p = add(a, mul(d, -ext + (k * (L + 2 * ext)) / n));
+      const i = ix(p[0]), j = iy(p[1]);
+      if (i >= 0 && j >= 0 && i < nx && j < ny) grid[j * nx + i] = -1;
+    }
+  }
+  const border = [];
+  let nReg = 0;
+  const stack = [];
+  for (let s0 = 0; s0 < grid.length; s0++) {
+    if (grid[s0] !== 0) continue;
+    nReg++;
+    let edge = false;
+    grid[s0] = nReg;
+    stack.push(s0);
+    while (stack.length) {
+      const c = stack.pop(), i = c % nx, j = (c - i) / nx;
+      if (i === 0 || j === 0 || i === nx - 1 || j === ny - 1) edge = true;
+      if (i > 0 && grid[c - 1] === 0) { grid[c - 1] = nReg; stack.push(c - 1); }
+      if (i < nx - 1 && grid[c + 1] === 0) { grid[c + 1] = nReg; stack.push(c + 1); }
+      if (j > 0 && grid[c - nx] === 0) { grid[c - nx] = nReg; stack.push(c - nx); }
+      if (j < ny - 1 && grid[c + nx] === 0) { grid[c + nx] = nReg; stack.push(c + nx); }
+    }
+    border[nReg] = edge;
+  }
+  // the region of a point (the nearest free cell when it falls on an axis)
+  const regionAt = (p) => {
+    const i0 = ix(p[0]), j0 = iy(p[1]);
+    for (let r = 0; r <= 3; r++) {
+      for (let dj = -r; dj <= r; dj++) {
+        for (let di = -r; di <= r; di++) {
+          const i = i0 + di, j = j0 + dj;
+          if (i >= 0 && j >= 0 && i < nx && j < ny && grid[j * nx + i] > 0) return grid[j * nx + i];
+        }
+      }
+    }
+    return 0;
+  };
+  const indoor = new Set(), open = new Set();
+  for (const r of rooms) {
+    const g = regionAt(r.at);
+    if (g) (isOpenRoom(r.name) ? open : indoor).add(g);
+  }
+  // in / out / leak (an indoor room that reaches the edge: a gap; rays decide there) / unknown (unnamed, closed)
+  const state = [];
+  for (let g = 1; g <= nReg; g++) {
+    state[g] = indoor.has(g) ? (border[g] ? 'leak' : 'in') : border[g] || open.has(g) ? 'out' : 'unknown';
+  }
+  const off = Math.max(150, 2 * cell);
+  const samples = axes.map((segs) => segs.map(([a, b]) => sides(a, b, off).map(([p, q]) => ({ p, q, g: regionAt(p), h: regionAt(q) }))));
+  // an unnamed region next to an outside one is outside too (a fence ring, a terrace round a stair tower)
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const segs of samples) {
+      for (const ss of segs) {
+        for (const { g, h } of ss) {
+          if (state[g] === 'unknown' && state[h] === 'out') { state[g] = 'out'; changed = true; }
+          if (state[h] === 'unknown' && state[g] === 'out') { state[h] = 'out'; changed = true; }
+        }
+      }
+    }
+  }
+  const outside = (g, p) => (state[g] === 'out' ? true : state[g] === 'leak' ? raySees(p) : false);
+  return samples.map((segs) => (segs.some((ss) => ss.some(({ p, q, g, h }) => outside(g, p) || outside(h, q))) ? 'outer' : 'partition'));
 }
-
-const OPEN_TO_SKY = /GIẾNG TRỜI|GIENG TROI|LIGHT ?WELL/i;
 
 /** The thickness a wall takes when it gives none: wall_thickness for all when given, else 200 outer and 100 partitions. */
 export function defaultThickness(spec, roles) {
@@ -216,7 +312,7 @@ export function defaultThickness(spec, roles) {
  */
 export function buildWalls(spec) {
   const walls = [];
-  const needRoles = (spec.walls || []).some((w) => w.thickness === undefined);
+  const needRoles = (spec.walls || []).some((w) => w?.thickness == null);
   const roles = needRoles ? wallRoles(spec) : [];
   const tDefault = defaultThickness(spec, roles);
   (spec.walls || []).forEach((w, wi) => {
@@ -383,7 +479,8 @@ export function openingSpan(s, o, name) {
   return { from: Math.max(0, from), to: Math.min(s.L, to), width };
 }
 
-const DOOR_TYPES = { door: 'Cửa đi 1 cánh', double_door: 'Cửa đi 2 cánh', sliding: 'Cửa lùa', window: 'Cửa sổ' };
+const DOOR_TYPES_VI = { door: 'Cửa đi 1 cánh', double_door: 'Cửa đi 2 cánh', sliding: 'Cửa lùa', window: 'Cửa sổ' };
+const DOOR_TYPES_EN = { door: 'Single door', double_door: 'Double door', sliding: 'Sliding door', window: 'Window' };
 const r1 = (v) => Math.round(v * 10) / 10;
 
 /**
@@ -392,6 +489,7 @@ const r1 = (v) => Math.round(v * 10) / 10;
  * and sliding doors); code, kind and width as invisible attributes (a door/window count by block name).
  */
 function openingBlock(kind, size, entities, origin, ex, ey, o, layer) {
+  const DOOR_TYPES = getDrawingLanguage() === 'en' ? DOOR_TYPES_EN : DOOR_TYPES_VI;
   const rot = (Math.atan2(ey[1], ey[0]) * 180) / Math.PI - 90;
   const sx = Math.sign(dot(ex, [ey[1], -ey[0]])) || 1;
   const name = blockName([{ door: 'MCP_CUA_DI', double_door: 'MCP_CUA_DI_2C', sliding: 'MCP_CUA_LUA', window: 'MCP_CUA_SO' }[kind], ...size.map((v) => r1(v))]);
@@ -403,7 +501,7 @@ function openingBlock(kind, size, entities, origin, ex, ey, o, layer) {
     attributes: { MA: o.tag === undefined ? '' : String(o.tag), LOAI: DOOR_TYPES[kind], RONG: String(r1(size[0])) },
     def: {
       name, description: `${DOOR_TYPES[kind]} ${size.map(r1).join('x')}`, entities,
-      attributes: [['MA', 'Mã cửa'], ['LOAI', 'Loại'], ['RONG', 'Rộng']].map(([tag, prompt], i) => (
+      attributes: (getDrawingLanguage() === 'en' ? [['MA', 'Tag'], ['LOAI', 'Type'], ['RONG', 'Width']] : [['MA', 'Mã cửa'], ['LOAI', 'Loại'], ['RONG', 'Rộng']]).map(([tag, prompt], i) => (
         { tag, prompt, at: [size[0] / 2, -100 - 120 * i], height: 80, invisible: true, style: TEXT_STYLE })),
     },
     box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
@@ -531,9 +629,9 @@ export function planAssumptions(spec) {
   if (spec.wall_thickness === undefined || spec.partition_thickness === undefined) {
     const roles = wallRoles(spec), td = defaultThickness(spec, roles);
     for (const role of ['outer', 'partition']) {
-      const list = ids(spec.walls, (w) => w.thickness === undefined && roles[(spec.walls || []).indexOf(w)] === role, 'walls');
+      const list = ids(spec.walls, (w) => w.thickness == null && roles[(spec.walls || []).indexOf(w)] === role, 'walls');
       if (!list.length) continue;
-      const i = (spec.walls || []).findIndex((w) => w.thickness === undefined && roles[(spec.walls || []).indexOf(w)] === role);
+      const i = (spec.walls || []).findIndex((w) => w.thickness == null && roles[(spec.walls || []).indexOf(w)] === role);
       if (role === 'outer' ? spec.wall_thickness === undefined : spec.partition_thickness === undefined && spec.wall_thickness === undefined) {
         add(role === 'outer' ? 'walls.thickness (outer walls)' : 'walls.thickness (partitions between rooms)', td(i), `${list.join(', ')}; wall_thickness / partition_thickness or a thickness per wall to change`);
       }

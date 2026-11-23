@@ -3,7 +3,7 @@
 // draw_entities specs. Sizes and reinforcement come from the user / the structural engineer: nothing is calculated
 // here except lengths, counts and weights.
 import { buildWalls, gridList, num, PlanError, pt } from './plan.mjs';
-import { dimStyleName, FIELD, TEXT_STYLE, viewTitle, ROOM } from './standards.mjs';
+import { dimStyleName, FIELD, getDrawingLanguage, TEXT_STYLE, viewTitle, ROOM } from './standards.mjs';
 import { sym } from './symbols.mjs';
 import { freePoint, inside } from './interior.mjs';
 import { lintelRows } from './solids.mjs';
@@ -158,7 +158,7 @@ export function rcSection(p) {
   }
   dim(out, [x0, y0], [x0 + b, y0], -7 * sc, sc, 'horizontal');
   dim(out, [x0, y0], [x0, y0 + h], 7 * sc, sc, 'vertical');
-  if (p.title !== false) title(out, p.title ?? `MẶT CẮT ${p.label ?? '1-1'}`, x0 + b / 2, y0 - 18 * sc, sc);
+  if (p.title !== false) title(out, p.title ?? `${(p.language ?? getDrawingLanguage()) === 'en' ? 'SECTION' : 'MẶT CẮT'} ${p.label ?? '1-1'}`, x0 + b / 2, y0 - 18 * sc, sc);
   const assumed = assumedOf(p, [['cover', 25], ...(p.stirrup === null ? [] : [['stirrup.d', 6], ['stirrup.spacing', 150]])]);
   if (!(p.groups || []).length) warnings.push('no bars: give groups [{face, d, n}]');
   return { entities: out, warnings, assumed, bars: placed.map((g) => ({ face: g.face, n: g.pts.length, d: g.g.d, mark: g.g.mark })) };
@@ -290,7 +290,7 @@ export function beamDetail(p) {
   const sec1 = rcSection({ at: [axes[0], ySec], b, h, cover: c, stirrup: { ...st, spacing: stEnd }, scale: sc, label: '1-1', groups: [...top1, { face: 'bottom', ...bot }] });
   const sec2 = rcSection({ at: [axes[0] + b + 45 * sc, ySec], b, h, cover: c, stirrup: { ...st, spacing: stMid }, scale: sc, label: '2-2', groups: [{ face: 'top', ...top }, { face: 'bottom', ...bot }] });
   out.push(...sec1.entities, ...sec2.entities);
-  title(out, `${p.name ?? 'DẦM'} (${b}x${h})`, (xs + xe) / 2, ySec - 30 * sc, sc);
+  title(out, `${p.name ?? ((p.language ?? getDrawingLanguage()) === 'en' ? 'BEAM' : 'DẦM')} (${b}x${h})`, (xs + xe) / 2, ySec - 30 * sc, sc);
   const assumed = assumedOf(p, [
     ['b', 220], ['h', 400], ['support', 220], ['cover', 25],
     ...barDefaults(p, 'bottom', '2Ø16'), ...barDefaults(p, 'top', '2Ø14'), ...barDefaults(p, 'extra_top', '1Ø14'),
@@ -468,7 +468,14 @@ const readable = (d) => {
 export function framingPlan({ spec, level = 0, slab = 120, name = '', prefix = 'D', scale = 100, beam = {}, column = {}, rooms = {}, lang = 'vi', foundation = null, balconies = [], planted = [] }) {
   const sc = scale;
   const out = [], assumed = [];
-  const walls = buildWalls(spec).filter((w) => w.t >= num(beam.min_wall ?? 150, 'beam.min_wall', { min: 0 }) && (spec.walls[w.index].height === undefined));
+  const minWall = num(beam.min_wall ?? 150, 'beam.min_wall', { min: 0 });
+  const built = buildWalls(spec);
+  const walls = built.filter((w) => w.t >= minWall && (spec.walls[w.index].height === undefined));
+  // the thin walls (the 100 partitions) get no beam: they stand on the slab, which carries them as a load
+  const onSlab = built.filter((w) => w.t < minWall && spec.walls[w.index].height === undefined).map((w) => w.id);
+  if (onSlab.length) {
+    assumed.push({ item: 'walls on the slab (no beam)', value: onSlab.join(', '), note: `walls thinner than beam.min_wall ${minWall} stand on the slab; give them their thickness, or a lower beam.min_wall, to put beams under them` });
+  }
   const segs = walls.flatMap((w) => w.segs.map((s) => {
     const n = leftOf(s.d), c = (s.o1 + s.o2) / 2;
     return { s, A: add2(s.a, mul2(n, c)), B: add2(s.b, mul2(n, c)), t: s.t, d: s.d, L: s.L, n };
@@ -910,7 +917,7 @@ export function beamSchedule({ beams, scale = 25, cover = 25, perRow = 3, lang =
     // the flange stops short of the depth dimension (7 mm left of the web), whose text stands beside it
     const fl = flange ? Math.min(1.6 * b, 6 * sc) : 0;
     const left = Math.max(11.5 * sc, level ? 2.1 * sc - tagX + [...level].length * 0.72 * 2.5 * sc + sc : 0, fl);
-    const title = `${lang === 'en' ? 'BEAM' : 'DẦM'} ${bm.name} (${b}x${h}) - SL: ${String(bm.count ?? 1).padStart(2, '0')}`;
+    const title = `${lang === 'en' ? 'BEAM' : 'DẦM'} ${bm.name} (${b}x${h}) - ${lang === 'en' ? 'QTY' : 'SL'}: ${String(bm.count ?? 1).padStart(2, '0')}`;
     return { bm, b, h, slab, flange, fl, bars, st, level, tagX, left, r1: right('support', st.support), r2: right('span', st.span), title, titleW: [...title].length * 0.8 * 3.5 * sc };
   });
   const left = Math.max(...items.map((q) => q.left));
@@ -955,7 +962,7 @@ export function structureNotes({ at = [0, 0], scale = 50, lang = 'vi', concrete 
   const sc = scale, th = 2.5 * sc;
   const out = [], assumed = [];
   const en = lang === 'en', tr = (vi, e) => (en ? e : vi);
-  const C = { main: concrete.main ?? 'B20 (M250)', minor: concrete.minor ?? 'B15 (M200)', lean: concrete.lean ?? 'B7,5 (M100)' };
+  const C = { main: concrete.main ?? 'B20 (M250)', minor: concrete.minor ?? 'B15 (M200)', lean: concrete.lean ?? (en ? 'B7.5 (M100)' : 'B7,5 (M100)') };
   if (concrete.main === undefined) assumed.push({ item: 'concrete.main', value: C.main });
   const CV = {
     [tr('Móng (có bê tông lót)', 'Footings (on lean concrete)')]: cover.footing ?? 50, [tr('Dầm móng', 'Ground beams')]: cover.ground_beam ?? 30,

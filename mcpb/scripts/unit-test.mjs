@@ -761,6 +761,25 @@ test('walls: outer walls and partitions by their place, their default thickness;
   rooms: [{ name: 'GIẾNG TRỜI', at: [4000, 6000] }, { name: 'BAN CÔNG', at: [4000, 11000] }, { name: 'PHÒNG KHÁCH', at: [1500, 1500] }, { name: 'BẾP', at: [1500, 6000] }] };
   assert.deepEqual(wallRoles(lw), ['outer', 'outer', 'outer', 'partition']);
 
+  // a house inside a closed fence, a U open on one side, a stair tower inside the roof parapet: their outer walls are
+  // outer (the regions between them and the fence or parapet are outside); a door gap left in the front wall: rays
+  const box = (id, x0, y0, x1, y1) => ({ id, points: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], closed: true });
+  assert.deepEqual(wallRoles({ walls: [box('RAO', -3000, -3000, 13000, 11000), { id: 'S', points: [[0, 0], [10000, 0]] }, { id: 'E', points: [[10000, 0], [10000, 8000]] }, { id: 'N', points: [[10000, 8000], [0, 8000]] }, { id: 'W', points: [[0, 8000], [0, 0]] }, { id: 'P', points: [[5000, 0], [5000, 8000]] }],
+    rooms: [{ name: 'PHÒNG KHÁCH', at: [2500, 4000] }, { name: 'BẾP', at: [7500, 4000] }] }), ['outer', 'outer', 'outer', 'outer', 'outer', 'partition']);
+  assert.deepEqual(wallRoles({ walls: [{ id: 'O', points: [[0, 10000], [0, 0], [12000, 0], [12000, 10000], [8000, 10000], [8000, 4000], [4000, 4000], [4000, 10000], [0, 10000]] }, { id: 'P1', points: [[4000, 0], [4000, 4000]] }, { id: 'P2', points: [[8000, 0], [8000, 4000]] }],
+    rooms: [{ name: 'A', at: [2000, 5000] }, { name: 'B', at: [6000, 2000] }, { name: 'C', at: [10000, 5000] }] }), ['outer', 'partition', 'partition']);
+  assert.deepEqual(wallRoles({ walls: [box('TC', 0, 0, 5000, 15000), { id: 'T1', points: [[0, 6000], [3000, 6000]] }, { id: 'T2', points: [[3000, 6000], [3000, 10000]] }, { id: 'T3', points: [[3000, 10000], [0, 10000]] }], rooms: [{ name: 'CẦU THANG', at: [1500, 8000] }] }), ['outer', 'outer', 'outer', 'outer']);
+  assert.deepEqual(wallRoles({ walls: [{ points: [[0, 0], [4000, 0]] }, { points: [[5000, 0], [10000, 0]] }, { points: [[10000, 0], [10000, 8000], [0, 8000], [0, 0]] }, { points: [[5000, 0], [5000, 8000]] }],
+    rooms: [{ name: 'KHÁCH', at: [2500, 4000] }, { name: 'NGỦ', at: [7500, 4000] }] }), ['outer', 'outer', 'outer', 'partition']);
+  // a lightwell typed in decomposed Unicode; a null thickness is no thickness; bad points are left to buildWalls
+  assert.deepEqual(wallRoles({ walls: [box('O', 0, 0, 5000, 15000), box('L', 0, 6000, 2000, 8000), { points: [[0, 4000], [5000, 4000]] }], rooms: [{ name: 'GIẾNG TRỜI'.normalize('NFD'), at: [1000, 7000] }, { name: 'KHÁCH', at: [2500, 2000] }, { name: 'BẾP', at: [3500, 10000] }] }), ['outer', 'outer', 'partition']);
+  assert.deepEqual(buildWalls({ ...spec, walls: spec.walls.map((w, i) => (i === 1 ? { ...w, thickness: null } : w)) }).map((w) => w.t), [200, 100, 100, 100, 200]);
+  assert.throws(() => buildWalls({ walls: [{ points: [[0, 0], null] }] }), /walls\[0\]\.points\[1\]/);
+  // walls a floor takes from the floor below keep the thickness they have there
+  const two = { floors: [{ name: 'T1', walls: [box('O', 0, 0, 5000, 15000), { id: 'R', points: [[0, 10000], [5000, 10000]] }], rooms: [{ name: 'KHÁCH', at: [2500, 5000] }, { name: 'SÂN SAU', at: [2500, 12500] }] }, { name: 'T2', rooms: [{ name: 'NGỦ', at: [2500, 5000] }, { name: 'PHÒNG ĐỌC', at: [2500, 12500] }] }] };
+  const fl = floorsOf(two);
+  assert.deepEqual(fl.map((f) => buildWalls(f.spec).map((w) => w.t)), [[200, 200], [200, 200]]);
+
   // completeness: a bare plan is short of grids, tags, levels, a section, elevations; the openings of the top side need a chain
   const bare = { walls: [{ points: [[0, 0], [6000, 0], [6000, 4000], [0, 4000]], closed: true }, { points: [[3000, 0], [3000, 4000]] }],
     openings: [{ wall: 0, segment: 0, at: [1500, 0], width: 900, type: 'door' }, { wall: 0, segment: 2, at: [1500, 4000], width: 1200, type: 'window' }], rooms: [{ name: 'A', at: [1500, 2000] }, { name: 'B', at: [4500, 2000] }] };
@@ -820,6 +839,32 @@ test('title blocks: the project data kept once in the drawing properties and sho
   const fits = titleBlockFits();
   assert.equal(fits.MCP_KHUNG_TEN_A3_NGANG.CONG_TRINH, 104);
   assert.ok(fits.MCP_KHUNG_TEN_DOC_A4_DUNG_R.SO_BAN_VE > 0 && Object.keys(fits).length === 40);
+});
+
+test('English sets: the titles and attributes the engines write themselves are English', async () => {
+  const { setDrawingLanguage, titleBlock } = await import('../src/standards.mjs');
+  const { buildElevation, buildSection } = await import('../src/elevation.mjs');
+  const { rcSection, beamDetail, structureNotes } = await import('../src/structure.mjs');
+  const { buildPlan } = await import('../src/plan.mjs');
+  const VI = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
+  const texts = (ents) => ents.flatMap((e) => [e.text, ...(e.attributes ? Object.values(e.attributes) : []), ...(e.def?.attributes ?? []).map((a) => a.prompt)]).filter((t) => typeof t === 'string');
+  const spec = { walls: [{ points: [[0, 0], [6000, 0], [6000, 4000], [0, 4000]], closed: true, thickness: 200 }], openings: [{ wall: 0, segment: 0, at: [3000, 0], width: 900, type: 'door' }, { wall: 0, segment: 2, at: [3000, 4000], width: 1200, type: 'window' }], grids: { x: [0, 6000], y: [0, 4000] } };
+  setDrawingLanguage('en');
+  try {
+    const all = [
+      ...texts(buildElevation(spec, { side: 'bottom', at: [0, 0], scale: 100 }).entities),
+      ...texts(buildSection(spec, { from: [3000, -1000], to: [3000, 5000], at: [0, 0], scale: 100 }).entities),
+      ...texts(rcSection({ at: [0, 0], b: 220, h: 300, groups: [{ face: 'top', d: 16, n: 2 }], scale: 10 }).entities),
+      ...texts(beamDetail({ spans: [4000], b: 220, h: 400, bottom: { d: 16, n: 2 }, top: { d: 12 }, extra_top: null, stirrup: { d: 6, end: 100, mid: 200 } }).entities),
+      ...texts(buildPlan({ ...spec, language: 'en' }).entities),
+      ...texts(titleBlock({ paper: 'A3', language: 'en', info: { project: 'P' } }).entities),
+    ];
+    const vi = all.filter((t) => VI.test(t));
+    assert.deepEqual(vi, [], vi.join(' | '));
+    assert.ok(all.some((t) => /^ELEVATION/.test(t)) && all.some((t) => /^SECTION A-A/.test(t)) && all.some((t) => /^BEAM \(220x400\)/.test(t)), all.filter((t) => /ELEV|SECT|BEAM/.test(t)).join(' | '));
+  } finally {
+    setDrawingLanguage('vi');
+  }
 });
 
 test('columns in eccentric compression: random eccentricity, second order, large and small eccentricity', () => {

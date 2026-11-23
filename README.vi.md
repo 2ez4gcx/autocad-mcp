@@ -14,7 +14,7 @@ AutoCAD MCP cho phép Claude làm việc trực tiếp trên bản vẽ đang m�
 
 Cách hoạt động giống [SketchUp MCP](https://github.com/2ez4gcx/sketchup-mcp): một extension cho Claude Desktop (`.mcpb`, chạy trên Node.js có sẵn trong Claude Desktop) và một add-in nhỏ chạy bên trong AutoCAD (**ACAD MCP Bridge**, add-in .NET). Không cần cài Python hay Node.js.
 
-Phiên bản: **1.5.0** - [tải tại Releases](https://github.com/2ez4gcx/autocad-mcp/releases/latest). Có trong [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.2ez4gcx/autocad-mcp) chính thức với tên `io.github.2ez4gcx/autocad-mcp`.
+Phiên bản: **1.5.1** - [tải tại Releases](https://github.com/2ez4gcx/autocad-mcp/releases/latest). Có trong [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.2ez4gcx/autocad-mcp) chính thức với tên `io.github.2ez4gcx/autocad-mcp`.
 
 ## Tính năng
 
@@ -95,7 +95,7 @@ Phiên bản: **1.5.0** - [tải tại Releases](https://github.com/2ez4gcx/auto
 - **Khối lượng kiểm tra được** (`rules`, `verify_quantities`, `measure_model`): các bảng là tổng trên một mô hình của cái được xây, không bao giờ là diện tích phòng nhân với vật liệu:
   - hoàn thiện đo theo từng mặt: mặt tường theo chiều cao của tường phía sau nó, có lỗ cửa và má cửa; mặt đứng của trần giật cấp; mặt bậc, cổ bậc và len theo bậc của cầu thang; sàn dưới cửa; chống thấm quét lên tường giữa các cửa; đáy sàn và mái dốc; khi có kết cấu của `structural_calc` thì thêm hai mặt bên của dầm dưới trần bê tông sơn và mặt cột nhô khỏi tường;
   - bê tông đo theo khối đặc, chỗ các cấu kiện giao nhau chỉ thuộc về một cấu kiện, nên tổng các dòng đúng bằng thể tích đổ;
-  - mỗi dòng có hai con số: khối lượng theo bộ quy tắc đo bóc và khối lượng hình học. Bộ mặc định theo Phụ lục VI Thông tư 13/2021/TT-BXD (lỗ dưới 0,25 m² không trừ khỏi xây và hoàn thiện, dưới 1 m² không trừ khỏi ván khuôn, lỗ rỗng dưới 0,1 m³ không trừ khỏi bê tông; nút cột – dầm tính cho dầm, phần trong chiều dày sàn tính cho sàn; ba số lẻ); `rules: "NET"` cho khối lượng hình học, `rules: {base: "PL6", void: {finish: 0.5}}` cho ngưỡng riêng của công ty;
+  - mỗi dòng có hai con số: khối lượng theo bộ quy tắc đo bóc và khối lượng hình học. Bộ mặc định theo Phụ lục VI Thông tư 13/2021/TT-BXD, giữ làm bộ quy tắc chi tiết gần nhất dù thông tư này đã được thay bằng Thông tư 37/2026 (chỉ còn nguyên tắc) (lỗ dưới 0,25 m² không trừ khỏi xây và hoàn thiện, dưới 1 m² không trừ khỏi ván khuôn, lỗ rỗng dưới 0,1 m³ không trừ khỏi bê tông; nút cột – dầm tính cho dầm, phần trong chiều dày sàn tính cho sàn; ba số lẻ); `rules: "NET"` cho khối lượng hình học, `rules: {base: "PL6", void: {finish: 0.5}}` cho ngưỡng riêng của công ty;
   - mỗi bảng tự chạy các phép kiểm tra chéo (phòng + tường = mặt sàn tầng, mỗi cửa trừ trên hai mặt tường, tổng thể tích thực = hợp của các khối, đắp trả + phần chôn = đào...) và báo phép nào không đạt; file Excel liệt kê từng mặt, từng cấu kiện bằng công thức sống, kèm sheet kiểm tra;
   - `verify_quantities` dựng lại kết cấu thành khối đặc và các mặt hoàn thiện thành miền (region) bằng chính nhân hình học của AutoCAD rồi so sánh. Trên nhà mẫu: hợp của 166 cấu kiện là 86,146 m³ ở cả AutoCAD và bảng, 127 mặt đo được 1396,652 m² ở cả hai, mặt sàn từng tầng khớp ([`examples/Nha-pho-5x18-kiem-tra-khoi-luong.json`](examples/Nha-pho-5x18-kiem-tra-khoi-luong.json)). `measure_model` cho phép đo độc lập như vậy với bất kỳ khối lăng trụ và mặt nào. Phương pháp và nguồn: [`docs/quantity-model.vi.md`](docs/quantity-model.vi.md).
 - **Chuẩn hóa layer bản vẽ của người khác** (`standardize_layers`): mỗi đối tượng được đưa về một bộ layer chuẩn (bộ A-/S-/E-/P- của công cụ hoặc chuẩn của công ty) theo đúng nó là gì: mục đích đọc từ tên layer (tiếng Việt có dấu hay không dấu, tiếng Anh, tiếng Trung, mã kiểu AIA, bỏ tiền tố xref đã bind), loại đối tượng khi tên không nói gì hoặc nói khác (kích thước luôn về layer kích thước), khối của đối tượng chèn (cửa, cao độ, ký hiệu trục, khung tên), và độ dày khi in (theo bảng .ctb của layout) cho đường nét trên layer đặt theo nét bút ("0.3", "net manh") hoặc layer 0. Màu, nét, độ dày gán riêng trở về ByLayer, trừ chỗ bản vẽ sẽ in khác đi (nét đậm vẫn đậm, nét đứt vẫn đứt; `keep_look: false` lấy độ dày của chuẩn). Layer rỗng bị purge; layer 0 trong khối, Defpoints và layer xref giữ nguyên. Luôn chạy thử trước (bảng chuyển layer theo từng layer, xuất CSV để sửa trong Excel rồi đưa lại bằng `mapping_csv`); `apply: true` làm trong một bước Undo và kiểm lại không mất đối tượng nào; `files` + `out_dir` làm nhiều bản vẽ một lúc, lưu thành bản mới (không bao giờ ghi đè file gốc). Trên 13 bản vẽ thật của các văn phòng khác: 1 487 layer còn 334, không mất đối tượng, tờ in không đổi. Phương pháp và giới hạn: [`docs/layer-standard.vi.md`](docs/layer-standard.vi.md).
@@ -246,7 +246,7 @@ Phiên bản: **1.5.0** - [tải tại Releases](https://github.com/2ez4gcx/auto
   - Khung nhìn khóa ở tỷ lệ chuẩn tự chọn cho vừa, đặt phía trên hoặc bên trái khung tên, chỗ nào chứa vừa hình vẽ (cảnh báo nếu tỷ lệ đã chọn làm cắt mất hình). `export_pdf` in các layout ra một file PDF nhiều trang (layout khác khổ giấy thì mỗi khổ một file, ví dụ `bo_A3.pdf`, `bo_A1.pdf`), hoặc in một vùng model space theo tỷ lệ.
 - **Xuất file** (`save_drawing`, `screenshot save_path`): DWG 2018/2013/2010/2007/2004/2000 và DXF; `copy=true` (mặc định khi lưu bản cũ hoặc DXF) ghi một bản sao để gửi đi, bản vẽ đang mở giữ nguyên, ngược lại là Save As; ảnh PNG của bản vẽ tới 4096 px.
 - **`run_lisp`**: khi không có tool phù hợp, Claude chạy AutoLISP (kết quả trả về dạng JSON) trong một nhóm Undo. Code không ghi ra đĩa nên AutoCAD không hỏi bảo mật (SECURELOAD).
-- **Mỗi lần sửa bản vẽ là một bước Undo** (`MCP_<TÊN TOOL>` trong danh sách Undo của AutoCAD).
+- **Mỗi lần sửa bản vẽ là một bước Undo** (`MCP_<TÊN TOOL>` trong danh sách Undo của AutoCAD). Riêng việc đổi thông tin dự án trên khung tên (`update_title_blocks`, hoặc một tờ hay tờ bìa ghi thông tin dự án mới) gồm vài bước: thuộc tính bản vẽ, thuộc tính khung tên từng tờ, lệnh REGEN để hiện giá trị mới và bước co chữ vừa ô.
 - **Lệnh trong AutoCAD**: `MCPSTATUS`, `MCPSTART`, `MCPSTOP`, `MCPPORT`, `MCPLOG`.
 
 ## Cách hoạt động
@@ -255,7 +255,7 @@ Phiên bản: **1.5.0** - [tải tại Releases](https://github.com/2ez4gcx/auto
 Claude Desktop
     |  MCP qua stdio
     v
-autocad-mcp-1.5.0.mcpb        server MCP Node.js, chạy trên Node có sẵn trong Claude Desktop
+autocad-mcp-1.5.1.mcpb        server MCP Node.js, chạy trên Node có sẵn trong Claude Desktop
     |  mỗi lệnh một yêu cầu JSON, TCP 127.0.0.1:9877 (chỉ trong máy)
     v
 ACAD MCP Bridge               add-in .NET trong AutoCAD (bundle tự nạp), chạy lệnh trên luồng chính của AutoCAD
@@ -274,9 +274,9 @@ Bridge chạy bên trong AutoCAD (không điều khiển qua COM từ bên ngoà
 
 ## Cài đặt
 
-1. **Cài extension vào Claude Desktop**: tải `autocad-mcp-1.5.0.mcpb` và `AcadMcpBridge-1.5.0.bundle.zip` ở [bản phát hành mới nhất](https://github.com/2ez4gcx/autocad-mcp/releases/latest), rồi vào *Settings > Extensions*, kéo thả file `.mcpb` vào cửa sổ (hoặc *Advanced settings > Install Extension...*), bấm *Install*. Bản build chưa ký số nên Claude Desktop có thể cảnh báo. Các bản 1.2.1-1.3.0 mang tên *Construction AutoCAD MCP*: nếu extension đó đang cài, gỡ nó ở *Settings > Extensions* để tool không bị liệt kê hai lần.
-2. **Cài bridge vào AutoCAD**: trong một cuộc trò chuyện mới, nhờ Claude *"Cài ACAD MCP Bridge vào AutoCAD"* (tool `install_autocad_bridge`). Tool chép `AcadMcpBridge.bundle` vào `%APPDATA%\Autodesk\ApplicationPlugins`, AutoCAD tự nạp khi khởi động. Cài tay: giải nén `AcadMcpBridge-1.5.0.bundle.zip` vào thư mục đó.
-3. **Khởi động lại AutoCAD.** Add-in chưa được ký số: khi AutoCAD hỏi về `AcadMcpBridge-1.5.0-<hash>.dll`, chọn **Always Load**. Mỗi bản bridge mới là một file mới nên sau khi cập nhật AutoCAD sẽ hỏi lại một lần. (Muốn không bao giờ bị hỏi, có thể thêm thư mục bundle vào *Options > Files > Trusted Locations* nếu chính sách IT cho phép.) Gõ `MCPSTATUS` trong AutoCAD, phải thấy `ACAD MCP Bridge v1.5.0: RUNNING on 127.0.0.1:9877`. Sau đó nhờ Claude *"Ping AutoCAD"*.
+1. **Cài extension vào Claude Desktop**: tải `autocad-mcp-1.5.1.mcpb` và `AcadMcpBridge-1.5.1.bundle.zip` ở [bản phát hành mới nhất](https://github.com/2ez4gcx/autocad-mcp/releases/latest), rồi vào *Settings > Extensions*, kéo thả file `.mcpb` vào cửa sổ (hoặc *Advanced settings > Install Extension...*), bấm *Install*. Bản build chưa ký số nên Claude Desktop có thể cảnh báo. Các bản 1.2.1-1.3.0 mang tên *Construction AutoCAD MCP*: nếu extension đó đang cài, gỡ nó ở *Settings > Extensions* để tool không bị liệt kê hai lần.
+2. **Cài bridge vào AutoCAD**: trong một cuộc trò chuyện mới, nhờ Claude *"Cài ACAD MCP Bridge vào AutoCAD"* (tool `install_autocad_bridge`). Tool chép `AcadMcpBridge.bundle` vào `%APPDATA%\Autodesk\ApplicationPlugins`, AutoCAD tự nạp khi khởi động. Cài tay: giải nén `AcadMcpBridge-1.5.1.bundle.zip` vào thư mục đó.
+3. **Khởi động lại AutoCAD.** Add-in chưa được ký số: khi AutoCAD hỏi về `AcadMcpBridge-1.5.1-<hash>.dll`, chọn **Always Load**. Mỗi bản bridge mới là một file mới nên sau khi cập nhật AutoCAD sẽ hỏi lại một lần. (Muốn không bao giờ bị hỏi, có thể thêm thư mục bundle vào *Options > Files > Trusted Locations* nếu chính sách IT cho phép.) Gõ `MCPSTATUS` trong AutoCAD, phải thấy `ACAD MCP Bridge v1.5.1: RUNNING on 127.0.0.1:9877`. Sau đó nhờ Claude *"Ping AutoCAD"*.
 
 Tùy chọn ở *Settings > Extensions > AutoCAD MCP > Configure*: cổng bridge (mặc định 9877; nếu đổi thì gõ `MCPPORT` trong AutoCAD cho khớp) và thời gian chờ mỗi lệnh (mặc định 120 giây).
 

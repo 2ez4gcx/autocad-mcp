@@ -153,7 +153,7 @@ export function titleBlock({ paper = 'A3', orientation = 'landscape', info = {},
   if (!base) throw new Error(`paper must be one of ${Object.keys(PAPERS).join(', ')}`);
   const [W, H] = orientation === 'portrait' ? [base[1], base[0]] : base;
   const small = String(paper).toUpperCase() === 'A4';
-  // the vertical strip of Vietnamese construction sets on landscape A3 and larger, the bottom block otherwise
+  // the vertical strip of Vietnamese construction sets by default (every paper), the bottom block when asked
   if ((style ?? 'strip') === 'strip') return stripTitleBlock({ paper, orientation, info, language, W, H });
   const left = small ? 10 : 20;
   const m = small ? 5 : 10;
@@ -215,7 +215,7 @@ export function titleBlock({ paper = 'A3', orientation = 'landscape', info = {},
   label(x0 + tbW * 0.6 + 2, ys[4] - 3.5, T.client);
   value(x0 + tbW * 0.6 + 2, ys[3] + 2, 'CHU_DAU_TU', T.client, info.client, 2.5, 'left', tbW * 0.4 - 4);
   // Row 4: company
-  value((x0 + x1) / 2, ys[4] + 3, 'CONG_TY', 'Công ty', info.company, 4, 'center', tbW - 4);
+  value((x0 + x1) / 2, ys[4] + 3, 'CONG_TY', language === 'en' ? 'Company' : 'Công ty', info.company, 4, 'center', tbW - 4);
   // Free drawing area: inside the frame, above the title block on the right-hand part.
   const area = [[left + 5, top + 5], [W - m - 5, H - m - 5]];
   const areaFull = [[left + 5, m + 5], [x0 - 5, H - m - 5]];
@@ -511,10 +511,11 @@ function stripTitleBlock({ paper, orientation, info, language, W, H }) {
     value(xm, tag2 ? (b + t) / 2 + 0.5 : b + 1.6, tag, prompt, v, h, 'center');
     if (tag2) value(xm, b + 2.5, tag2, prompt2, v2, 1.6, 'center');
   };
-  block('client', T.client, 'CHU_DAU_TU', 'Chủ đầu tư', info.client, 2.4, 'DIA_CHI_CDT', 'Địa chỉ chủ đầu tư', info.client_address);
-  block('project', T.project, 'CONG_TRINH', 'Dự án', info.project, 2.8, 'DIA_DIEM', 'Địa điểm', info.location);
-  block('item', T.item, 'HANG_MUC', 'Hạng mục', info.item, 2.2);
-  block('consultant', T.consultant, 'CONG_TY', 'Tư vấn thiết kế', info.company, 2.8, 'DIA_CHI_TV', 'Địa chỉ tư vấn', info.company_address);
+  const en = language === 'en', pr = (vi, e) => (en ? e : vi);
+  block('client', T.client, 'CHU_DAU_TU', pr('Chủ đầu tư', 'Client'), info.client, 2.4, 'DIA_CHI_CDT', pr('Địa chỉ chủ đầu tư', 'Client address'), info.client_address);
+  block('project', T.project, 'CONG_TRINH', pr('Dự án', 'Project'), info.project, 2.8, 'DIA_DIEM', pr('Địa điểm', 'Location'), info.location);
+  block('item', T.item, 'HANG_MUC', pr('Hạng mục', 'Item'), info.item, 2.2);
+  block('consultant', T.consultant, 'CONG_TY', pr('Tư vấn thiết kế', 'Consultant'), info.company, 2.8, 'DIA_CHI_TV', pr('Địa chỉ tư vấn', 'Consultant address'), info.company_address);
   // the people who sign: a label and a name on the left, room for the signature on the right
   {
     const [b, t] = at.sign, xs = x0 + sw * 0.6;

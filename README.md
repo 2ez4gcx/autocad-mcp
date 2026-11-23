@@ -10,7 +10,7 @@ AutoCAD MCP lets Claude work directly in the drawing you have open in AutoCAD. I
 
 It works like [SketchUp MCP](https://github.com/2ez4gcx/sketchup-mcp): a Claude Desktop extension (`.mcpb`) that runs on the Node.js built into Claude Desktop, plus a small add-in that runs inside AutoCAD (the **ACAD MCP Bridge**, a .NET add-in). No Python or Node.js install is needed.
 
-Current version: **1.5.0** - [download it from Releases](https://github.com/2ez4gcx/autocad-mcp/releases/latest). Also listed in the official [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.2ez4gcx/autocad-mcp) as `io.github.2ez4gcx/autocad-mcp`.
+Current version: **1.5.1** - [download it from Releases](https://github.com/2ez4gcx/autocad-mcp/releases/latest). Also listed in the official [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.2ez4gcx/autocad-mcp) as `io.github.2ez4gcx/autocad-mcp`.
 
 ## Features
 
@@ -75,7 +75,7 @@ Highlights:
 - **Quantities that can be checked** (`rules`, `verify_quantities`, `measure_model`): the bills are sums over one model of what is built, never a room area times a material:
   - finishes are measured face by face: a wall face by the height of the wall behind it, with its openings and their reveals; the vertical face of a dropped ceiling; treads, risers and the stepped skirting of a stair; the floor under the doors; the waterproofing turned up the walls between the doors; sloped soffits and roofs; with the structure of `structural_calc`, the sides of beams under a painted soffit and the faces of columns that stand out of the walls;
   - concrete is measured as solids, and where members meet the junction belongs to one of them only, so the sum of the lines is the volume poured;
-  - every line carries two numbers, the quantity by a rule set and the geometric net. The default set follows Appendix VI of Circular 13/2021/TT-BXD (an opening under 0.25 m² is not deducted from masonry and finishes, under 1 m² from formwork, a void under 0.1 m³ from concrete; the column-beam node counts with the beam, what lies in the slab thickness with the slab; three decimals); `rules: "NET"` gives the geometry as it is, and `rules: {base: "PL6", void: {finish: 0.5}}` a company's own thresholds;
+  - every line carries two numbers, the quantity by a rule set and the geometric net. The default set follows Appendix VI of Circular 13/2021/TT-BXD, kept as the last detailed rule set although Circular 37/2026 has replaced that circular with principles only (an opening under 0.25 m² is not deducted from masonry and finishes, under 1 m² from formwork, a void under 0.1 m³ from concrete; the column-beam node counts with the beam, what lies in the slab thickness with the slab; three decimals); `rules: "NET"` gives the geometry as it is, and `rules: {base: "PL6", void: {finish: 0.5}}` a company's own thresholds;
   - each bill runs its cross-checks (rooms + walls = floor plate, every opening deducted on two faces, sum of the net volumes = union of the solids, backfill + buried = excavation...) and reports those that fail; the workbooks list every face and every member with live formulas and a check sheet;
   - `verify_quantities` rebuilds the structure as solids and the finish faces as regions in AutoCAD's own modeler and compares. On the sample house the union of the 166 members is 86.146 m³ in AutoCAD and in the bill, the 127 faces measure 1396.652 m² in both, and the floor plate of every floor agrees ([`examples/Nha-pho-5x18-kiem-tra-khoi-luong.json`](examples/Nha-pho-5x18-kiem-tra-khoi-luong.json)). `measure_model` gives the same independent measure for any prisms and faces. The method and its sources are in [`docs/quantity-model.vi.md`](docs/quantity-model.vi.md) (Vietnamese).
 - **Consistent layers in drawings made by others** (`standardize_layers`): every entity goes to one standard set of layers (these tools' A-/S-/E-/P- layers or a company standard) by what it is: the purpose read from the layer name (Vietnamese with or without accents, English, Chinese, AIA-like codes, bound-xref prefixes dropped), the entity type where the name says nothing or says otherwise (a dimension goes to the dimension layer wherever it was), the block of an insert (door, level mark, grid bubble, title block), and the weight it plots with (from the layouts' .ctb) for linework on pen-named layers ("0.3", "net manh") or on layer 0. Entity colours, linetypes and lineweights become ByLayer except where the drawing would then plot differently (a bold line stays bold, a dashed one dashed; `keep_look: false` takes the standard's weights). Emptied layers are purged; layer 0 inside blocks, Defpoints and xref layers are left alone. A dry run comes first (the mapping layer by layer, also as CSV to correct in Excel and give back as `mapping_csv`); `apply: true` does it in one Undo step and checks that every entity is still there; `files` + `out_dir` processes many drawings, saving new copies (originals never written). On 13 real drawings from other offices: 1,487 layers became 334, every entity kept, the plotted sheet unchanged. Method and limits: [`docs/layer-standard.vi.md`](docs/layer-standard.vi.md) (Vietnamese).
@@ -199,7 +199,7 @@ Highlights:
   - The viewport is at a standard scale fitted automatically, placed above or beside the title block, wherever the view fits (a warning if a given scale would crop it). `export_pdf` plots layouts into one multi-page PDF (layouts on different paper sizes give one PDF per size, e.g. `set_A3.pdf`, `set_A1.pdf`) or a model-space window at a scale.
 - **Files** (`save_drawing`, `screenshot save_path`): DWG 2018/2013/2010/2007/2004/2000 and DXF; `copy=true` (the default for older versions and DXF) writes an export copy and leaves the open drawing as it is, otherwise Save As; PNG images of the drawing up to 4096 px.
 - **`run_lisp`**: when no tool fits, Claude runs AutoLISP (results come back as JSON) as one Undo group. The code never touches the disk, so AutoCAD's SECURELOAD does not ask about it.
-- **Every drawing edit is one Undo step** (`MCP_<TOOL>` in AutoCAD's Undo list).
+- **Every drawing edit is one Undo step** (`MCP_<TOOL>` in AutoCAD's Undo list). Changing the project data of the title blocks (`update_title_blocks`, or a sheet or cover that gives new project data) takes a few steps: the drawing properties, the attributes of each sheet, the regen that shows them and the fit to the cells.
 - **AutoCAD commands**: `MCPSTATUS`, `MCPSTART`, `MCPSTOP`, `MCPPORT`, `MCPLOG`.
 
 ## How it works
@@ -208,7 +208,7 @@ Highlights:
 Claude Desktop
     |  MCP over stdio
     v
-autocad-mcp-1.5.0.mcpb        Node.js MCP server, runs on the Node built into Claude Desktop
+autocad-mcp-1.5.1.mcpb        Node.js MCP server, runs on the Node built into Claude Desktop
     |  one JSON request per command, TCP 127.0.0.1:9877 (localhost only)
     v
 ACAD MCP Bridge               .NET add-in inside AutoCAD (autoloader bundle), runs commands on AutoCAD's main thread
@@ -227,9 +227,9 @@ The bridge runs inside AutoCAD (not over COM from outside): every command runs o
 
 ## Install
 
-1. **Install the extension in Claude Desktop**: download `autocad-mcp-1.5.0.mcpb` and `AcadMcpBridge-1.5.0.bundle.zip` from the [latest release](https://github.com/2ez4gcx/autocad-mcp/releases/latest), then in *Settings > Extensions* drag and drop the `.mcpb` into the window (or *Advanced settings > Install Extension...*), click *Install*. The build is not code-signed, so Claude Desktop may warn about it. Versions 1.2.1-1.3.0 were named *Construction AutoCAD MCP*: if that extension is installed, remove it in *Settings > Extensions* so the tools are not listed twice.
-2. **Install the bridge in AutoCAD**: in a new chat ask Claude *"Install the ACAD MCP Bridge in AutoCAD"* (tool `install_autocad_bridge`). It copies `AcadMcpBridge.bundle` into `%APPDATA%\Autodesk\ApplicationPlugins`, which AutoCAD loads at startup. Manual install: unzip `AcadMcpBridge-1.5.0.bundle.zip` into that folder.
-3. **Restart AutoCAD.** The add-in is not digitally signed: when AutoCAD asks about `AcadMcpBridge-1.5.0-<hash>.dll`, choose **Always Load**. Each new bridge build is a new file, so AutoCAD asks again after an update. (To never be asked, you can add the bundle folder to *Options > Files > Trusted Locations*, if your IT policy allows it.) Type `MCPSTATUS` in AutoCAD: it should say `ACAD MCP Bridge v1.5.0: RUNNING on 127.0.0.1:9877`. Then ask Claude *"Ping AutoCAD"*.
+1. **Install the extension in Claude Desktop**: download `autocad-mcp-1.5.1.mcpb` and `AcadMcpBridge-1.5.1.bundle.zip` from the [latest release](https://github.com/2ez4gcx/autocad-mcp/releases/latest), then in *Settings > Extensions* drag and drop the `.mcpb` into the window (or *Advanced settings > Install Extension...*), click *Install*. The build is not code-signed, so Claude Desktop may warn about it. Versions 1.2.1-1.3.0 were named *Construction AutoCAD MCP*: if that extension is installed, remove it in *Settings > Extensions* so the tools are not listed twice.
+2. **Install the bridge in AutoCAD**: in a new chat ask Claude *"Install the ACAD MCP Bridge in AutoCAD"* (tool `install_autocad_bridge`). It copies `AcadMcpBridge.bundle` into `%APPDATA%\Autodesk\ApplicationPlugins`, which AutoCAD loads at startup. Manual install: unzip `AcadMcpBridge-1.5.1.bundle.zip` into that folder.
+3. **Restart AutoCAD.** The add-in is not digitally signed: when AutoCAD asks about `AcadMcpBridge-1.5.1-<hash>.dll`, choose **Always Load**. Each new bridge build is a new file, so AutoCAD asks again after an update. (To never be asked, you can add the bundle folder to *Options > Files > Trusted Locations*, if your IT policy allows it.) Type `MCPSTATUS` in AutoCAD: it should say `ACAD MCP Bridge v1.5.1: RUNNING on 127.0.0.1:9877`. Then ask Claude *"Ping AutoCAD"*.
 
 Options in *Settings > Extensions > AutoCAD MCP > Configure*: the bridge port (default 9877; if you change it, also type `MCPPORT` in AutoCAD) and the timeout per command (default 120 s).
 
@@ -262,7 +262,7 @@ The server is a standard MCP server over stdio. Extract the `.mcpb` (it is a zip
 claude mcp add autocad --scope user -e AUTOCAD_MCP_TIMEOUT=120 -- node C:/Tools/autocad-mcp/server/index.mjs
 ```
 
-Environment variables: `AUTOCAD_MCP_PORT` (default 9877), `AUTOCAD_MCP_TIMEOUT` (seconds, default 120).
+Environment variables: `AUTOCAD_MCP_PORT` (default 9877), `AUTOCAD_MCP_TIMEOUT` (seconds, default 120), `AUTOCAD_MCP_CONFIRM` (`0` / `false`: draw without stopping to confirm assumptions; in Claude Desktop the extension setting *Confirm assumptions before drawing*).
 
 ## Troubleshooting
 
