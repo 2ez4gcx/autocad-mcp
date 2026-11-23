@@ -396,6 +396,8 @@ function stylesAt(scale, info, ltscale = 'auto') {
 // are remembered, and with update: true the earlier view goes (in the Undo step of the first thing drawn) and the new
 // one takes its places. The plan a view was drawn from and the plan of the drawing are kept in the drawing itself.
 const viewStore = new AsyncLocalStorage();
+// true inside a dry run (also the one a call makes to have its assumptions confirmed): nothing is drawn
+const dryStore = new AsyncLocalStorage();
 const UpdateArg = opt(z.union([z.boolean(), z.string()])).describe(
   'true: replace the view this tool drew earlier in this drawing (the same floor, mark, room...) where it stands, so the ' +
   'sheets that show it keep showing it, instead of drawing a new one beside it; or the id of the view to replace ' +
@@ -603,7 +605,7 @@ server.registerTool = (name, def, handler) => {
     // every tool draws in the language of its call (its language argument), else in the language of the session: the
     // view titles of the engines that are not handed a language follow it
     setDrawingLanguage(args?.language ?? language);
-    const go = (a) => (view || PLAN_TOOLS.has(name) ? viewCall(name, a ?? {}, () => handler(a, extra)) : handler(a, extra));
+    const go = (a) => dryStore.run(!!a?.dry_run, () => (view || PLAN_TOOLS.has(name) ? viewCall(name, a ?? {}, () => handler(a, extra)) : handler(a, extra)));
     // a view drawn again in place (update) keeps what was confirmed when it was first drawn; an update with no view
     // to replace draws a new one and asks like any first drawing
     if (gated && !args?.dry_run && !args?.confirmed && !(args?.update && view && (await replacesView(name, args)))) {
@@ -2500,7 +2502,7 @@ const floorSpots = () => lastFloors ?? viewStore.getStore()?.floorsBase ?? null;
 
 function planFor(args, tool) {
   const ctx = viewStore.getStore();
-  const base = args.plan ?? ctx?.planBase ?? (args.dry_run ? previewPlan ?? lastPlan : lastPlan);
+  const base = args.plan ?? ctx?.planBase ?? (args.dry_run || dryStore.getStore() ? previewPlan ?? lastPlan : lastPlan);
   if (!base) throw new Error(`${tool}: no plan description yet: call draw_plan first in this session, or pass plan (the same object as draw_plan).`);
   if (ctx && ctx.tool !== 'draw_plan') {
     // the plan the view is drawn from: kept in the drawing when it is not the one already there

@@ -24,7 +24,7 @@
       "registryType": "mcpb",
       "identifier": "https://github.com/2ez4gcx/autocad-mcp/releases/download/v1.5.1/autocad-mcp-1.5.1.mcpb",
       "version": "1.5.1",
-      "fileSha256": "2583329b6b61e788d9a5afa8d641fe547c4f806ecf1b45f7e58cfe7533e40079",
+      "fileSha256": "84d673d5bc1be3925c18c4c2a95e6176251e0b56a9a85bc7ab5c823d110d9b17",
       "transport": {
         "type": "stdio"
       },
